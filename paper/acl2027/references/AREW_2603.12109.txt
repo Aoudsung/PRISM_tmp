@@ -1,0 +1,4275 @@
+On Information Self-Locking in Reinforcement Learning
+for Active Reasoning of LLM agents
+
+Deyu Zou * 1 Yongqiang Chen * 1 Fan Feng 2 Mufei Li 3 Pan Li 3 Yu Gong † 4 James Cheng ‡ 1
+
+Abstract
+
+et al., 2024; Srivastava & Aggarwal, 2025; Xu et al., 2025;
+Guo et al., 2025). Recently, this paradigm has become increasingly important for building LLM agents that solve
+tasks through extended interaction with external environments, rather than from a single prompt alone (Zhang et al.,
+2025a; Plaat et al., 2025). In contemporary agentic applications (Zhang et al., 2025b; Sager et al., 2026), such as deep
+research, coding, computer use, etc., the agent often does not
+receive all task-relevant information upfront. Instead, the
+agent must make progress by actively taking environmentfacing actions, receiving new observations or feedback, and
+updating its understanding of the task state over multiple
+turns. We refer to this setting as agentic active reasoning.
+
+arXiv:2603.12109v2 [cs.AI] 31 May 2026
+
+Reinforcement learning (RL) has become a de
+facto paradigm for building LLM-based agents
+that act, interact, and reason over extended task
+horizons. However, in active reasoning where
+agents must elicit new observations through interaction with the environment to solve the task,
+we find that outcome-based RL can induce a systematic failure mode which we call information
+self-locking (SeL): agents fail both to elicit informative feedback and to internalize obtained evidence. To understand the issue, we trace agentic
+behaviors into two coupled capabilities: Action
+Selection (AS), which determines observation
+streams, and Belief Tracking (BT), which updates
+the agent’s internal task understanding. Theoretical and empirical analyses reveal a bidirectional
+bottleneck that leads to SeL: weak BT obscures
+the credit of informative actions, while weak AS
+deprives BT of useful evidence. This coupling
+weakens the learning signal for both capabilities
+and leads to SeL. To mitigate this issue, we propose AR E W, a simple yet effective AdvantageReweighting method that uses easy-to-obtain directional critiques to reallocate credit within trajectories. Extensive experiments across 9 agentic
+tasks of varying complexity show that AR E W significantly mitigates SeL, yielding up to 60-point
+gains in final performance. Code is available at
+https://github.com/unimpor/T3.
+
+Despite the success of outcome-based RL, we observe a
+recurring failure mode when training LLM-based agents
+for active reasoning. Rather than learning to acquire and
+use more task-relevant information, agents can drift into
+low-information interaction patterns: they take actions that
+reveal little useful evidence, and even when useful observations are returned, they do not reliably incorporate them into
+subsequent reasoning. We refer to this training regime as
+information self-locking (SeL). Under SeL, outcome-based
+RL may still improve apparent task performance through
+interaction-insensitive shortcuts, but it fails to strengthen the
+information acquisition and evidence-integration behaviors
+needed for active reasoning. This raises a crucial research
+question: Why does SeL happen under outcome-based RL
+for agentic active reasoning, and how can we mitigate it?
+To answer this question, we start by exploring the coupled
+nature of the credit assignment system in active reasoning. Specifically, the agent’s performance depends on two
+intertwined capabilities: Action Selection (AS), which determines the observation stream, and Belief Tracking (BT),
+which governs evidence internalization. Crucially, these two
+are mutually dependent: informative actions receive credit
+only when the resulting observations are properly utilized by
+BT, while effective BT refinement requires a high-quality information stream from AS. Concretely, empirical evidence
+(Sec. 2) reveals this coupling stagnation: even as rewards
+increase, both AS and BT capabilities remain dormant, suggesting that the sparse outcome reward fails to decouple and
+individually improve these two fundamental gears.
+
+1. Introduction
+Reinforcement learning (RL) with outcome-based rewards
+has demonstrated great success in improving the reasoning capabilities of large language models (LLMs) (Wang
+Equal contribution † Project lead ‡ Corresponding author 1 The
+Chinese University of Hong Kong 2 University of California San
+Diego 3 Georgia Institute of Technology 4 ByteDance.
+*
+
+Proceedings of the 43 rd International Conference on Machine
+Learning, Seoul, South Korea. PMLR 306, 2026. Copyright 2026
+by the author(s).
+
+1
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+Vanilla: Outcome RL induces self-locking
+
+Do you…
+
+I cannot answer
+this question.
+
+What medicines
+are you taking?
+
+I take isoniazid
+for 6 months.
+
+Rollout Generation
+What medicines
+are you taking? I take isoniazid
+for 6 months.
+
+I cannot answer
+this question.
+
+Do you…
+
+Credit Assignment
+Advantage reweigh
+Ground truth
+
+Uninformative AS
+
+Anti-aligned BT
+
+Informative AS
+
+Aligned BT
+
+AReW: Directional Critiques restores AS-BT alignment
+
+Figure 1. Overall illustration of information self-locking (SeL) and its mitigation. (b, a, o) denote the agent’s internal belief, its chosen
+action, and the resulting feedback at each turn. Under vanilla outcome-based RL (top), the agent can become trapped in a self-locking
+regime: deficient belief tracking masks contributions of informative actions, leading to misaligned credit assignment. Our AR E W (bottom)
+introduces advantage reweighting via directional critiques, correcting the learning signal and assisting to mitigate SeL in active reasoning.
+
+To further formalize this intuition, we theoretically characterize the coupled learning dynamics of AS and BT under
+outcome-based optimization (Sec. 3). Our analysis decomposes the outcome-gradient into AS and BT channels and
+demonstrates that, in a low-information regime, their improvement signals become capability-limited: weak belief
+tracking reduces the reward sensitivity to informative actions, thereby masking the learning signal for AS; at the
+same time, deficient AS restricts the evidence stream available for belief refinement, limiting the upward drift of BT.
+Together, these effects form a coupled learning bottleneck
+(Thm. 3.4), where the outcome-gradient cannot provide a
+sufficiently strong improvement signal for either capability,
+causing the agent to remain trapped in a persistent lowinformation regime (SeL regime, Def. 3.3).
+
+mitigates SeL across tasks, algorithms, and model families,
+and is robust to critique design of different noise levels.
+Beyond improving final performance, AR E W fundamentally alters training dynamics: agents recover informationseeking interaction patterns and exhibit sustained growth in
+both action selection and belief tracking capabilities.
+
+2. Self-Locking in Active Reasoning
+2.1. Preliminaries
+In active reasoning, an LLM agent solves a task under partial
+observability: the information provided at the beginning of
+an episode is insufficient for completing the task, and the
+agent must interact with an external environment to acquire
+task-relevant observations. At each turn, the agent takes an
+environment-facing action at ∈ A, such as issuing a query
+or invoking a tool, and receives an observation ot ∈ O from
+the environment. The agent must then use the accumulated
+interaction history to update its understanding of the task
+state and decide what action to take next.
+
+Built on this theoretical understanding, we propose AR E W,
+a lightweight and calibration-free Advantage-Reweighting
+framework for breaking SeL. The key observation is that
+active reasoning often provides easy-to-obtain local diagnostic signals, e.g., whether a query is informative can be
+inferred from whether the user reveals new evidence in response. AR E W uses them as weak directional critiques
+for AS and BT, rather than implementing calibrated intermediate rewards or training a dense reward model. It
+then injects these critiques at the policy-gradient level by
+reweighting stepwise advantages, reallocating credit within
+each trajectory from negatively critiqued decisions to positively critiqued ones while preserving the original outcome
+reward. This reward-preserving credit reallocation supplies
+non-degenerate learning signals in the SeL regime, enabling
+AS and BT to improve jointly and escape SeL.
+
+We model active reasoning as a Partially Observable Markov
+Decision Process (POMDP) (S, A, O, T, O, R, γ) (Kaelbling et al., 1998), where S is the latent state space, A is
+the action space, O is the observation space, T (s′ | s, a)
+is the transition dynamics, O(o | s, a) is the observation
+model, R is the reward function, and γ is the discount factor. In many agentic active reasoning tasks, the latent state
+s⋆ ∈ S may represent the hidden user preference, diagnosis,
+solution, etc. The agent cannot directly observe s⋆ . Belief
+tracking is central to active reasoning. For analysis, we
+associate the agent with a model belief bt ∈ ∆(S) at turn
+t ∈ {0, . . . , H}, which represents its internal understanding
+of the latent task state and the current progress of problem
+
+Extensive experiments across 9 agentic active reasoning
+tasks of varying complexity show that AR E W consistently
+
+2
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Proxies in PE-G. As it’s hard to precisely quantify the
+informativeness, we introduce a binary proxy that is simple to implement and effective in tracking the AS behavior. Specifically, for a queried attribute subspace St and
+item
+h pair (xi , xj ), we define the AS indicator iASt =
+
+solving. In this work, the belief is mainly leveraged as an
+analytical abstraction of the agent’s task-state understanding
+induced by its parameters and interaction history.
+Under this abstraction, the behavior of an agent with parameters ω can be decomposed into two coupled processes.
+
+(k )
+
+Action Selection (AS). Given its current belief, the agent
+selects an environment-facing action at ∼ πωas (· | bt ), which
+determines what observations may become available next
+through ot ∼ O(· | s⋆ , at ). The role of AS is therefore to
+shape the future observation stream by choosing actions that
+reduce uncertainty or otherwise advance task completion.
+Belief Tracking (BT). After receiving the observation
+ot , the agent updates its internal task-state understanding
+through a belief-update kernel bt+1 ∼ πωbt (· | bt , at , ot ),
+which integrates the newly acquired observation with information accumulated from previous interaction rounds.
+
+H−1
+Y
+
+(k )
+
+(k )
+
+MediQ. Adapted from Li et al. (2024), agents in MediQ
+require asking the patient questions to identify the best hypothesis for the patient’s symptoms. The agent is provided
+with a clinical vignette and an associated medical question
+whose answer lies in a finite hypothesis set of size D. The
+agent maintains a belief estimate wt ∈ [0, 1]D for D candidate hypotheses. Through interaction, the agent actively
+queries the LLM-simulated user for diagnostic information,
+receives structured feedback, and updates each hypothesis
+score accordingly. The learning objective is to progressively
+concentrate belief mass onto the correct hypothesis.
+
+Together, these two kernels
+ define the agent’s interleaved
+behavior Πω := πωas , πωbt . Over a horizon H, Πω induces
+trajectories τ = (b0 , a0 , o0 , b1 , . . . , aH−1 , oH−1 , bH ) with
+likelihood pω (τ ) which can be factorized as follows,
+pω (b0 )
+
+(k )
+
+I ∃ k1 , k2 ∈ St s.t., ai 1 > aj 1 ∧ ai 2 < aj 2 , which
+means neither item strictly dominates the other on St , ensuring that the resulting feedback is informative. BT evaluates whether the agent can incorporate such informative
+feedback. We measure BT by the improvement in similarity between the estimate and the ground-truth preference,
+BTt = sim(wt+1 , w⋆ ) − sim(wt , w⋆ ), where sim(·, ·) denotes cosine similarity. Positive BTt indicates effective
+absorption of newly acquired information.
+
+πωas (at | bt )O(ot | s⋆ , at )πωbt (bt+1 | bt , at , ot ).
+
+t=0
+
+This decomposition highlights the information pipeline underlying active reasoning: AS controls what evidence the
+agent can obtain, while BT controls whether that evidence
+is internalized and used for subsequent decisions.
+
+Proxies in MediQ. AS is quantified by the amount of novel
+diagnostic evidence elicited by the queries. Let Et denote
+the set of atomicSclinical facts revealed at turn t, we define ASt = Et \ τ <t Eτ , to capture the information gain
+of each query. BT measures whether newly observed evidence sharpens hypothesis discrimination. Let gt denote the
+ground-truth hypothesis index.
+ We define BT via the change
+
+(gt)
+(j)
+in belief margin BTt = ∆ wt − maxj̸=gt wt
+, aggregated across turns, where larger positive values indicate
+more effective belief refinement.
+
+2.2. Testbeds and decomposed proxies
+With the above decomposition, we can track the fine-grained
+behaviors of agents trained with outcome-based RL. We now
+consider two interactive benchmarks, where we introduce
+proxies that separately track AS and BT dynamics. The full
+details can be found in Appendix E.1.
+Preference Estimation (PE). Adapted from Badola et al.
+(2025), PE is an interactive preference inference task under
+constrained information acquisition. The agent is given a
+finite set of items X = {x1 , . . . , xN }, where each item xi
+is represented by a known D-attribute vector ai ∈ RD . The
+user has an unknown latent preference vector w⋆ ∈ [0, 1]D .
+Through interaction, the agent maintains and iteratively
+refines an estimate wt ∈ [0, 1]D of the user preference.
+At each round, the agent actively selects an attribute subspace St ⊆ {1, . . . , D} where |St | = S and a pair of items
+(xi , xj ) ∈ X × X designed to elicit the user’s preference
+feedback restricted to St . Based on the feedback, the agent
+updates its belief state. The objective is to recover w⋆ under sparse, outcome-based supervision. We consider two
+variants, PE-Gated where 1 < S < D, and PE-Full where
+S = D, i.e., all dimensions are covered each turn.
+
+2.3. Failure modes in reinforcement learning training
+Despite the success of RL with outcome-based rewards,
+interestingly, we find that LLM agents exhibit several failure
+modes across both active-reasoning testbeds during training.
+Observation 1: Reward improvements do not translate
+into increased information acquisition. Fig. 2a (PE-G)
+and Fig. 2b (MediQ) report the training dynamics of episode
+reward, per-turn AS, and per-turn BT. Across both datasets,
+we observe a pronounced decoupling: while the reward
+can be improved over training, BT exhibits only limited
+gains, and AS fails to improve, often plateauing or even
+degrading. This observation raises interesting questions
+about the confounding behaviors of AS and BT, as AS can
+not improve even with an improved BT.
+
+3
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+0.6
+
+0.6
+
+0.4
+
+0.4
+
+0.4
+
+0.4
+
+0.2
+
+0.2
+
+0.2
+
+0.2
+
+0.0
+
+0.0
+150
+
+0.0
+
+0.0
+150
+
+0
+
+50
+
+100
+
+Training Steps
+(a) PE-GS=2
+
+0
+
+50
+
+0.6
+
+100
+
+Training Steps
+(b) MediQ
+
+0.6
+
+Frequency
+Agent BT
+Strong BT
+
+0.25
+0.20
+
+0.4
+0.3
+
+0.6
+
+0.2
+
+0.4
+0.2
+
+0.4
+
+0.15
+
+0.3
+
+0.10
+
+0.2
+
+0.05
+
+0.1
+
+0.1
+
+0.00
+
+0.0
+
+0.0
+
+0
+
+1
+
+2
+
+3
+
+4
+
+5
+
+1.0
+
+Frequency
+Agent BT
+Strong BT
+
+0.5
+
+0
+
+1
+
+0.8
+
+Success rate
+
+0.8
+
+AS legal
+BT legal
+Success Rate
+
+Success rate
+Frequency
+
+0.8
+
+Success Rate
+
+Ratio
+
+0.6
+
+0.8
+
+Frequency
+
+AS legal
+BT legal
+Success Rate
+
+Success Rate
+Ratio/Improvement
+
+0.8
+
+2
+
+3
+
+4
+
+AS legal count per episode
+
+AS legal count per episode
+
+(c) PE-GS=2
+
+(d) MediQ
+
+0.0
+
+Figure 2. (a)/(b): the training dynamics of outcome reward, per-turn AS, and per-turn BT proxies in PE-GS=2 and MediQ datasets
+(Qwen-2.5-7B-Instruct). (c)/(d): correlation between the reward and AS proxies in PE-GS=2 and MediQ (Qwen-2.5-7B-Instruct). In
+strong BT patterns (by human-defined rules or frontier LLMs), the same AS sequence exhibits stronger correlation with the final reward.
+
+these form interaction under-utilization: once conservative
+AS restricts information exposure and weak BT struggles
+to internalize evidence, RL pressure favors non-interactive
+heuristics that stabilize outcomes while further suppressing
+information exploration and evidence usage.
+
+To isolate the effect, we analyze the relationship between AS
+and reward under different BT capabilities. Specifically, we
+fix identical action sequences and compare outcomes when
+the observation stream is processed by (i) the agent’s internal BT versus (ii) stronger belief-update mechanisms, e.g.,
+human-defined update rules or frontier reasoning models.
+Since the environment dynamics and action sequences are
+identical across conditions, the difference can be attributed
+solely to the belief update mechanism.
+
+Taken together, these observations indicate SeL emerges
+from a bidirectional coupling between AS and BT. The
+reward-relevant value of AS is mediated by the agent’s ability to absorb information through BT, while BT is in turn
+constrained by the information budget induced by AS. This
+mutual dependence can trap training dynamics in a lowinformation regime, giving rise to a self-locking behavior.
+
+Observation 2: Weak belief tracking masks the contribution of informative actions. As shown in Fig. 2c and
+2d, the correlation between AS and reward is substantially
+higher under strong BT, but remains weak when using the
+agent’s own BT. This indicates that the contribution of AS
+to the reward is masked when belief updates are unreliable:
+even high-information actions yield little reward improvement if their information is not incorporated into internal
+belief. As a result, policy optimization cannot yield stable
+learning signals to reinforce informative AS choices.
+
+3. Understanding Self-Locking
+To formally understand the SeL behaviors of AS and BT,
+we present a theoretical framework for SeL. Due to space
+constraints, we defer the full details to Appendix C.
+AS and BT capabilities. We consider an agent represented
+by the interleaved behavior Πω = (πωas , πωbt ), where πωas selects environment-facing actions and πωbt updates the model
+belief. Let τ = (b0 , a0 , o0 , . . . , bH ) ∼ Πω denote the onpolicy trajectory, where bt is the model belief. To isolate AS
+from the model’s BT mechanism, we also consider an oraclebelief trajectory τ̄ = (b̄0 , ā0 , ō0 , . . . , b̄H ) ∼ Πorc
+ω , where
+barred variables denote Bayesian belief updates using the
+as
+same action-selection kernel, and Πorc
+ω := (πω , BayesUpd).
+We quantify belief quality by the potential Ψ(b) := b(s⋆ ) ∈
+[0, 1], which measures the confidence mass assigned to the
+true latent state s⋆ . Then, we quantify AS and BT through
+the following two capability indices.
+Definition 3.1 (AS Informativeness). Given an oracle-belief
+trajectory τ̄ ∼ Πorc
+ω induced by the action-selection kernel
+πωas and Bayesian belief updates BayesUpd, the AS informativeness is defined as the expected total improvement in ora
+cle belief quality, IAS (ω) := Eτ̄ ∼Πorc
+Ψ(b̄H ) − Ψ(b̄0 ) .
+ω
+
+Observation 3: Conservative action selection limits belief
+refinement and induces interaction-insensitive shortcuts.
+Complementary to Obs. 2, we now examine the reverse direction of the coupling. When AS gets conservative and
+yields little informative evidence, BT is deprived of meaningful signals to learn from. Under outcome-only supervision, this even incentivizes shortcut behaviors that reduce
+reliance on interaction, reinforcing a low-information training regime. We observe that as training progresses, agents
+become less sensitive to informative observations and increasingly rely on early-stage context. In MediQ, we intervene by replacing all patient feedback with Unknown while
+keeping all other configurations unchanged. Notably, the
+induced performance drop becomes smaller after RL training (41.25 → 30.50 w/o RL versus 61.00 → 55.50 with RL;
+see Fig. 6a), suggesting that interaction-derived evidence
+has a weaker causal effect on the final decision. Crucially,
+this reduced sensitivity is accompanied by an increase in
+belief consistency (Fig. 6a; 78.7 w/o RL versus 92.8 with
+RL): the agent increasingly adheres to its initial judgment
+instead of revising beliefs in response to interaction, which
+reflects a more “stubborn” belief update pattern. Together,
+
+We next characterize how much of the theoretically supplied information is actually absorbed by the agent’s belieftracking dynamics.
+Definition 3.2 (BT Capability). For an on-policy trajectory
+4
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+τ ∼ Πω , define ∆Ψt := Ψ(bt+1 ) − Ψ(bt ) as the one-step
+model belief progress at turn t, and ∆Ψ+
+t := max(∆Ψt , 0)
+as the absorbed belief progress. The belief-tracking
+ PH−1
+capa+
+bility is defined as CBT (ω) := Eτ ∼Πω
+t=0 ∆Ψt .
+
+initialized inside Rδ,ε , the agent cannot leave the locking
+regime for a non-trivial number of policy-update steps, with
+the explicit escape-time lower bound given in Appendix C.4.
+The formal version of Thm. 3.4 along with the proof are
+given in Appendix C.4. Intuitively, Thm. 3.4 shows that,
+when under the SeL regime, the learning signals from outcome reward are weakened by the limited AS and BT capabilities, scaling linearly with the current levels of IAS and
+CBT . Consequently, when the model is initialized within
+the SeL regime, it requires significant policy update steps
+to escape the SeL regime. In practice, this indicates that
+once training enters the SeL regime, it is unlikely to recover
+without explicit interventions that restore informative local
+credit signals for AS and BT.
+
+Self-Locking regime. We formalize the notion of selflocking via a two-dimensional low-AS and low-BT region:
+Definition 3.3 (Self-Locking Regime). With δ, ε > 0, we
+define the locking regime as the subset of parameter space
+with low AS informativeness and low BT capability:
+
+Rδ,ε := ω ∈ Ω : IAS (ω) ≤ δ, CBT (ω) ≤ ε ,
+which represents a low-information and low-BT regime.
+Policy-gradient decomposition of the outcome reward.
+Given the agent Πω = (πωas , πωbt ) trained with outcomebased reward, the policy gradient can be written as
+
+
+∇ω J(ω) = Eτ ∼Πω R(τ ) ∇ω log pω (τ ) .
+
+4. Breaking Self-Locking with Directions
+The previous section shows that SeL arises from entangled
+and weakened credit assignment between AS and BT under
+outcome-based RL. While dense calibrated supervision for
+intermediate decisions is difficult in long-horizon agentic
+tasks, many active-reasoning environments provide easy-toobtain directional signals at the step level; for example, an
+action’s informativeness can often be inferred from whether
+the environment reveals new evidence in response. Motivated by this observation, we propose AR E W, a lightweight
+framework that converts such uncalibrated directional signals into policy-gradient credit reallocation, improving AS
+and BT without introducing calibrated intermediate rewards.
+
+Then we expand ∇ω log pω (τ ) as follows:
+H
+X
+t=0
+
+∇ω log πωbt (bt | ct ) +
+
+H−1
+X
+
+∇ω log πωas (at | bt ).
+
+t=0
+
+Here ct denotes the BT-conditioning context. We analyze
+the normalized AS- and BT-channel update directions:
+" H−1
+#
+1 X
+as
+as
+∇ω log πω (at | bt )At (bt , at ) ,
+gas (ω) = Eω
+H t=0
+#
+"
+H
+1 X
+bt
+bt
+gbt (ω) = Eω
+∇ω log πω (bt | ct )At (ct , bt ) ,
+H + 1 t=0
+
+4.1. Stepwise directional critiques
+
+where Aas and Abt are the channel-isolated advantages
+of AS and BT, respectively. Naturally, we define the ASchannel projected update as Tas (ω) := ω +ηgas (ω), and the
+BT-channel update as Tbt (ω) := ω +ηgbt (ω). The coupling
+effects between AS and BT can be further characterized by
+the one-sided projected drifts:
+
+∆+
+as IAS (ω) := IAS (Tas (ω)) − IAS (ω) + ,
+
+∆+
+bt CBT (ω) := CBT (Tbt (ω)) − CBT (ω) + .
+
+The AS/BT decomposition of agentic behavior allows us
+to exploit respective directional critiques. For analysis and
+implementation, the reasoning process of the agent can be
+organized as alternating between (i) an Action Round, in
+which the agent outputs an environment-facing action, and
+(ii) an Update Round, in which the agent receives the new
+observation and updates its internal belief.
+AS directional critique. For the AS channel, we assign
+a directional critique ztas ∈ {−1, 0, +1} to each executed
+action, where +1 indicates that the action elicits informative
+feedback or useful evidence from the environment or user,
+−1 indicates an uninformative action, and 0 denotes an
+abstention. Intuitively, ztas encourages agents to strategically
+take actions that induce information helpful to reasoning.
+
+With these quantities, we draw the following result:
+Theorem 3.4 (Informal). Fix δ, ε > 0. Under the regularity
+assumptions detailed in Appendix C.4, including Lipschitz
+reward-belief coupling, bounded gradients, action-invariant
+harmful belief drift, BT-capability-limited absorption, residual AS-budget comparability, and conservative propagation
+of belief quality, for any ω ∈ Rδ,ε , the one-sided projected
+drifts satisfy the following inequality:
+ +
+
+
+
+
+∆as IAS (ω)
+IAS (ω)
+0
+α
+⪯ η
++ o(η),
+βI βC
+CBT (ω)
+∆+
+bt CBT (ω)
+
+BT directional critique. For the BT channel, the critique
+should reflect whether newly acquired information is effectively incorporated into the agent’s internal belief state.
+While we cannot directly access the agent’s belief state, we
+b t ∈ [0, 1] that tracks
+can still acquire a scalar readout Ψ
+task-relevant confidence over turns from the agent, such
+b t is used purely as
+as through prompting. Importantly, Ψ
+
+where ⪯ denotes elementwise inequality and α, βI , βC > 0
+are problem-dependent constants. Moreover, for agents
+5
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+instrumentation: it is neither assumed to coincide with, nor
+to recover, the
+belief bt . We then define
+ latent analytical
+
+b t+1 − Ψ
+b t , where positive values indicate
+ztbt := Sign Ψ
+that the readout moves in a truth-aligned direction.
+
+which shows that injecting the critiques requires only a
+minimal modification to the actor update: it suffices to apbt ← At + λ ut
+ply an additive shaping to the advantage A
+while keeping the outcome reward, critic target, and the
+underlying RL optimization machinery unchanged. Since
+the coefficients ut are derived from the likelihood-margin
+objective, the resulting update can be directly interpreted
+as reallocating policy-gradient magnitude from negatively
+critiqued steps to positively critiqued ones within the same
+trajectory, aligned with the directional critiques.
+
+4.2. Injecting directional critiques into policy-gradient
+Margin-aware auxiliary objective. We inject directional
+critiques via an auxiliary objective that (i) acts locally at
+the critiqued steps and (ii) induces a gradient that can be
+combined with standard policy gradients without modifying
+task rewards. To this end, for a trajectory τ with labels {zt },
+define the positively and negatively critiqued index sets
+Pτ := {t | zt = +1}, and Nτ := {t | zt = −1}. Note that
+we use zt to denote ztas , ztbt , or both. The construction is
+channel-agnostic. Whenever counts |Pτ | > 0 and |Nτ | > 0,
+we define an intra-trajectory likelihood-margin objective
+X
+1 X
+b τ ) := 1
+L(ω;
+log πω,t −
+log πω,t . (1)
+|Pτ |
+|Nτ |
+t∈Pτ
+
+4.3. Theoretical and Practical Discussion
+In contrast to the theoretical characterization of SeL in
+Thm. 3.4, the directional critique breaks the negative confounding of limited AS and BT. Let Tbas (ω) and Tbbt (ω) denote the corresponding critique-shaped updates induced by
+the likelihood-margin objective in Eq. 2, respectively. The
+following proposition demonstrates that the effectiveness of
+AR E W is characterized by the “weighted accuracy” of zt
+critiques. See the complete formulation in Appendix C.5.
+
+t∈Nτ
+
+Here log πω,t denotes the aggregate log-probability assigned
+by the agent to the decision segment taken at step t under
+parameters ω. Note that the “decision” can correspond to an
+action-selection decision or a belief-update decision, and the
+construction here thus applies to both AS and BT channels.
+
+Proposition 4.1. Under the setting of Sec. 4.2 and Appendix C.5, denote the stepwise weight as wt (ω) :=
+as
+2
+|uht | Āt (b̄t , āt ) ∥∇
+i ω log πω (āt | b̄t )∥ and let W (ω) :=
+PH−1
+E
+t=0 wt (ω) . Then the critique quality is measured by
+the weighted accuracy
+hP
+i
+H−1
+E
+t=0 wt (ω) 1{zt = yt }
+hP
+i
+∈ [0, 1].
+Accas (ω) :=
+H−1
+E
+w
+(ω)
+t
+t=0
+
+Eq. 1 directly encourages the agent to increase the logprobability mass on positively critiqued decisions relative
+to negatively critiqued ones, without introducing calibrated
+intermediate rewards or training a separate discriminator
+for zt . Crucially, Eq. 1 is additive over time and therefore
+naturally compatible with multi-turn credit assignment.
+
+Moreover, the first-order improvement in AS informativeness
+induced by AR E W satisfies (and the BT-side analogue)
+
+
+
+
+IAS Tbas (ω) − IAS Tas (ω) = η W (ω) 2 Accas (ω) − 1 .
+
+Implied per-step coefficients. Notably, Eq. 1 has a gradient
+of the same form as standard policy gradients:
+ 1
+
+H−1
+ |Pτ | if zt = +1,
+X
+−1
+ut ∇ω log πω,t ; ut := |N
+∇ω Lb =
+if zt = −1,
+|
+
+ τ
+t=0
+0
+if zt = 0.
+
+In particular, AR E W does not rely on perfectly accurate critiques. The proposition shows that AR E W is effective whenever Accas (ω) > 12 ; this only requires directional critiques
+to be better than random in weighted accuracy, not calibrated
+step rewards. We empirically show that AR E W is robust to
+critique noise (see Robustness Analyses in Sec. 5.2).
+
+Here the sign of ut matches the critique direction, so the
+auxiliary gradient pushes
+mass in the intended
+Pprobability
+H−1
+direction. Furthermore, t=0 ut = 0 exhibits a centering
+property, which means the auxiliary term induces a pure
+likelihood margin rather than a uniform likelihood shift.
+
+Practical discussion. In practice, our framework naturally
+maps to LLM agents with alternating action-selection (AS)
+and belief-tracking (BT) rounds during interaction. In each
+AS round, the agent takes an environment-facing action
+intended to reduce the task uncertainty. In the subsequent
+BT round, the agent is instructed to explicitly update its
+confidence over the task states using the latest feedback,
+where the confidence assigned to the ground-truth candidate
+b t when training labels provide s⋆ . In pracs⋆ induces Ψ
+tice, simple critiques can assist to escape SeL and improve
+performance. For AS, action-level signals ztas can be directly inferred from user or environment feedback. For BT,
+stepwise critique labels ztbt can be constructed by compar-
+
+Minimal injection via advantage reweighting. Let JRL
+denote the standard actor surrogate used by a policy-gradient
+RL algorithm. We consider the augmented surrogate
+h
+i
+b τ) ,
+Lbaug (ω) := JRL (ω) + λ Eτ L(ω;
+(2)
+where λ > 0 controls the strength of critique injection, and
+the expectation is taken over on-policy trajectories. The
+resulting gradient update can thus be written as
+"H−1
+#
+
+X
+∇ω Lbaug (ω) ∝ Eτ
+At + λ ut ∇ω log πω,t ,
+t=0
+
+6
+
+0
+
+25
+
+50
+
+75
+
+vanilla
+ours (AS)
+ours (AS & BT)
+
+0.5
+0.4
+
+100
+
+125
+
+Training Steps
+
+150
+
+175
+
+200
+
+(a) PE-GS=3
+
+0.3
+0.2
+
+0.6
+
+0.1
+0.0
+
+0.3
+
+25
+
+50
+
+75
+
+100
+
+125
+
+Training Steps
+
+150
+
+175
+
+200
+
+vanilla
+ours (AS)
+ours (AS & BT)
+
+0.5
+
+0.5
+0.4
+
+0
+
+vanilla
+ours (AS)
+ours (AS & BT)
+
+0.7
+
+Reward
+
+vanilla
+ours (AS)
+ours (AS & BT)
+
+Reward
+
+0.9
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+
+Reward
+
+Reward
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+0.4
+0.3
+0.2
+
+0
+
+(b) PE-FD=8
+
+25
+
+50
+
+75
+
+100
+
+125
+
+Training Steps
+
+150
+
+175
+
+(c) MediQ
+
+200
+
+0.1
+
+0
+
+25
+
+50
+
+75
+
+100
+
+125
+
+Training Steps
+
+150
+
+175
+
+200
+
+(d) FloDial-Hard
+
+Figure 3. Training dynamics of rewards, evaluated under the PPO algorithm with Qwen-2.5-7B-Instruct across vanilla PPO, PPO with
+AR E W– AS - ONLY and PPO with AR E W– AS + BT.
+Table 1. Main results (average outcome reward on test sets) across three domains and seven active reasoning tasks.
+P REFERENCE E STIMATION
+
+M EDICAL D IAGNOSIS
+
+T ROUBLESHOOTING
+
+PE-GS=2
+
+PE-GS=3
+
+PE-FD=8
+
+PE-FD=6
+
+M EDI Q
+
+F LO D IAL -E ASY
+
+F LO D IAL -H ARD
+
+17.11
+15.00
+18.00
+
+21.15
+10.00
+12.33
+
+8.42
+2.67
+3.14
+
+12.47
+4.20
+5.70
+
+74.67
+39.00
+35.25
+
+35.00
+24.33
+24.33
+
+26.33
+13.33
+17.33
+
+PPO- TRAINED (Q WEN -2.5-7B-I NST.)
+VANILLA
+24.00
+18.33
+AR E W– AS ONLY
+46.00 ↑ 22.0 32.00 ↑ 13.7
+AR E W– AS + BT
+49.33 ↑ 25.3 80.33 ↑ 62.0
+
+30.52
+39.62 ↑ 9.1
+47.89 ↑ 17.4
+
+32.03
+42.10 ↑ 10.1
+44.47 ↑ 12.4
+
+50.50
+57.25 ↑ 6.8
+61.25 ↑ 10.8
+
+37.33
+43.67 ↑ 6.3
+41.00 ↑ 3.7
+
+21.33
+36.00 ↑ 14.7
+42.33 ↑ 21.0
+
+PPO- TRAINED (L LAMA -3.1-8B-I NST.)
+VANILLA
+27.33
+11.00
+AR E W– AS ONLY
+49.00 ↑ 21.7 73.00 ↑ 62.0
+AR E W– AS + BT
+54.67 ↑ 27.3 77.67 ↑ 66.7
+
+55.21
+55.61 ↑ 0.4
+61.28 ↑ 6.1
+
+6.00
+56.91 ↑ 50.9
+54.65 ↑ 48.7
+
+63.50
+71.75 ↑ 8.3
+70.75 ↑ 7.3
+
+24.33
+41.67 ↑ 17.3
+44.33 ↑ 20.0
+
+31.00
+42.00 ↑ 11.0
+49.00 ↑ 18.0
+
+D IRECT I NFERENCE
+O 4- MINI
+Q WEN -2.5-7B-I NST.
+L LAMA -3.1-8B-I NST.
+
+both AS and BT sides ztAS , ztBT , respectively.
+
+ing changes in candidate confidence (particularly that of
+s⋆ ) upon receiving feedback. We defer concrete prompt
+templates and implementation details to Appendix E.3.
+
+Evaluation metrics. We report average reward as well as
+AS and BT capability proxies on the test datasets. PE-F is
+evaluated under a continuous reward defined by normalized
+similarity improvement, whereas all other datasets use binary rewards. Details of rewards and the proxies used to
+approximate AS and BT are provided in Appendix E.3.
+
+5. Experiments
+5.1. Experimental Setup
+Datasets. We evaluate AR E W across 4 interactive domains:
+preference estimation, medical diagnosis, troubleshooting,
+and customer service. Specifically, preference estimation
+includes PE-G and PE-F (Sec. 2); medical diagnosis corresponds to MediQ (Sec. 2); and troubleshooting is instantiated by FloDial in both easy and hard modes (Raghu
+et al., 2021; Hu et al., 2024), where an agent asks diagnostic questions to resolve user-reported issues. We further
+evaluate AR E W on the customer-service domain using τ 2 bench (Barres et al., 2025), a practical agentic benchmark
+in which the agent must interact with a user and external
+tools to complete realistic service tasks. Across all domains,
+supervision is provided only at the end of the interaction.
+
+Implementation details. The main experiments of RL
+training are conducted on Qwen2.5-7B-Instruct (Yang et al.,
+2024) and LLaMA-3.1-8B-Instruct (Grattafiori et al., 2024).
+For the PE-G and PE-F tasks, the interactive feedback is
+rule-based; for the MediQ and FloDial datasets, we leverage
+Qwen2.5-14B-Instruct to simulate the “user” and provides
+the interactive feedback. See more details in Appendix E.3.
+5.2. Experimental Results and Analyses
+In this part, we present experimental results on the first
+three settings to evaluate the effectiveness of AR E W and to
+analyze its impact on learning dynamics in agentic active
+reasoning. We begin with overall performance comparisons,
+followed by examining how AR E W affects reward optimization, AS and BT capabilities, and robustness analysis.
+See complementary experimental analyses in Appendix D.
+
+Baselines. To evaluate the effectiveness of AR E W, we compare it against the following baselines: 1) Direct Inference
+without Training, where we evaluate representative proprietary reasoning LLMs o4-mini; 2) PPO (Schulman et al.,
+2017), 3) GRPO (Shao et al., 2024), and 4) GSPO (Zheng
+et al., 2025). See more details in Appendix E.2. For each RL
+mechanism, we consider two variants of AR E W: AS - ONLY
+and AS + BT, which work on the AS side critique ztAS and
+
+Overall Performance. We first report the main results
+across the evaluated domains. Table 1 summarizes finaltask performance. We further visualize dynamics of reward
+optimization and information-related behaviors. Specifi7
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+0.040
+AS 0.049 0.265
+
+0.834
+
+-0.005
+-0.005
+-0.003
+
+BT
+
+0.014
+High
+
+Low
+
+0.058
+0.082
+
+AS
+
+BT
+
+-0.009
+
+0.002
+
+Low
+
+(a) PE-GS=3
+
+0.224
+0.222
+
+0.989 AS
+0.982
+
+0.031
+
+BT
+
+0.010
+0.012
+High
+
+0.507
+0.539
+
+AS
+
+0.12
+0.25
+0.36
+0.37
+
+0.060
+
+BT
+
+0.13
+
+Low
+
+(b) PE-FD=8
+
+0.085
+0.103
+High
+
+wo RL
+RL vanilla
+Ours (AS)
+Ours (AS & BT)
+
+0.58
+0.40
+
+0.79
+High
+
+Low
+
+(c) MediQ
+
+(d) FloDial-Hard
+
+Figure 4. Evaluations of AS and BT capabilities under PPO algorithm with Qwen-2.5-7B-Instruct across vanilla PPO, PPO with AR E W.
+
+0.20
+0.15
+0.10
+0.05
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Training Steps
+
+(a) Rewards
+
+120
+
+140
+
+5
+
+vanilla
+AReW
+
+4
+3
+2
+1
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Training Steps
+
+120
+
+140
+
+(b) Tool Execution Errors
+
+3250
+3000
+2750
+2500
+2250
+2000
+1750
+1500
+
+vanilla
+AReW
+
+Interaction Turns
+
+Reward
+
+Tool Execution Errors
+
+vanilla
+AReW
+
+0.25
+
+Response Length
+
+0.30
+
+vanilla
+AReW
+
+18
+17
+16
+15
+14
+13
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Training Steps
+
+120
+
+140
+
+0
+
+(c) Response Tokens
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Training Steps
+
+120
+
+140
+
+(d) Interaction Turns
+
+Figure 5. Training dynamics wrt. training steps on (a) rewards, (b) tool execution errors, (c) consumed response tokens and (d) interaction
+turns over Tau2Bench-Telecom solo setting, comparing vanilla PPO and PPO with AR E W on Qwen2.5-7B-Instruct.
+Table 2. Final Performance under different strength of directional
+critique perturbation (controlled by α).
+
+cally, Fig. 3 shows episode-level reward trajectories, while
+Fig. 4 reports proxy measurements of AS and BT capabilities introduced in Section 2. As shown in Table 1, AR E W
+consistently outperforms the vanilla PPO baseline, achieving notable improvements in 27 out of 28 evaluated settings.
+Among these, AS + BT further largely outperforms the AS ONLY variants in 11 out of 14 cases. These results indicate
+the effectiveness of AR E W on mitigating self-locking.
+
+P ERTURBATION RATIO α
+
+VANILLA
+PE-GS=3
+F LO D IAL -H ARD
+
+18.3
+21.3
+
+0
+
+0.1
+
+0.2
+
+0.3
+
+0.4
+
+0.5
+
+80.3
+36.0
+
+40.0
+30.3
+
+65.0
+29.0
+
+31.3
+27.6
+
+22.3
+30.6
+
+30.3
+23.3
+
+may be insufficient to resolve the underlying coupling between AS and BT. As shown in Fig. 6b and 6c, AR E W
+consistently improves final task performance, while simultaneously strengthening AS and BT proxies, analogous to
+those in PPO. These results indicate that AR E W remains
+effective across different RL mechanisms.
+
+Reward dynamics. Fig. 3 reveals three representative training behaviors. In some tasks (Fig. 3a), vanilla PPO fails
+to improve rewards throughout training, remaining trapped
+in SeL while AR E W effectively breaks SeL and achieves
+continual improvement. In others (Fig. 3b and 3d), rewards
+can have some limited increase, but AR E W achieves faster
+convergence and higher asymptotic performance. Notably,
+we also observe cases where reward curves appear comparable across methods, yet AR E W yields superior AS and BT
+proxy scores and better final-task performance (See Table 1),
+corresponding to Obs. 3 discussed in Sec. 2.3.
+
+Robustness Analysis. We evaluate the robustness of AR E W
+by randomly flipping stepwise directional critiques with
+probability α. As shown in Table 2, increasing the perturbation level leads to a gradual reduction in final performance.
+However, AR E W consistently remains competitive with,
+and often outperforms, the vanilla baseline across a wide
+range of α. This trend is consistent with Prop. 4.1, which
+suggests that performance gains can be sustained as long as
+the weighted accuracy of critiques is not severely degraded.
+Even under strong perturbations, AR E W does not collapse.
+These results indicate that AR E W is robust to critique noise
+and can tolerate imperfect directional signals in practice. A
+more systematic analysis is provided in Appendix D.
+
+AS and BT behaviors. Fig. 4 further disentangles AS and
+BT. The AS - ONLY variant outperforms the baseline in AS
+proxies in all cases, and the AS + BT variant achieves additional gains in BT over the AS - ONLY. Interestingly, the pure
+AS - ONLY variant already leads to measurable improvements
+in BT, reflecting the intrinsic coupling between information
+acquisition and belief updates, illustrating that breaking SeL
+brings benefits for both AS and BT channels.
+
+5.3. Extension to Practical Customer-Service Agents
+
+Effectiveness across different RL algorithms. Beyond
+PPO, we additionally consider group-based RL variants,
+including GRPO and GSPO. While these methods sample multiple trajectories per step, we empirically observe
+that self-locking behaviors can still arise in interactive settings, suggesting that increasing rollout sampling alone
+
+We further evaluate AR E W on τ 2 -bench-Telecom (Barres
+et al., 2025), a practical customer-service benchmark that requires agents to solve telecom troubleshooting tasks through
+multi-turn dialogue and tool use. Unlike the controlled domains above, τ 2 -bench exposes a dual-control environment:
+8
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+41.25
+30.50
+
+wo/
+RL
+
+wo/ intervene
+intervene
+Belief Const.
+
+78.70
+
+92.80
+
+Low
+
+High
+
+32.300
+45.360
+
+0.114
+
+AS
+
+61.00
+55.50
+
+RL
+
+5.730
+
+Prf.
+
+0.344
+
+0.983
+
+-0.001
+
+BT
+
+35.00
+
+Prf.
+
+0.09
+
+AS
+
+0.13
+
+BT
+
+0.015
+0.012
+
+Low
+
+(a) MediQ
+
+RL vanilla
+Ours (AS)
+Ours (AS & BT)
+
+High
+
+0.24
+0.22
+
+Low
+
+(b) PE-FD=8 (GRPO)
+
+RL vanilla
+Ours (AS)
+Ours (AS & BT)
+
+44.33
+47.33
+0.41
+
+0.31
+
+High
+
+(c) FloDial-Easy (GSPO)
+
+Figure 6. (a): outcome-RL reduces sensitivity to interactive feedback while increasing belief consistency. (b)/(c): Evaluations of AS and
+BT capabilities under GRPO and GSPO (Qwen-2.5-7B-Instruct).
+
+0.3
+0.2
+0.1
+0.0
+
+0
+
+10
+
+20
+
+30
+
+40
+
+Training Steps
+
+(a) Rewards
+
+50
+
+60
+
+70
+
+vanilla
+AREW
+
+0.975
+0.950
+0.925
+0.900
+0.875
+0.850
+0.825
+0.800
+0
+
+10
+
+Tool Turn Ratio
+
+Rewards
+
+0.4
+
+Message Turn Ratio
+
+vanilla
+AREW
+
+0.5
+
+20
+
+30
+
+40
+
+Training Steps
+
+50
+
+60
+
+70
+
+(b) Message Turn Ratio
+
+vanilla
+AREW
+
+0.200
+0.175
+0.150
+0.125
+0.100
+0.075
+0.050
+0.025
+0
+
+10
+
+20
+
+30
+
+40
+
+Training Steps
+
+50
+
+60
+
+70
+
+(c) Tool Turn Ratio
+
+Figure 7. Training dynamics on Tau2Bench-Telecom under the standard dual-control setting, comparing vanilla PPO and PPO with
+AREW on Qwen2.5-14B-Instruct. We report (a) rewards, (b) message-turn ratio, and (c) assistant tool-turn ratio.
+
+the assistant can use backend tools, while the simulated user
+can also execute user-side diagnostic or repair actions. This
+creates an additional credit-assignment challenge: the agent
+may obtain partial progress either by using its own tools
+correctly or by guiding the user to perform actions.
+
+easiest available progress channel and weakens learning of
+the intended assistant-side tool-use behavior. Trajectory
+inspection around step 60 further supports this interpretation: successful validation cases are dominated by user-side
+repair, but tasks requiring assistant-side repair remain hard.
+
+Solo setting. We consider the no-user solo setting, where the
+Qwen2.5-7B agent has direct control over the task-solving
+process. AREW is instantiated using only benchmark-native
+online signals, without additional annotation, preference
+data, or learned reward models. Negative critiques are derived from runtime failures such as malformed tool calls,
+invalid executions, and repeated actions, while positive critiques are derived from progress indicators exposed by the
+task evaluator, e.g., whether the trajectory newly matches
+an expected action. Fig. 5 shows that AREW substantially
+improves reward while sharply reducing tool execution errors. The improvement is not achieved by simply increasing
+interaction length or response verbosity: AREW uses fewer
+response tokens and maintains a comparable number of interaction turns. This suggests that lightweight directional
+critiques can provide useful optimization signals even in
+realistic long-horizon tool-use environments.
+
+AREW changes this learning dynamic. As shown in Fig. 7,
+over the matched 70-step training, AREW assigns more
+credit to useful assistant-side tool decisions and reduces
+over-reliance on user-side repair. AREW maintains substantially more assistant read/write tool turns than vanilla PPO,
+while requiring fewer user tool hops, raising the average reward from 0.20 to 0.50, a 2.5× relative increase over vanilla
+PPO. Thus, in τ 2 -bench, AREW not only improves early
+reward but also counteracts an interaction-induced shortcut,
+reallocating optimization pressure toward the agent-side
+behavior that the benchmark is designed to evaluate.
+
+6. Conclusion
+We study information self-locking (SeL) in long-horizon
+multi-turn agentic active reasoning and show that it arises
+from a structural failure of credit assignment with bidirectional coupling between action selection (AS) and belief
+tracking (BT). We provide both theoretical and empirical
+evidence that standard outcome-based RL can be trapped in
+SeL. We propose AR E W, a critique-driven reweighting approach that selectively reallocates optimization signal along
+trajectories. Experiments demonstrate consistent gains, robustness to noisy critiques, effectiveness on multiple RL
+mechanisms, and improved training dynamics, AS and BT
+capabilities across multiple benchmarks. We believe this
+perspective opens up new directions for designing robust
+learning mechanisms for interactive reasoning agents.
+
+Standard dual-control setting. We study the standard
+interactive setting, where the Qwen2.5-14B agent must coordinate with a GPT-4o-simulated user while deciding when
+to communicate and when to use its own tools. This setting reveals a practical form of self-locking. Under vanilla
+PPO, early reward gains are largely associated with userside operation: the policy increasingly guides the user to
+execute repair actions (Fig. 7b), while assistant-side tool
+use decreases (Fig. 7c). Although this behavior can solve
+a subset of tasks, it creates a path dependence toward the
+9
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Acknowledgements
+
+Guo, D., Yang, D., Zhang, H., Song, J., Zhang, R., Xu, R.,
+Zhu, Q., Ma, S., Wang, P., Bi, X., et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement
+learning. arXiv preprint arXiv:2501.12948, 2025.
+
+We thank the reviewers for their constructive comments and
+suggestions. Deyu Zou, Yongqiang Chen, and James Cheng
+were supported by a CRF (No. C2005-24Y) from the RGC
+of Hong Kong. Mufei Li and Pan Li are in part supported
+by NSF grants III-2239565 and III-2428777. This work was
+a collaboration between Husky Data+AI Lab at CUHK and
+ByteDance, supported by a ByteDance University Collaboration Project.
+
+Hu, Z., Liu, C., Feng, X., Zhao, Y., Ng, S.-K., Luu, A. T., He,
+J., Koh, P. W. W., and Hooi, B. Uncertainty of thoughts:
+Uncertainty-aware planning enhances information seeking in llms. Advances in Neural Information Processing
+Systems, 37:24181–24215, 2024.
+Kaelbling, L. P., Littman, M. L., and Cassandra, A. R. Planning and acting in partially observable stochastic domains.
+Artificial intelligence, 101(1-2):99–134, 1998.
+
+Impact Statement
+This paper presents work whose goal is to advance the field
+of Machine Learning. There are many potential societal
+consequences of our work, none which we feel must be
+specifically highlighted here.
+
+Kwan, W.-C., Zeng, X., Jiang, Y., Wang, Y., Li, L., Shang,
+L., Jiang, X., Liu, Q., and Wong, K.-F. Mt-eval: A multiturn capabilities evaluation benchmark for large language
+models. arXiv preprint arXiv:2401.16745, 2024.
+
+References
+Badola, K., Simon, J., Hosseini, A., Carthy, S. M. M.,
+Munkhdalai, T., Goyal, A., Kočiskỳ, T., Upadhyay, S.,
+Fatemi, B., and Kazemi, M. Multi-turn puzzles: Evaluating interactive reasoning and strategic dialogue in llms.
+arXiv preprint arXiv:2508.10142, 2025.
+
+Li, S., Balachandran, V., Feng, S., Ilgen, J., Pierson, E.,
+Koh, P. W. W., and Tsvetkov, Y. Mediq: Question-asking
+llms and a benchmark for reliable interactive clinical
+reasoning. Advances in Neural Information Processing
+Systems, 37:28858–28888, 2024.
+
+Barres, V., Dong, H., Ray, S., Si, X., and Narasimhan, K. τ 2 bench: Evaluating conversational agents in a dual-control
+environment. arXiv preprint arXiv:2506.07982, 2025.
+
+Li, Y., Zuo, Y., He, B., Zhang, J., Xiao, C., Qian, C., Yu, T.,
+Gao, H.-a., Yang, W., Liu, Z., et al. Rethinking on-policy
+distillation of large language models: Phenomenology,
+mechanism, and recipe. arXiv preprint arXiv:2604.13016,
+2026.
+
+Chen, Z., Dong, J., Tian, Y., Yang, G., Chen, Y., Chen, Z.,
+and Cheng, J. Hista and numca: Estimate state value
+effectively for llm reinforcement learning, 2026. URL
+https://arxiv.org/abs/2605.29782.
+
+Liang, Z., Yu, D., Yu, W., Yao, W., Zhang, Z., Zhang,
+X., and Yu, D. Mathchat: Benchmarking mathematical
+reasoning and instruction following in multi-turn interactions. arXiv preprint arXiv:2405.19444, 2024.
+
+Deng, Y., Liao, L., Chen, L., Wang, H., Lei, W., and Chua,
+T.-S. Prompting and evaluating large language models for
+proactive dialogues: Clarification, target-guided, and noncollaboration. arXiv preprint arXiv:2305.13626, 2023.
+
+Plaat, A., van Duijn, M., van Stein, N., Preuss, M., van der
+Putten, P., and Batenburg, K. J. Agentic large language
+models, a survey. arXiv preprint arXiv:2503.23037, 2025.
+
+Dou, S., Liu, Y., Jia, H., Xiong, L., Zhou, E., Shen, W., Shan,
+J., Huang, C., Wang, X., Fan, X., et al. Stepcoder: Improve code generation with reinforcement learning from
+compiler feedback. arXiv preprint arXiv:2402.01391,
+2024.
+
+Raghu, D., Agarwal, S., Joshi, S., et al. End-to-end learning of flowchart grounded task-oriented dialogs. arXiv
+preprint arXiv:2109.07263, 2021.
+
+Grattafiori, A., Dubey, A., Jauhri, A., Pandey, A., Kadian,
+A., Al-Dahle, A., Letman, A., Mathur, A., Schelten, A.,
+Vaughan, A., et al. The llama 3 herd of models. arXiv
+preprint arXiv:2407.21783, 2024.
+
+Sager, P. J., Meyer, B., Yan, P., von Wartburg-Kottler, R.,
+Etaiwi, L., Enayati, A., Nobel, G., Abdulkadir, A., Grewe,
+B. F., and Stadelmann, T. A comprehensive survey of
+agents for computer use: Foundations, challenges, and future directions. Journal of Artificial Intelligence Research,
+85, 2026.
+
+Gu, Y., Dong, L., Wei, F., and Huang, M. Minillm: Knowledge distillation of large language models. In International Conference on Learning Representations, volume
+2024, pp. 32694–32717, 2024.
+
+Schulman, J., Moritz, P., Levine, S., Jordan, M., and Abbeel,
+P. High-dimensional continuous control using generalized
+advantage estimation. arXiv preprint arXiv:1506.02438,
+2015.
+10
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and
+Klimov, O. Proximal policy optimization algorithms.
+arXiv preprint arXiv:1707.06347, 2017.
+
+Yu, Y., Wang, Z., Ma, W., Guo, Z., Zhan, J., Wang, S., Wu,
+C., Guo, Z., and Zhang, M. Steptool: A step-grained
+reinforcement learning framework for tool learning in
+llms. 2024.
+
+Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang,
+H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language
+models. arXiv preprint arXiv:2402.03300, 2024.
+
+Zhang, G., Geng, H., Yu, X., Yin, Z., Zhang, Z., Tan, Z.,
+Zhou, H., Li, Z., Xue, X., Li, Y., et al. The landscape of
+agentic reinforcement learning for llms: A survey. arXiv
+preprint arXiv:2509.02547, 2025a.
+
+Sheng, G., Zhang, C., Ye, Z., Wu, X., Zhang, W., Zhang, R.,
+Peng, Y., Lin, H., and Wu, C. Hybridflow: A flexible and
+efficient rlhf framework. In Proceedings of the Twentieth
+European Conference on Computer Systems, pp. 1279–
+1297, 2025.
+
+Zhang, W., Li, X., Zhang, Y., Jia, P., Wang, Y., Guo, H., Liu,
+Y., and Zhao, X. Deep research: A survey of autonomous
+research agents. arXiv preprint arXiv:2508.12752, 2025b.
+Zhang, Z., Chen, Z., Li, M., Tu, Z., and Li, X. Rlvmr:
+Reinforcement learning with verifiable meta-reasoning
+rewards for robust long-horizon agents. arXiv preprint
+arXiv:2507.22844, 2025c.
+
+Song, M. and Zheng, M. A survey of on-policy distillation for large language models. arXiv preprint
+arXiv:2604.00626, 2026.
+Srivastava, S. S. and Aggarwal, V. A technical survey of reinforcement learning techniques for large language models.
+arXiv preprint arXiv:2507.04136, 2025.
+
+Zheng, C., Liu, S., Li, M., Chen, X.-H., Yu, B., Gao,
+C., Dang, K., Liu, Y., Men, R., Yang, A., et al.
+Group sequence policy optimization. arXiv preprint
+arXiv:2507.18071, 2025.
+
+Wan, Y., Wu, J., Abdulhai, M., Shani, L., and Jaques, N. Enhancing personalized multi-turn dialogue with curiosity
+reward. arXiv preprint arXiv:2504.03206, 2025.
+
+Zhong, Q., Zheng, M., Song, M., Lin, X., Sun, J., Jiang, H.,
+Wang, X., and Fang, J. Sod: Step-wise on-policy distillation for small language model agents. arXiv preprint
+arXiv:2605.07725, 2026.
+
+Wang, H., Leong, C. T., Wang, J., Wang, J., and Li, W.
+Spa-rl: Reinforcing llm agents via stepwise progress attribution. arXiv preprint arXiv:2505.20732, 2025a.
+
+Zhou, Z., Feng, X., Zhu, Z., Yao, J., Koyejo, S., and Han,
+B. From passive to active reasoning: Can large language
+models ask the right questions under incomplete information? arXiv preprint arXiv:2506.08295, 2025.
+
+Wang, H., Chen, Y., Luo, L., Zhang, B., Wen, E. D., and
+Li, P. Implicit turn-wise policy optimization for proactive
+user-llm interaction. arXiv preprint arXiv:2603.23550,
+2026.
+
+Zou, D., Chen, Y., Wang, J., Yang, H., Li, M., Cheng,
+J., Li, P., and Gong, Y. T3 : Reducing belief deviation
+in reinforcement learning for active reasoning. arXiv
+preprint arXiv:2510.12264, 2025.
+
+Wang, S., Zhang, S., Zhang, J., Hu, R., Li, X., Zhang,
+T., Li, J., Wu, F., Wang, G., and Hovy, E. Reinforcement learning enhanced llms: A survey. arXiv preprint
+arXiv:2412.10400, 2024.
+
+Zou, D., Chen, Y., Wang, J., YANG, G., Li, M., Da, Q.,
+Cheng, J., Li, P., and Gong, Y. Reducing belief deviation in reinforcement learning for active reasoning. In
+The Fourteenth International Conference on Learning
+Representations, 2026. URL https://openreview.
+net/forum?id=r8hzDA3pUY.
+
+Wang, Y., Wei, Z., Zhu, X., and Meng, Y. Beyond outcome
+reward: Decoupling search and answering improves llm
+agents. arXiv preprint arXiv:2510.04695, 2025b.
+Xu, F., Hao, Q., Zong, Z., Wang, J., Zhang, Y., Wang,
+J., Lan, X., Gong, J., Ouyang, T., Meng, F., et al. Towards large reasoning models: A survey of reinforced
+reasoning with large language models. arXiv preprint
+arXiv:2501.09686, 2025.
+Yang, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu,
+B., Li, C., Liu, D., Huang, F., Wei, H., et al. Qwen2. 5
+technical report. arXiv preprint arXiv:2412.15115, 2024.
+Yu, H., Qi, Z., Zhao, Y., Nottingham, K., Xuan, K., Majumder, B. P., Zhu, H., Liang, P. P., and You, J. Sotopia-rl:
+Reward design for social intelligence. arXiv preprint
+arXiv:2508.03905, 2025.
+11
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Contents
+1
+
+Introduction
+
+1
+
+2
+
+Self-Locking in Active Reasoning
+
+2
+
+2.1
+
+Preliminaries . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+2
+
+2.2
+
+Testbeds and decomposed proxies . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+3
+
+2.3
+
+Failure modes in reinforcement learning training . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+3
+
+3
+
+Understanding Self-Locking
+
+4
+
+4
+
+Breaking Self-Locking with Directions
+
+5
+
+4.1
+
+Stepwise directional critiques . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+5
+
+4.2
+
+Injecting directional critiques into policy-gradient . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+6
+
+4.3
+
+Theoretical and Practical Discussion . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+6
+
+5
+
+6
+
+Experiments
+
+7
+
+5.1
+
+Experimental Setup . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+7
+
+5.2
+
+Experimental Results and Analyses . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+7
+
+5.3
+
+Extension to Practical Customer-Service Agents . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+8
+
+Conclusion
+
+9
+
+A Additional Discussions
+
+13
+
+A.1 Connection to On-Policy Local Supervision . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+13
+
+A.2 Differences from Direct Intermediate Reward Shaping . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+14
+
+B Related Work
+
+15
+
+C More Details on the Theory
+
+15
+
+C.1 Notations & Problem Setup . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+15
+
+C.2 Two Capability Indices . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+16
+
+C.3 Projected Drifts and the 2D Locking Regime . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+17
+
+C.4 2D One-Sided Self-Locking via Projected Drifts . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+18
+
+C.5 Why AR E W breaks Information Self-locking . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+19
+
+C.6 Proofs . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+20
+
+C.6.1
+
+Proof of Proposition C.11 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+20
+
+C.6.2
+
+Proof of Proposition C.12 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+22
+
+C.6.3
+
+Proof of Proposition C.13 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+23
+
+C.6.4
+
+Proof of Proposition C.14 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+24
+
+12
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+C.6.5
+
+Proof of Proposition C.18 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+24
+
+C.6.6
+
+Proof of Proposition C.20 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+25
+
+D Complementary Experimental Analyses
+
+26
+
+E Setup Details
+
+28
+
+E.1 Dataset Details and Prompt Templates . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+28
+
+E.2 Baseline Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+29
+
+E.3 Supplementary Implementation Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+30
+
+E.3.1
+
+Additional Setting on Datasets . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+30
+
+E.3.2
+
+Training Configurations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+31
+
+A. Additional Discussions
+A.1. Connection to On-Policy Local Supervision
+Recent attention to on-policy distillation (OPD) methods for post-training revisit distillation from an on-policy perspective:
+the student first samples its own trajectories, and a teacher model then provides local feedback on the student-visited states
+(Gu et al., 2024; Li et al., 2026; Song & Zheng, 2026). This perspective is closely related to a broader design principle for
+long-horizon LLM post-training: terminal outcome supervision is often too sparse to identify which local decisions should
+be reinforced, and useful learning signals should therefore be injected at the states and decisions actually visited by the
+current policy. AR E W shares this broad principle with OPD, but targets a different failure mode and uses a different source
+of local feedback.
+A unified form of AR E W and OPD. This connection can be expressed at the policy-gradient interface. Let ht denote the
+on-policy history at step t, and let dt denote the sampled local decision segment. In standard token-level OPD, dt can be a
+sampled token; in our AS-BT decomposition, dt can correspond to an action-selection decision or a belief-update decision.
+A reverse-KL form of OPD minimizes
+DKL (πω (· | ht ) ∥ ν(· | ht )) = Edt ∼πω (·|ht ) [log πω (dt | ht ) − log ν(dt | ht )] ,
+where ν denotes the teacher policy. Equivalently, up to constants and score-function baselines, maximizing the negative
+reverse KL yields a local policy-gradient coefficient
+cOPD
+= β log
+t
+
+ν(dt | ht )
+,
+πω (dt | ht )
+
+which reinforces sampled decisions that are relatively more likely under the teacher than under the student, and suppresses
+those over-assigned by the student relative to the teacher.
+AR E W admits an analogous actor-side interface, but with a different local signal sources. Specifically, when injected into
+the actor update, AR E W yields (cf., Sec. 4.2)
+"
+#
+X
+∇ω Laug (ω) ∝ Eτ ∼πω
+(At + λut ) ∇ω log πω (dt | ht ) ,
+t
+
+where At is the original outcome-based advantage and λut is the critique-induced local correction. Thus, both OPD and
+AR E W can be written under a common local-supervision form
+"
+#
+X
+g(c) = Eτ ∼πω
+(At + ct ) ∇ω log πω (dt | ht ) ,
+t
+
+with
+ct =
+
+(
+t |ht )
+β log πν(d
+,
+ω (dt |ht )
+λut ,
+
+teacher-density feedback in OPD,
+directional-critique feedback in AR E W.
+13
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+The similarity is therefore at the level of the local policy-gradient interface: both methods modify the learning signal on
+on-policy decisions through a local coefficient ct .
+Essential Differences. However, this formal resemblance should not obscure the difference in their objectives and semantics.
+OPD is fundamentally teacher-driven distillation: its local signal measures whether the teacher assigns higher relative
+likelihood to the sampled token or decision than the student. It is therefore primarily designed to transfer behavior from a
+stronger teacher to a student while reducing the distribution mismatch of off-policy distillation.
+OPD can in principle be applied to agentic active reasoning. However, long-horizon partially observable tasks may expose
+an efficiency challenge for such on-policy teacher supervision. If the student policy is weak, under SeL, it may repeatedly
+sample low-information interaction patterns. In this case, purely on-policy teacher supervision may spend much of its budget
+on suboptimal histories. Unless the teacher feedback at these histories strongly induces corrective information-seeking
+actions, the positive signal for escaping the low-information regime can remain sparse, potentially reducing sample efficiency.
+Moreover, early interaction errors can compound over subsequent turns (Zou et al., 2026): in tool-integrated reasoning,
+recent studies (Zhong et al., 2026) observe that erroneous tool calls can cascade across later reasoning steps, increasing
+student-teacher divergence and making token-level teacher supervision less reliable.
+By contrast, AR E W is instead directly motivated by information self-locking in agentic active reasoning. Its local signal
+asks whether the decision contributes to the information pipeline required for solving the task (cf., Sec. 4.1). Specifically, on
+the AS side, the critique indicates whether an environment-facing action elicits useful evidence. On the BT side, the critique
+indicates whether newly acquired evidence is internalized in a truth-aligned direction. AR E W is designed for the structural
+failure mode of active reasoning: when outcome rewards cannot disentangle AS and BT, lightweight directional turn-level
+critiques can restore non-degenerate local learning signals, which are coarser than teacher logits, but are directly aligned
+with the AS-BT mechanism underlying SeL, without requiring calibrated dense rewards, learned process reward models, or
+teacher logits.
+A.2. Differences from Direct Intermediate Reward Shaping
+A natural alternative to AR E W is to convert the same stepwise critiques into intermediate rewards. In this part, we
+conceptually and empirically compare two ways of leveraging the same directional critiques introduced in Sec. 4.1: i)
+AR E W and ii) direct intermediate reward shaping.
+Conceptual Comparison. Let ct ∈ [−1, 1] denote a local critique signal at decision step t, where positive values indicate
+locally desirable behavior and negative values indicate undesirable behavior. A direct intermediate-reward baseline optimizes
+the shaped return
+H−1
+X
+Rint (τ ) = R(τ ) + α
+ct ,
+t=0
+
+with shaping strength α > 0. This changes the optimized objective from the original sparse task return to
+"
+#
+H−1
+X
+Jint (ω) = Eτ ∼Πω R(τ ) + α
+ct .
+t=0
+
+Accordingly, the value function is no longer trained to predict final task success alone. It must predict the shaped future
+return
+
+
+π
+Vint
+(st ) = Eπ R(τ ) + α
+
+X
+
+ck st  ,
+
+k≥t
+
+which requires modeling when future positive or negative critiques will occur and how they accumulate.
+This is a stronger requirement than what our setting supports. The critiques used by AR E W are deliberately lightweight,
+binary, and potentially noisy. They are intended to provide weak directional information about local AS or BT behavior,
+They are not calibrated estimates of each step’s additive contribution to final task utility. Once injected into the reward,
+however, noisy or weak critiques can affect both critic regression and actor optimization: the critic must fit a noisier
+shaped return, and the resulting advantages can propagate corrupted local labels backward through the trajectory.
+By contrast, AR E W uses the same local signals in a reward-preserving way. It keeps the original sparse return and critic
+
+14
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+target unchanged, and injects critiques only into the actor-side credit allocation:
+"H−1
+#
+
+X
+b
+∇ω Laug (ω) ∝ Eτ
+At + λ ut ∇ω log πω,t .
+t=0
+
+The theoretical requirement is therefore weaker. Direct intermediate rewards require the critique sequence to behave like a
+reliable process reward. By contrast, under the settings of Proposition 4.1, AR E W only requires the signed critique to be
+better than random in the weighted accuracy to improve the capability beyond the baseline update in expectation.
+Empirical Findings. This distinction also explains the empirical gap in Appendix D. Under random sign corruption, direct
+intermediate reward injection forces the critic to fit a corrupted shaped return. Under structured false-positive corruption, it
+can further encourage critique chasing, because the policy is directly rewarded for producing more positively labeled steps
+even when those labels are weakly related to final task success. By contrast, AR E W is less susceptible to this failure mode
+because the auxiliary signal is normalized and contrastive within each trajectory: increasing the number of positive labels
+does not linearly increase the total reward mass. Hence, in our regime, weak directional step-level critiques are better
+used as reward-preserving credit reallocation signals than as direct intermediate utilities. Note that we do not claim
+that all reward shaping is unsuitable; potential-based shaping or well-calibrated process rewards can be appropriate. Our
+comparison concerns the direct additive use of the same weak directional critiques as intermediate utilities.
+
+B. Related Work
+Active Reasoning requires LLMs to interact with external sources and actively acquire missing information to solve
+complex tasks. Prior work has improved LLMs’ ability to handle ambiguity and incompleteness through making clarification
+and information-seeking actions. For example, Proactive CoT (Deng et al., 2023) prompts LLMs to identify ambiguous
+problems and generate clarification questions, while UoT (Hu et al., 2024) quantifies the contribution of each question
+in reducing uncertainty. However, challenges remain when transitioning from LLMs’ single-turn success to multi-turn
+active reasoning (Kwan et al., 2024; Liang et al., 2024; Badola et al., 2025), even with several advanced strategies such as
+tree-based searching or post-training approaches, as highlighted in existing works (Zhou et al., 2025). There have been
+existing works which target RL on active reasoning (Zou et al., 2026). In our work, we identify a unique mechanism named
+information self-locking, which is sourced from a structural failure of credit assignment with bidirectional coupling between
+action selection (AS) and belief tracking (BT). This is consistent with empirical observations from real-world agentic use.
+For example, Wang et al. (2025b) uncovers the phenomenon specific to search agents: systematic deficiencies in search
+behaviors arise under outcome-only training and ultimately degrade final answer quality.
+Credit Assignment and Multi-turn RL. Credit assignment is crucial to long-horizon or multi-turn RL (Zou et al., 2025;
+Chen et al., 2026; Wang et al., 2026). Existing methods have extensively explored rule-based approaches (Yu et al., 2024;
+Dou et al., 2024; Zhang et al., 2025c) to shape intermediate rewards. Several recent works also proposed to measure the
+progress of stepwise actions toward overall task completion as intermediate rewards. Specifically, CURIO (Wan et al., 2025)
+constructs a potential function over an ideal belief state to assign intermediate rewards, assuming that the latent state space
+is finite and enumerable. Sotopia-RL (Yu et al., 2025) relies on reward labeling with proprietary LLMs. SPA-RL (Wang
+et al., 2025a) trains reward models for intermediate rewards by enforcing a summation constraint with respect to the final
+outcome reward. In our work, instead of working on complicated reward shaping or resorting to external models, we
+leverage easy-to-use binary directional critiques to make a minimal injection to policy gradient which is mathematically
+derived from a margin-aware auxiliary objective, in order to provide non-degenerate and stable learning signals to help
+agents escape from self-locking.
+
+C. More Details on the Theory
+C.1. Notations & Problem Setup
+We consider active reasoning, where an LLM agent interacts with an external environment to acquire missing information
+and infer the underlying solution through multi-turn interaction. This can be modeled as a POMDP (S, A, O, T, O, R, γ),
+where S is the space of unobservable latent states, A the action space, O the observation space, T (s′ | s, a) the transition
+dynamics, O(o | s, a) the observation model, R the reward function, and γ the discount factor. In our setting, the latent state
+is fixed within each episode of horizon H, denoted by s⋆ ∈ S. The action at denotes a generic environment-facing action,
+such as issuing a query, retrieving information, invoking a tool, or executing an operation. We assume deterministic feedback:
+15
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+for all (s, a) ∈ S × A, the observation kernel O(· | s, a) is a point mass at o = O(s, a); in particular, ot = O(s⋆ , at ).
+Model Belief. We work with a belief-state abstraction where the agent is associated with an explicit model belief bt ∈ ∆(S),
+which represents the agent’s internal understanding of the latent state and what information remains missing at each turn
+t ∈ {0, . . . , H}. Note that this abstraction does not assume the agent internally stores bt as an explicit probability vector. bt
+is a well-defined analytical object induced by the model parameters ω and the interaction history. We quantify truth-aligned
+confidence by the potential Ψ(b) := b(s⋆ ) ∈ [0, 1], which measures the belief mass assigned to the true latent state and
+serves as our working notion of belief quality.
+Model Trajectory. Agentic behavior in active reasoning can be decomposed into two coupled processes: Action Selection
+(AS) and Belief Tracking (BT). An agent with parameters ω induces: (i) an action-selection kernel πωas that selects
+environment-facing actions conditioned on the current belief, and (ii) a belief-update kernel πωbt that produces
+the next
+
+belief given the latest interaction. We denote the resulting interleaved agent behavior by Πω := πωas , πωbt . Concretely,
+define the initial BT-conditioning context c0 as a fixed initial context (e.g., task instructions), and ct+1 := (bt , at , ot ) for t ∈
+{0, . . . , H − 1}. For each turn t, the induced belief process evolves through at ∼ πωas (· | bt ), ot ∼ O(· | s⋆ , at ), and bt+1 ∼
+πωbt (· | ct+1 ). We write the full trajectory induced by Πω as τ = (b0 , a0 , o0 , b1 , a1 , o1 , . . . , bH−1 , aH−1 , oH−1 , bH ).
+Conditioned on s⋆ and omitting the fixed task context from notation, its likelihood factorizes as
+pω (τ | s⋆ ) = πωbt (b0 | c0 )
+
+H−1
+Y
+
+πωas (at | bt ) O(ot | s⋆ , at ) πωbt (bt+1 | ct+1 ),
+
+ct+1 = (bt , at , ot ).
+
+(3)
+
+t=0
+
+The environment factor O(ot | s⋆ , at ) is independent of ω and can be omitted when deriving policy-gradient updates.
+Outcome reward. The environment returns an outcome reward R(τ ) ∈ [0, 1] (e.g., correctness of the inferred solution).
+We assume the expected reward is a non-decreasing function of the terminal belief quality:
+Assumption C.1. There exists a non-decreasing LR -Lipschitz function f : [0, 1] → [0, 1] such that E[R(τ ) | bH ] =
+f (Ψ(bH )).
+C.2. Two Capability Indices
+Oracle Bayesian belief. To decouple AS informativeness from the model’s BT mechanism, we introduce an oracle Bayesian
+belief-update process. Given deterministic feedback o = O(s⋆ , a), define the Bayesian update operator BayesUpd(·, a, o):
+
+b(s) 1{O(s, a) = o}
+BayesUpd(b, a, o) (s) := P
+.
+′
+′
+s′ ∈S b(s ) 1{O(s , a) = o}
+Oracle-belief process. For analysis purposes only, we consider an oracle-belief process that evolves under Bayesian belief
+updates while sharing the same action-selection kernel as the agent. Fix a prior b̄0 ∈ ∆(S) with b̄0 (s⋆ ) > 0. For each turn
+t ∈ {0, . . . , H − 1}, the oracle trajectory evolves as āt ∼ πωas (· | b̄t ), ōt = O(s⋆ , āt ), and b̄t+1 = BayesUpd(b̄t , āt , ōt ).
+orc
+as
+This yields the oracle trajectory τ̄ := (b̄0 , ā0 , ō0 , b̄1 , ā1 , ō1 , . . . , b̄H ) ∼ Πorc
+ω , where Πω := (πω , BayesUpd). Here, barred
+variables are used exclusively for this oracle process. The oracle-belief process is introduced solely for analysis, aiming to
+isolate AS information supply, and does not require the actual agent to access the oracle belief b̄t .
+We now quantify the informativeness of the action-selection kernel by the belief improvement it induces under the oraclebelief dynamics.
+as
+Definition C.2. Consider an oracle-belief trajectory τ̄ := (b̄0 , ā0 , ō0 , . . . , b̄H ) ∼ Πorc
+ω induced by the AS kernel πω and
+Bayesian belief dynamics BayesUpd(·). Define the one-step oracle belief progress as ∆Ψ̄t := Ψ(b̄t+1 ) − Ψ(b̄t ). The AS
+informativeness of πωas is defined as the expected total improvement in oracle belief quality,
+
+IAS (ω) := Eτ̄ ∼Πorc
+ω
+
+"H−1
+X
+
+#
+
+
+∆Ψ̄t = Eτ̄ ∼Πorc
+Ψ(b̄H ) − Ψ(b̄0 ) .
+ω
+
+t=0
+
+We next characterize how much of the theoretically supplied information is actually absorbed by the agent’s belief-tracking
+dynamics.
+16
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Definition C.3. For an on-policy trajectory τ = (b0 , a0 , o0 , . . . , bH ) ∼ Πω , define the one-step model belief progress at
+turn t as ∆Ψt := Ψ(bt+1 ) − Ψ(bt ). We decompose ∆Ψt into its one-sided components: the absorbed belief progress
+−
+∆Ψ+
+t := (∆Ψt )+ , and the self-destructive belief drift ∆Ψt := (−∆Ψt )+ . Only the absorbed component contributes
+positively to belief improvement. The training-level belief-tracking (BT) index is defined as
+"H−1
+#
+X
++
+CBT (ω) := Eτ ∼Πω
+∆Ψt .
+t=0
+
+To relate AS informativeness to BT progress under learning dynamics, we impose the following mild regularity assumptions.
+Each assumption is accompanied by a brief intuition clarifying its role: Asmp. C.4 states that harmful belief drift is
+independent of the specific action chosen, and is instead driven by deficiencies in the agent’s BT mechanism. Asmp. C.5
+upper-bounds the amount of belief progress that can be absorbed in a single step by the current BT capability. Asmp. C.6
+states that the residual oracle AS information budget from any reachable belief remains controlled by the global AS
+informativeness, reflecting that information supply is governed by the action-selection kernel itself, and no reachable belief
+state should unlock a much larger information budget than the global oracle-reference AS IAS . Asmp. C.7 enforces a
+Lipschitz-type stability of future belief quality with respect to the current potential, reflecting a conservative propagation of
+belief improvements under weak belief tracking.
+Assumption C.4. For any turn t and action a ∈ A, the conditional expectation
+of the self-destructive
+belief drift given the
+
+
+−
+current belief is invariant to the action choice, i.e., Eω ∆Ψ−
+t | bt , at = a = Eω ∆Ψt | bt almost surely for all a ∈ A.
+Assumption C.5. For any turn t, there
+ exists a constant κbt ≥ 1 such that along on-policy rollouts, the conditional
+expectation satisfies Eω ∆Ψ+
+|
+b
+,
+a
+t t ≤ κbt CBT (ω) almost surely over the realized action at .
+t
+orc
+Assumption C.6. For any turn t and any reachable belief b ∈ ∆(S) considered in the SeL analysis, let VAS,t
+(b) :=
+
+
+Eτ̄t:H ∼Πorc
+Ψ(
+b̄
+)
+−
+Ψ(b)
+denote
+the
+residual
+oracle
+AS
+information
+budget
+from
+b
+under
+the
+same
+action-selection
+H
+ω (·|b̄t =b)
+orc
+kernel. There exists a constant κor > 0 such that VAS,t
+(b) ≤ κor IAS (ω) almost surely over such reachable beliefs.
+Assumption C.7. For any 0 < t0 < t1 ≤ H, there exists a constant κpr such that for any realizable model beliefs
+b, b′ ∈ ∆(S) at turn t0 , |Eω [Ψ(bt1 ) | bt0 = b] − Eω [Ψ(bt1 ) | bt0 = b′ ]| ≤ κpr |Ψ(b) − Ψ(b′ )|.
+Locking regime. We formalize self-locking as a two-dimensional region with simultaneously low AS informativeness and
+low BT capability:
+Definition C.8 (Locking regime). For given thresholds δ, ε > 0, we define the locking regime as the subset of parameter
+space characterized by simultaneously low action-selection informativeness and low belief-tracking capability:
+
+Rδ,ε := ω ∈ Ω : IAS (ω) ≤ δ, CBT (ω) ≤ ε .
+This region captures a low-information and low-BT regime in which neither the action-selection kernel nor the belief-tracking
+dynamics can induce substantial positive progress.
+To analyze local training dynamics within the locking regime, we require a mild first-order regularity condition on the two
+capability indices.
+Assumption C.9 (Local first-order expandability of capability indices). Fix δ, ε > 0 and consider ω ∈ Rδ,ε . There exist
+constants MAS , MBT < ∞ such that ∥∇ω IAS (ω)∥ ≤ MAS and ∥∇ω CBT (ω)∥ ≤ MBT . Moreover, for any ω ′ ∈ Rδ,ε
+satisfying ∥ω ′ − ω∥ = O(η), the following first-order expansions hold uniformly over Rδ,ε : IAS (ω ′ ) = IAS (ω) +
+⟨∇ω IAS (ω), ω ′ − ω⟩ + o(η), and CBT (ω ′ ) = CBT (ω) + ⟨∇ω CBT (ω), ω ′ − ω⟩ + o(η), where o(η)/η → 0 as η → 0
+uniformly for ω ∈ Rδ,ε .
+C.3. Projected Drifts and the 2D Locking Regime
+Policy-gradient decomposition of the outcome objective. We begin by expressing the outcome-based policy gradient in a
+form that admits a decomposition across the AS and BT channels. With the outcome objective J(ω) := Eτ ∼Πω [R(τ )],
+h
+i
+∇ω J(ω) = Eτ ∼Πω R(τ ) ∇ω log pω (τ ) ,
+and hence (via Eq. 3, omitting the environment factors independent of ω)
+∇ω log pω (τ ) =
+
+H
+X
+
+∇ω log πωbt (bt | ct ) +
+
+t=0
+
+H−1
+X
+t=0
+
+17
+
+∇ω log πωas (at | bt ).
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+We next impose a mild regularity assumption to control the score-function magnitudes.
+Assumption C.10. There exist finite constants Gas < ∞ and Gbt < ∞ such that for all ω ∈ Rδ,ε , we have ∥∇ω log πωas (at |
+bt )∥ ≤ Gas for all t ∈ {0, . . . , H − 1} and ∥∇ω log πωbt (bt | ct )∥ ≤ Gbt for all t ∈ {0, . . . , H} almost surely under
+τ ∼ Πω .
+Channel-isolated stage-wise advantages. As mentioned before, we have decomposed the agentic behavior into two coupled
+but conceptually distinct channels: AS and BT. To characterize how outcome-based training signals propagate through
+each channel, we introduce channel-isolated stage-wise value functions with respect to the outcome objective J, where the
+other channel is treated as part of the induced environment dynamics. All expectations below use the continuation dynamics
+induced by Πω after conditioning on the specified channel decision.
+For the BT channel, the belief state bt itself is regarded as the decision variable. For t ∈ {0, . . . , H}, define
+Qbt
+t (c, b) := E[R(τ ) | ct = c, bt = b] ,
+
+
+
+Vtbt (c) := Eb∼πωbt (·|c) Qbt
+t (c, b) ,
+
+and the corresponding advantage
+bt
+bt
+Abt
+t (c, b) := Qt (c, b) − Vt (c).
+
+Similarly, for the AS channel, the action at is treated as the decision variable. For t ∈ {0, . . . , H − 1}, define
+Qas
+t (b, a) := E[R(τ ) | bt = b, at = a] ,
+
+Vtas (b) := Ea∼πωas (·|b) [Qas
+t (b, a)] ,
+
+with advantage
+as
+as
+Aas
+t (b, a) := Qt (b, a) − Vt (b).
+
+Channel-isolated outcome update directions. Using the above definitions, the raw channel-wise policy-gradient components are sums over the corresponding decisions. For scale stability across horizons, we analyze their normalized
+versions:
+"
+gas (ω) := Eτ ∼Πω
+"
+gbt (ω) := Eτ ∼Πω
+
+#
+H−1
+1 X
+as
+as
+∇ω log πω (at | bt ) At (bt , at ) ,
+H t=0
+
+#
+H
+1 X
+bt
+bt
+∇ω log πω (bt | ct ) At (ct , bt ) .
+H + 1 t=0
+
+Accordingly, define the AS-channel projected update Tas (ω) := ω + η gas (ω), and the BT-channel projected update
+Tbt (ω) := ω + η gbt (ω). These are virtual updates used only for mechanism analysis.
+C.4. 2D One-Sided Self-Locking via Projected Drifts
+We begin by bounding the channel-isolated outcome advantages, which quantify the strength of the outcome-based learning
+signal available to each channel.
+Proposition C.11 (AS-channel
+outcome
+advantages). Under Assumptions C.1, C.4, C.5, and C.7, for any on-policy executed
+
+
+action at at turn t, Eω Aas
+(b
+,
+a
+)
+≤
+LR κpr κbt CBT (ω). Moreover, under Assumption C.10, ∥gas (ω)∥ ≤ Kas CBT (ω),
+t t
+t
+where Kas := Gas LR κpr κbt .
+Proposition C.12 (BT-channel outcome advantages). Assume
+ Assumptions C.1, C.4,C.5, and C.7 hold, then for any on bt
+
+policy generated belief bt at turn t, Eω At (ct , bt ) ≤ 2LR CBT (ω) + κor IAS (ω) . Moreover, under Assumption C.10,
+∥gbt (ω)∥ ≤ Kbt,I IAS (ω) + Kbt,C CBT (ω), where Kbt,I := 2Gbt LR κor and Kbt,C := 2Gbt LR .
+We now translate the channel-wise gradient bounds into one-step projected drifts of the two capability indices within the
++
+locking regime. For convenience, we denote by ∆+
+as and ∆bt the positive parts of the one-step changes induced by the
+projected updates Tas and Tbt .
+18
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Proposition C.13 (AS projected drift is controlled by BT level). Under Assumption C.9 and the conclusion of Proposition C.11, for all ω ∈ Rδ,ε ,
+
+∆+
+α := MAS Kas .
+as IAS (ω) := IAS (Tas (ω)) − IAS (ω) + ≤ η α CBT (ω) + o(η),
+Proposition C.14 (BT projected drift is controlled by AS and BT levels). Under Assumption C.9 and the conclusion of
+Proposition C.12, for all ω ∈ Rδ,ε ,
+
+
+
+∆+
+C
+(ω)
+:=
+C
+(T
+(ω))
+−
+C
+(ω)
+≤
+η
+β
+I
+(ω)
++
+β
+C
+(ω)
++ o(η),
+BT
+BT
+bt
+BT
+I
+AS
+C
+BT
+bt
++
+where βI := MBT Kbt,I ,
+
+βC := MBT Kbt,C .
+
+We now combine the channel-wise projected drift bounds into a unified two-dimensional description of the local training
+dynamics within the locking regime.
+Theorem C.15 (2D one-sided self-locking). Fix δ, ε > 0 and consider ω ∈ Rδ,ε . Under the conclusions of Propositions C.13
+and C.14, the one-sided projected drifts satisfy the following componentwise inequality:
+ +
+
+
+
+
+∆as IAS (ω)
+IAS (ω)
+0
+α
+⪯
+η
++ o(η),
+βI βC
+CBT (ω)
+∆+
+bt CBT (ω)
+where ⪯ denotes elementwise inequality.
++
+Remark C.16. Theorem C.15 controls ∆+
+as and ∆bt , i.e., the positive parts of the projected drifts. Note that our theoretical
+result does not assert that IAS or CBT cannot decrease, oscillate, or be affected by algorithmic stabilizers (entropy bonuses,
+clipping, weight decay, etc.). Rather, it formalizes self-locking as the absence of a strong upward training signal inside
+the low-information and low-BT regime: even when improvements happen, the theorem shows they can only be of small
+magnitude, scaling linearly with the current levels IAS and CBT .
+
+Remark C.17. The AS-side drift bound is purely BT-limited: ∆+
+as IAS (ω) ≲ η CBT (ω). Thus, when BT is weak, the actionselection kernel receives only a weak positive signal to increase informativeness (consistent with the intuition that AS learning
+
+is masked by BT failures in Sec. 2.3). In contrast, the BT-side drift bound is non-dual: ∆+
+bt CBT (ω) ≲ η IAS (ω)+CBT (ω) ,
+where the additional self-term CBT (ω) captures a “self-improvement” channel: even under limited information supply,
+the BT mechanism can still realize some gains by better utilizing the same evidence. At the same time, the presence of
+βI IAS (ω) formalizes the bottleneck: when AS information supply stays low, BT improvements cannot scale beyond the
+evidence-limited envelope, yielding the empirically observed pattern that BT may improve early but tends to plateau once
+AS remains uninformative, as mentioned in Sec. 2.3.
+Proposition C.18. Fix δ, ε > 0 and let ω0 ∈ Rδ,ε . Let m := max{α, βI + βC }. Define
+$
+!%
+ε + ρη
+1
+K :=
+log
+.
+ηm
+IAS (ω0 ) + ρη
++
+
+Then any projected evolution consistent with the one-step drift bounds of Theorem C.15 cannot leave Rδ,ε within the first K
+steps.
+C.5. Why AR E W breaks Information Self-locking
+In this part, we characterize how and when AR E W proposed in Sec. 4 breaks information self-locking effectively. For
+simplicity, we specialize to the AS side and consider only binary critiques zt ∈ {+1, −1} on action-selection steps. The
+analysis for the BT side is entirely analogous and omitted for brevity.
+Critique quality and oracle-good actions. Recall that AS informativeness is measured by the index IAS (ω), defined as the
+expected total improvement in oracle belief quality under the oracle-belief process (Definition C.2). As discussed before,
+an action can be assessed independently of the agent’s belief-tracking mechanism πωbt by its effect on the terminal oracle
+confidence Ψ(b̄H ) under the oracle-belief dynamics. Specifically, we give the following definition:
+Definition C.19 (Oracle-good action). Under the setting of Appendix C.1, consider an oracle-belief trajectory τ̄ =
+(b̄0 , ā0 , ō0 , . . . , b̄H ) induced by the action-selection kernel πωas and Bayesian belief dynamics BayesUpd(·). Define the
+19
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+
+
+expected terminal oracle confidence following an action a at oracle belief b as mt (b, a) := E Ψ(b̄H ) b̄t = b, āt = a .
+An action is oracle-good at step t if it yields a higher terminal oracle confidence than the policy average at the same oracle
+belief, i.e.,
+
+
+mt (b̄t , āt ) > Ea′ ∼πωas (·|b̄t ) mt (b̄t , a′ ) .
+PH−1
+By telescoping of oracle belief progress, k=t ∆Ψ̄k = Ψ(b̄H ) − Ψ(b̄t ), the stepwise AS advantage with respect to IAS is
+given by
+
+
+Āt (b̄t , āt ) = mt (b̄t , āt ) − Ea′ ∼πωas (·|b̄t ) mt (b̄t , a′ ) ,
+which measures how much the chosen action improves the expected terminal oracle confidence relative to the policy’s
+average choice at the same oracle belief. We therefore define the oracle direction label
+
+yt := sign Āt (b̄t , āt ) ∈ {+1, −1},
+indicating whether the step-t action contributes positively or negatively to IAS under the oracle-belief dynamics.
+Efficacy of AR E W and weighted accuracy. The critique label zt ∈ {+1, −1} can be viewed as an approximation of the
+oracle direction label yt . For critique injection to improve AS informativeness beyond outcome-only learning, it is necessary
+that the injected signal aligns, on average, with the true stepwise contributions to IAS . In particular, positive critique should
+be assigned more frequently to oracle-good actions than to oracle-bad ones. Moreover, different steps along the trajectory
+do not contribute equally to AS informativeness. This leads naturally to a notion of weighted accuracy of the critique labels
+with respect to the oracle direction labels. The following proposition shows that, under a mild regularity condition, the
+effectiveness of AR E W in improving AS informativeness is determined by this weighted accuracy.
+Proposition C.20 (Weighted accuracy characterizes AR E W improvement). Under the settinghof Sec. 4.2 andi Def. C.19,
+PH−1
+denote the step weight as wt (ω) := |ut | Āt (b̄t , āt ) ∥∇ω log πωas (āt | b̄t )∥2 and let W (ω) := E
+t=0 wt (ω) . Then the
+critique quality is measured by the weighted accuracy
+hP
+i
+H−1
+E
+t=0 wt (ω) 1{zt = yt }
+hP
+i
+∈ [0, 1].
+(4)
+Accas (ω) :=
+H−1
+E
+w
+(ω)
+t
+t=0
+Moreover, the first-order improvement in AS informativeness induced by AR E W satisfies
+
+
+
+
+IAS Tbas (ω) − IAS Tas (ω) = η W (ω) 2 Accas (ω) − 1 + o(η).
+
+(5)
+
+In particular, when W (ω) > 0, AR E W improves AS informativeness beyond the baseline update if and only if Accas (ω) >
+1
+2.
+C.6. Proofs
+C.6.1. P ROOF OF P ROPOSITION C.11
+Proof. Fix a turn t ∈ {0, . . . , H − 1} and condition on the current on-policy model belief bt = b. For any action a ∈ A,
+(a)
+define the one-step next belief bt+1 as the belief obtained by executing at = a, observing ot = O(s⋆ , a) (deterministic), and
+(a)
+sampling the BT update bt+1 ∼ πωbt (· | ct+1 ) with ct+1 = (b, a, ot ). Define the corresponding one-step potential change
+(a)
+(a)
+(a)
+(a)
+∆Ψt := Ψ(bt+1 ) − Ψ(b), and its one-sided parts (∆Ψt )+ and (−∆Ψt )+ . By the scalar identity x = (x)+ − (−x)+
+(a)
+applied to x = ∆Ψt , we have the decomposition
+(a)
+
+∆Ψt
+
+(a)
+
+(a)
+
+= (∆Ψt )+ − (−∆Ψt )+ ,
+
+equivalently,
+(a)
+
+(a)
+
+(a)
+
+Ψ(bt+1 ) = Ψ(b) + (∆Ψt )+ − (−∆Ψt )+ .
+Taking conditional expectations given bt = b and at = a yields
+h
+i
+h
+i
+h
+i
+(a)
+(a)
+(a)
+Eω Ψ(bt+1 ) | bt = b, at = a = Ψ(b) + Eω (∆Ψt )+ | bt = b, at = a − Eω (−∆Ψt )+ | bt = b, at = a . (6)
+20
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Assumption C.4 states that, for any a,
+h
+i
+
+
+(a)
+Eω (−∆Ψt )+ | bt = b, at = a = Eω ∆Ψ−
+t | bt = b ,
+which is independent of a. Therefore, subtracting equation 6 for two actions a, a′ gives
+i
+h
+i
+h
+i
+h
+i
+h
+(a)
+(a′ )
+(a)
+(a′ )
+Eω Ψ(bt+1 ) | b, a − Eω Ψ(bt+1 ) | b, a′ = Eω (∆Ψt )+ | b, a − Eω (∆Ψt )+ | b, a′ .
+
+(7)
+
+By Assumption C.5, along on-policy rollouts,
+
+
+Eω ∆Ψ+
+t | bt , at ≤ κbt CBT (ω).
+Thus, for any realized bt = b and any a in the support of πωas (· | b),
+h
+i
+(a)
+Eω (∆Ψt )+ | bt = b, at = a ≤ κbt CBT (ω).
+
+(8)
+
+Combining Eq. 7 and 8 yields the bound on the range of the conditional mean next-step confidence:
+h
+i
+h
+i
+(a)
+(a)
+sup Eω Ψ(bt+1 ) | bt = b, at = a − inf Eω Ψ(bt+1 ) | bt = b, at = a ≤ κbt CBT (ω),
+
+(9)
+
+a
+
+a
+
+where a ∈ supp(πωas (· | b)).
+Now define the conditional mean terminal confidence given the current belief at time t + 1:
+Gt+1,H (b′ ) := Eω [Ψ(bH ) | bt+1 = b′ ] .
+Assumption C.7 implies that Gt+1,H is κpr -Lipschitz with respect to Ψ(·): for any realizable b′ , b′′ ,
+Gt+1,H (b′ ) − Gt+1,H (b′′ ) ≤ κpr Ψ(b′ ) − Ψ(b′′ ) .
+
+(10)
+
+For the final-step case t + 1 = H, the same bound holds after enlarging κpr if necessary. Now define the action-conditioned
+mean terminal confidence at time t:
+mH (a) := Eω [Ψ(bH ) | bt = b, at = a] .
+By the tower property,
+h
+i
+(a)
+mH (a) = Eω Gt+1,H (bt+1 ) bt = b, at = a .
+At this point, we use the fact that Gt+1,H is κpr -Lipschitz in Ψ and combine it with the cancellation structure already
+captured in equation 9: the induced range of mH (a) over a is bounded by applying equation 10 to the extremal conditional
+means, giving
+
+
+(a)
+(a)
+sup mH (a) − inf mH (a) ≤ κpr sup Eω [Ψ(bt+1 ) | bt = b, at = a] − inf Eω [Ψ(bt+1 ) | bt = b, at = a] .
+(11)
+a
+
+a
+
+a
+
+a
+
+Combining equation 11 with equation 9 yields
+sup mH (a) − inf mH (a) ≤ κpr κbt CBT (ω).
+a
+
+a
+
+By Assumption C.1, the outcome value is an LR -Lipschitz function of terminal belief quality, so we write
+Qas
+t (b, a) = f (mH (a)).
+Therefore,
+
+as
+sup Qas
+t (b, a) − inf Qt (b, a) ≤ LR sup mH (a) − inf mH (a) .
+a
+
+a
+
+a
+
+21
+
+a
+
+(12)
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Plugging equation 12 gives
+as
+sup Qas
+t (b, a) − inf Qt (b, a) ≤ LR κpr κbt CBT (ω).
+
+(13)
+
+a
+
+a
+
+as
+By definition, Vtas (b) = Ea∼πωas (·|b) [Qas
+t (b, a)] is a convex combination of {Qt (b, a)}a . Hence for any executed at ,
+as
+as
+as
+as
+|Aas
+t (b, at )| = Qt (b, at ) − Vt (b) ≤ sup Qt (b, a) − inf Qt (b, a).
+a
+
+a
+
+Combining with equation 13 yields
+|Aas
+t (bt , at )| ≤ LR κpr κbt CBT (ω),
+and hence the claimed expectation bound.
+By definition of the normalized AS-channel update direction,
+" H−1
+#
+1 X
+as
+as
+gas (ω) = Eτ ∼Πω
+∇ω log πω (at | bt ) At (bt , at ) .
+H t=0
+Taking norms and applying Jensen and the triangle inequality,
+∥gas (ω)∥ ≤
+
+H−1
+
+1 X 
+E ∇ω log πωas (at | bt ) · Aas
+t (bt , at ) .
+H t=0
+
+Using Assumption C.10 gives ∥∇ω log πωas (·)∥ ≤ Gas a.s., hence
+∥gas (ω)∥ ≤ Gas LR κpr κbt CBT (ω).
+This completes the proof with Kas := Gas LR κpr κbt .
+C.6.2. P ROOF OF P ROPOSITION C.12
+i.i.d.
+
+Proof. Fix a turn t. Condition on the BT context ct and draw two independent samples B, B ′ ∼ πωbt (· | ct ). Let
+Y := Qbt
+t (ct , B),
+
+′
+Y ′ := Qbt
+t (ct , B ),
+
+Ȳ := E[Y | ct ] = Vtbt (ct ).
+
+′
+′
+Then Abt
+t (ct , B) = Y −Ȳ , and for any fixed realization Y = y, Jensen implies E[|y−Y | | y, ct ] ≥ |y−E[Y | ct ]| = |y−Ȳ |.
+Taking expectation over Y yields
+
+
+
+
+E |Y − Ȳ | | ct ≤ E |Y − Y ′ | | ct .
+
+Therefore,
+
+
+
+
+bt
+′
+Eω Abt
+≤ E Qbt
+t (ct , bt )
+t (ct , B) − Qt (ct , B ) .
+
+(14)
+
+By Assumption C.1, E[R(τ ) | bH ] = f (Ψ(bH )) for a non-decreasing LR -Lipschitz f . Hence, for any (ct , b),
+Qbt
+t (ct , b) = E[f (Ψ(bH )) | ct , bt = b] .
+For any b, b′ , using | E[X] − E[Y ] | ≤ E[|X − Y |], Lipschitzness of f , and the elementary inequality |x − y| ≤ x + y for
+x, y ∈ [0, 1], we obtain
+
+
+bt
+′
+′
+Qbt
+(15)
+t (ct , b) − Qt (ct , b ) ≤ LR E[Ψ(bH ) | ct , bt = b] + E[Ψ(bH ) | ct , bt = b ] .
+Along any continuation after time t,
+Ψ(bH ) = Ψ(bt ) +
+
+H−1
+X
+
+H−1
+X
+
+Ψ(bk+1 ) − Ψ(bk ) ≤ Ψ(bt ) +
+∆Ψ+
+k.
+k=t
+
+k=t
+
+22
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Taking conditional expectation given (ct , bt = b) yields
+"H−1
+#
+X
+ct , bt = b .
+E[Ψ(bH ) | ct , bt = b] ≤ Ψ(b) + E
+∆Ψ+
+k
+
+(16)
+
+k=t
+
+By the evidence-limited interpretation of absorbed belief progress, the future positive model-belief progress from b is
+bounded by the residual oracle AS information budget from the same belief:
+"H−1
+#
+X
++
+orc
+E
+∆Ψk ct , bt = b ≤ VAS,t
+(b).
+(17)
+k=t
+
+Assumption C.6 further gives
+orc
+VAS,t
+(b) ≤ κor IAS (ω).
+
+(18)
+
+Combining equation 17 and equation 18, we obtain
+"H−1
+#
+X
++
+E
+∆Ψk ct , bt = b ≤ κor IAS (ω).
+
+(19)
+
+k=t
+
+Combining equation 14, equation 15, equation 16, and equation 19, and averaging over B, B ′ , we obtain
+
+
+
+
+E Abt
+≤ 2LR E[Ψ(bt )] + κor IAS (ω) .
+t (ct , bt )
+It remains to control E[Ψ(bt )] by CBT (ω) up to the fixed initial potential. Along any rollout,
+Ψ(bt ) = Ψ(b0 ) +
+
+t−1
+X
+
+t−1
+H−1
+X
+X
+
+Ψ(bk+1 ) − Ψ(bk ) ≤ Ψ(b0 ) +
+∆Ψ+
+≤
+Ψ(b
+)
++
+∆Ψ+
+0
+k
+k.
+
+k=0
+
+k=0
+
+k=0
+
+Taking expectation yields E[Ψ(bt )] ≤ E[Ψ(b0 )] + CBT (ω). Since the initial potential is fixed by the task context and
+contributes only a common baseline to the BT-channel advantage, we absorb it into the baseline normalization and obtain
+the stated bound
+
+
+
+
+Eω Abt
+≤ 2LR CBT (ω) + κor IAS (ω) .
+t (ct , bt )
+By definition of the normalized BT-channel update direction,
+#
+"
+H
+1 X
+bt
+bt
+∇ω log πω (bt | ct ) At (ct , bt ) .
+gbt (ω) = Eτ ∼Πω
+H + 1 t=0
+Taking norms, applying Jensen, and using Assumption C.10 (∥∇ω log πωbt ∥ ≤ Gbt a.s.) gives
+∥gbt (ω)∥ ≤
+
+H
+
+
+
+1 X 
+E ∥∇ω log πωbt (bt | ct )∥ · |Abt
+t | ≤ 2Gbt LR CBT (ω) + κor IAS (ω) .
+H + 1 t=0
+
+Therefore
+∥gbt (ω)∥ ≤ Kbt,I IAS (ω) + Kbt,C CBT (ω),
+with Kbt,I := 2Gbt LR κor and Kbt,C := 2Gbt LR .
+C.6.3. P ROOF OF P ROPOSITION C.13
+Proof. Fix ω ∈ Rδ,ε . Recall Tas (ω) = ω + ηgas (ω). By Assumption C.9 (first-order expandability of IAS on Rδ,ε ),
+D
+E
+IAS (Tas (ω)) − IAS (ω) = ∇ω IAS (ω), Tas (ω) − ω + o(η) = η ∇ω IAS (ω), gas (ω) + o(η).
+23
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Taking the positive part and using (x + y)+ ≤ x+ + |y| yields
+
+
+
+
+∆+
+I
+(ω)
+=
+η
+∇
+I
+(ω),
+g
+(ω)
++
+o(η)
+≤
+η
+∇
+I
+(ω),
+g
+(ω)
++ |o(η)|.
+AS
+ω
+AS
+as
+ω
+AS
+as
+as
++
+
++
+
+Next, apply Cauchy–Schwarz and the gradient bound ∥∇ω IAS (ω)∥ ≤ MAS :
+
+
+≤ ∇ω IAS (ω), gas (ω) ≤ ∥∇ω IAS (ω)∥ · ∥gas (ω)∥ ≤ MAS ∥gas (ω)∥.
+∇ω IAS (ω), gas (ω)
++
+
+Using the norm control ∥gas (ω)∥ ≤ Kas CBT (ω) gives
+∆+
+as IAS (ω) ≤ η MAS Kas CBT (ω) + |o(η)|.
+Finally, absorb |o(η)| into o(η) (since |o(η)|/η → 0 uniformly on Rδ,ε ) to obtain the claimed bound with α := MAS Kas .
+
+C.6.4. P ROOF OF P ROPOSITION C.14
+Proof. Fix ω ∈ Rδ,ε . Recall Tbt (ω) = ω + ηgbt (ω). By Assumption C.9 (first-order expandability of CBT on Rδ,ε ),
+D
+E
+CBT (Tbt (ω)) − CBT (ω) = ∇ω CBT (ω), Tbt (ω) − ω + o(η) = η ∇ω CBT (ω), gbt (ω) + o(η).
+Taking positive parts and using (x + y)+ ≤ x+ + |y| gives
+
+
+
+
+∇
+C
+(ω),
+g
+(ω)
+∆+
+C
+(ω)
+=
+η
+∇
+C
+(ω),
+g
+(ω)
++
+o(η)
+≤
+η
++ |o(η)|.
+ω BT
+bt
+ω BT
+bt
+bt BT
++
+
++
+
+Apply Cauchy–Schwarz and the gradient bound ∥∇ω CBT (ω)∥ ≤ MBT :
+
+
+∇ω CBT (ω), gbt (ω)
+≤ ∇ω CBT (ω), gbt (ω) ≤ ∥∇ω CBT (ω)∥ · ∥gbt (ω)∥ ≤ MBT ∥gbt (ω)∥.
++
+
+Using the norm control on Rδ,ε ,
+∥gbt (ω)∥ ≤ Kbt,I IAS (ω) + Kbt,C CBT (ω),
+we obtain
+
+
+
+∆+
+bt CBT (ω) ≤ η MBT Kbt,I IAS (ω) + Kbt,C CBT (ω) + |o(η)|.
+
+Absorbing |o(η)| into o(η) yields the stated bound with βI := MBT Kbt,I and βC := MBT Kbt,C .
+C.6.5. P ROOF OF P ROPOSITION C.18
+Proof. Since the o(η) term in Theorem C.15 is uniform over Rδ,ε , there exist η0 > 0 and c0 < ∞ such that for all
+η ∈ (0, η0 ] and all ω ∈ Rδ,ε , the remainder satisfies the componentwise bound ∥o(η)∥∞ ≤ c0 η 2 . Set ρ := c0 /m.
+Define the capability vector
+
+x(ω) :=
+
+
+IAS (ω)
+∈ R2+ ,
+CBT (ω)
+
+
+M :=
+
+0
+βI
+
+α
+βC
+
+
+,
+
+1 := (1, 1)⊤ .
+
+Inside Rδ,ε , Theorem C.15 yields the componentwise bound
+∆+ x(ω) ⪯ η M x(ω) + c0 η 2 1.
+Moreover, for any scalar z we have z ≤ z+ , hence any increment in x is bounded above by its positive part. Therefore, an
+upper envelope for the accumulation of positive gains is given by the deterministic recursion
+xk+1 ⪯ (I + ηM ) xk + c0 η 2 1,
+24
+
+x0 := x(ω0 ).
+
+(20)
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Let yk := ∥xk ∥∞ . Taking ∥ · ∥∞ on equation 20 and using ∥I + ηM ∥∞ = 1 + ηm gives
+yk+1 ≤ (1 + ηm) yk + c0 η 2 .
+Unrolling this scalar recursion and using (1 + ηm)k ≤ ekηm yields
+
+
+
+
+yk ≤ ekηm y0 + cm0 η − cm0 η = ekηm y0 + ρη − ρη.
+Under the stated initialization envelope used in the trapping bound, y0 ≤ IAS (ω0 ). Hence, if
+
+
+ekηm IAS (ω0 ) + ρη − ρη ≤ ε,
+then yk ≤ ε, which implies xk ⪯ (ε, ε)⊤ ⪯ (δ, ε)⊤ whenever δ ≥ ε. Solving the inequality for k gives
+!
+1
+ε + ρη
+k ≤
+log
+.
+ηm
+IAS (ω0 ) + ρη
+Choosing
+$
+K=
+
+1
+ε + ρη
+log
+ηm
+IAS (ω0 ) + ρη
+
+!%
++
+
+ensures the above condition holds for all integers k ∈ {0, 1, . . . , K}, proving the claimed finite-horizon trapping under the
+projected drift envelope.
+C.6.6. P ROOF OF P ROPOSITION C.20
+Proof. We absorb the fixed critique strength into the auxiliary direction and write the critique-shaped update as
+Tas (ω) − ω = η gas (ω),
+Tbas (ω) − ω = η gas (ω) + η gaux,as (ω).
+
+(21)
+(22)
+
+By Assumption C.9, for ω ′ = Tas (ω) ∈ Rδ,ε we have
+D
+E
+
+IAS Tas (ω) = IAS (ω) + ∇ω IAS (ω), Tas (ω) − ω + o(η),
+
+(23)
+
+and for ω ′ = Tbas (ω) ∈ Rδ,ε we have
+D
+E
+
+IAS Tbas (ω) = IAS (ω) + ∇ω IAS (ω), Tbas (ω) − ω + o(η).
+
+(24)
+
+Subtracting equation 23 from equation 24 yields
+E
+
+ D
+IAS Tbas (ω) − IAS Tas (ω) = ∇ω IAS (ω), Tbas (ω) − Tas (ω) + o(η).
+Using the update definitions, Tbas (ω) − Tas (ω) = η gaux,as (ω), so
+D
+E
+
+
+IAS Tbas (ω) − IAS Tas (ω) = η ∇ω IAS (ω), gaux,as (ω) + o(η)
+=: η Γas (ω) + o(η).
+
+(25)
+
+PH−1
+We expand Γas (ω). On the oracle-belief process, IAS (ω) = Eτ̄ [ t=0 ∆Ψ̄t ] is a finite-horizon policy objective with action
+āt ∼ πωas (· | b̄t ). Thus, the policy-gradient theorem yields
+"H−1
+#
+X
+∇ω IAS (ω) = Eτ̄
+Āt (b̄t , āt ) st (ω) ,
+st (ω) = ∇ω log πωas (āt | b̄t ).
+t=0
+
+25
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+The likelihood-gap auxiliary objective in Section 4.2 induces an additive update component of the form
+"H−1
+#
+X
+gaux,as (ω) = Eτ̄
+ut (z) st (ω) ,
+ut (z) = |ut | zt , |ut | ≥ 0, zt ∈ {+1, −1}.
+t=0
+
+By bilinearity and exchanging expectation with finite sums,
+"
+"
+#
+#
+DX
+E
+X
+X
+Γas (ω) ∝ E
+Āt st ,
+uu (z) su
+=E
+Āt uu (z) ⟨st , su ⟩ .
+t
+
+u
+
+t,u
+
+Under the diagonal score-covariance approximation used for this first-order characterization, we keep the same-time terms,
+giving
+"H−1
+#
+X
+2
+Γas (ω) = E
+Āt (b̄t , āt ) ut (z) ∥st (ω)∥ .
+t=0
+
+Write Āt = |Āt | yt with yt = sign(Āt ) ∈ {±1} and ut = |ut | zt with zt ∈ {±1}. Then each summand becomes
+Āt ut ∥st ∥2 = |ut | |Āt | ∥st ∥2 (zt yt ) = wt (ω) (zt yt ),
+where wt (ω) is exactly the weight defined above. Hence
+Γas (ω) = E
+
+"H−1
+X
+
+#
+wt (ω) zt yt .
+
+t=0
+
+Since zt yt = +1 iff zt = yt and zt yt = −1 iff zt ̸= yt , we have zt yt = 2 1{zt = yt } − 1, and therefore
+"
+#
+X
+
+Γas (ω) = E
+wt (ω) 2 1{zt = yt } − 1
+t
+
+= 2E
+
+"
+X
+
+#
+wt (ω) 1{zt = yt } − E
+
+t
+
+"
+X
+
+#
+wt (ω)
+
+t
+
+
+
+= W (ω) 2 Accas (ω) − 1 ,
+which is equation 5. The final equivalence follows immediately when W (ω) > 0.
+
+D. Complementary Experimental Analyses
+In this section, we provide additional experimental analyses that further examine the robustness and interpretation of AR E W.
+Unless otherwise specified, experiments use PPO training with Qwen2.5-7B-Instruct under the same setup as the main
+experiments.
+Robustness to structured critique perturbations. The main text studies robustness under random critique flipping. We
+further evaluate AR E W under more structured forms of critique destruction on PE-GS=3 , as shown in Fig. 8. We consider
+three perturbation families. First, channel perturbation removes one critique channel by keeping only AS critiques or only
+BT critiques, with the removed channel set to zero. Second, position perturbation keeps only the first 40% or the last 40%
+of interaction-turn critiques, setting all other labels to zero. Third, sign perturbation keeps only the last 40% of labels
+and fills the remaining labels with constant 0, +1, or −1. Across all three families, AR E W remains consistently above the
+vanilla outcome-RL baseline, suggesting that the method is robust not only to random label noise but also to systematic
+destruction of critique structure. The channel perturbation also provides additional evidence for the complementary roles
+of AS and BT: both AS-only and BT-only variants improve over vanilla RL, while using both channels performs best,
+consistent with the bidirectional AS–BT coupling studied in the main paper. The sign perturbation further suggests that
+false-positive encouragement is more damaging, since filling missing labels with +1 degrades performance more than filling
+them with −1.
+26
+
+0
+
+25
+
+50
+
+75
+
+100
+
+125
+
+Training Steps
+
+150
+
+175
+
+0.25
+0.20
+0.15
+0.10
+0.05
+
+200
+
+0.40
+
+vanilla
+ours (prefix 40%)
+ours (suffix 40%)
+
+0.30
+
+vanilla
+ours (AS)
+ours (BT)
+ours (AS & BT)
+
+Response Length
+
+0.9
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+
+Response Length
+
+Response Length
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+0
+
+25
+
+(a) Channel
+
+50
+
+75
+
+100
+
+125
+
+Training Steps
+
+150
+
+175
+
+0.30
+0.25
+0.20
+0.15
+0.10
+0.05
+
+200
+
+vanilla
+ours (filling 0)
+ours (filling +1)
+ours (filling -1)
+
+0.35
+
+0
+
+25
+
+(b) Position
+
+50
+
+75
+
+100
+
+125
+
+Training Steps
+
+150
+
+175
+
+200
+
+(c) Sign
+
+0.9
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+
+vanilla
+AReW (AS + BT)
+
+0.05
+0.20
+5.0
+
+0.8
+0.6
+
+Reward
+
+Response Length
+
+Figure 8. Robustness of AR E W under structured critique perturbations on PE-GS=3 (PPO training with Qwen2.5-7B-Instruct). (a)
+Channel: using only AS critiques, only BT critiques, or both channels, with the removed channel set to 0. (b) Position: keeping only the
+first 40% or last 40% of interaction-turn critiques, with the remaining labels set to 0. (c) Sign: keeping only the last 40% of labels and
+filling the remaining labels with constant 0, +1, or −1. Across all three perturbation families, AR E W remains consistently above the
+vanilla baseline, indicating robustness not only to random noise but also to several forms of structured critique destruction.
+
+0.4
+0.2
+
+0
+
+25
+
+50
+
+75
+
+100
+
+125
+
+Rewards
+
+150
+
+175
+
+200
+
+0.0
+
+0
+
+25
+
+50
+
+75
+
+100
+
+125
+
+Training Steps
+
+150
+
+175
+
+200
+
+(b) Various λu strength of AR E W
+
+(a) Alternative belief-elicitation
+
+Figure 9. (a) Training dynamics of rewards on PE-GS=3 (PPO training with Qwen2.5-7B-Instruct). Compared with the experiment in
+Fig. 3a, this variant uses an alternative belief-elicitation prompt that encourages more aggressive confidence updates, with the rest of the
+training pipeline unchanged. (b) Training dynamics of rewards on under different strength of AR E W.
+
+Robustness to belief-elicitation prompt variation. Since BT critiques are constructed from a task-relevant confidence
+e (cf., Sec. 4.1), we also test whether AR E W is sensitive to the exact prompt used to elicit this readout. Fig. 9a
+readout Ψ
+reports a variant of the PE-GS=3 experiment where the belief-elicitation prompt is changed to encourage more aggressive
+confidence updates, while keeping the rest of the training pipeline unchanged. The resulting reward dynamics remain
+substantially above the vanilla PPO baseline, indicating that AR E W does not require a perfectly calibrated or uniquely
+specified belief readout. Instead, the confidence readout only needs to provide a weakly informative directional signal on
+average, which aligns with the weighted-accuracy interpretation in Proposition 4.1.
+Comparison with directly injecting intermediate rewards. We next compare AR E W with a direct intermediate-reward
+baseline that uses the same critique source, but injects the critique as an additional dense reward rather than as advantage
+reweighting. This comparison isolates the effect of the injection mechanism: both methods receive the same weak directional
+information, but intermediate reward shaping changes the return and critic target, whereas AR E W preserves the original
+outcome reward and only reallocates actor-side credit within a trajectory. Table 3 shows that AR E W consistently outperforms
+direct intermediate reward injection under random critique sign flipping. The gap is especially large on PE-GS=3 under
+noisy critiques: at α = 0.2, intermediate reward drops to 32.33, while AR E W reaches 65.00; at α = 0.5, intermediate
+reward falls back to the vanilla level, while AR E W still improves over vanilla. These results support the view that weak and
+noisy step-level signals are better used for credit reallocation than for redefining the episode utility.
+Reduced critique-chasing under corrupted positive signals. We further test a structured reward-hacking scenario
+where each negative critique is independently flipped to positive with probability p. This perturbation creates misleading
+positive supervision and directly tests whether the method chases corrupted critique labels. Table 4 reports both final task
+performance and the average final positive/negative token ratio, where the positive count includes flipped positives. Direct
+intermediate reward produces much larger positive/negative ratios, suggesting that the policy more aggressively optimizes
+toward corrupted positive critique signals. In contrast, AR E W maintains lower positive/negative ratios while achieving
+better performance under both p = 0.3 and p = 0.5. This indicates that advantage reweighting is less susceptible to critique
+chasing than direct reward injection, because it uses critiques to redistribute policy-gradient magnitude without changing the
+sparse task objective.
+27
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+Table 3. Robustness comparing AR E W with direct intermediate reward under random critique sign flipping (PPO training on PE-GS=3
+and FloDial-Hard datasets, Qwen2.5-7B-Instruct), where each critique is independently flipped with probability α.
+vanilla RL
+
+α-0
+
+α-0.2
+
+α-0.5
+
+PE-GS=3
+
+Intermediate reward
+AR E W
+
+18.33
+
+73.67
+80.33 ↑ 6.66
+
+32.33
+65.00 ↑ 32.67
+
+18.33
+30.30 ↑ 11.97
+
+F LO D IAL -H ARD
+
+Intermediate reward
+AR E W
+
+21.33
+
+33.00
+36.00 ↑ 3.00
+
+28.00
+29.00 ↑ 1.00
+
+21.00
+23.30 ↑ 2.30
+
+Table 4. Robustness comparing AR E W with direct intermediate reward under structured critique sign flipping, where each negative
+critique is independently flipped to positive with probability p (PPO training on PE-GS=3 dataset, Qwen2.5-7B-Instruct). We report the
+average final positive/negative token ratio (including flipped positives), pos/neg, and the resulting test performance under two corruption
+levels.
+p-0.3
+
+Intermediate reward
+AR E W
+
+p-0.5
+
+pos/neg
+
+performance
+
+pos/neg
+
+performance
+
+5.94
+1.58
+
+23.33
+30.67 ↑ 7.34
+
+7.26
+4.22
+
+17.33
+26.00 ↑ 8.67
+
+Unified AS/BT evaluation with rubric-based labeling. The main experiments use task-grounded AS and BT proxies,
+which are designed to measure whether the agent acquires useful information and whether it incorporates the acquired
+evidence. To check whether the conclusions depend on these task-specific proxy definitions, we additionally evaluate
+AS and BT capabilities using GPT-5 rubric-based labeling. Table 5 compares the rubric-based evaluation with the proxy
+metrics used in the main text on PE-GS=3 , MediQ, and FloDial-Hard. Across all three tasks and both evaluation sources,
+AR E W–AS+BT consistently improves over vanilla RL. Although the absolute proxy values differ across evaluation sources,
+the qualitative trend remains stable: AR E W improves both action-selection quality and belief-tracking behavior. This
+supports the interpretation that the observed AS/BT improvements are not artifacts of a single hand-designed proxy, but
+reflect a broader improvement in the agent’s information acquisition and evidence-integration behavior.
+Effect of the reweighting strength λu. We examine the impact of the reweighting strength λu on training dynamics. As
+illustrated in Fig. 9b, insufficient reweighting fails to provide enough signal to escape the self-locking regime, resulting in
+slow and limited improvement. Conversely, overly aggressive reweighting accelerates early optimization but often leads
+to unstable training and eventual performance collapse. We conjecture that large λu amplifies high-variance advantage
+estimates and over-emphasizes a small subset of steps, making the policy update brittle and sensitive to noise. These
+observations suggest a non-trivial trade-off between exploration, stability, and convergence speed. We leave more adaptive
+or structure-aware reweighting strategies as an important direction for future work.
+
+E. Setup Details
+E.1. Dataset Details and Prompt Templates
+In this section, we present more details for the datasets and tasks evaluated in this work.
+Preference Estimation – Gated (PE-G), adapted from Badola et al. (2025) and Zou et al. (2026). Adapted from Badola
+et al. (2025), Gated-PE is an interactive preference inference task under constrained information acquisition. The agent
+is given a finite set of items X = {x1 , . . . , xN }, where each item xi is represented by a known attribute vector ai ∈ RD .
+The user is characterized by an unknown latent preference vector w⋆ ∈ [0, 1]D . Through interaction, the agent maintains
+and iteratively refines an estimate wt ∈ [0, 1]D of this latent preference. At each decision point, the agent actively selects
+a low-dimensional attribute subspace St ⊆ {1, . . . , D} and an item comparison (xi , xj ) ∈ X × X designed to elicit the
+user’s preference feedback restricted to St . Based on the observed feedback, the agent updates its belief state. The objective
+is to accurately recover w⋆ under sparse, outcome-based supervision.
+MediQ, adapted from Li et al. (2024). Adapted from Li et al. (2024), MediQ is an interactive medical inference task that
+models hypothesis-level belief tracking under partial observability. The agent is provided with a clinical vignette and an
+associated medical question whose answer lies in a finite hypothesis set of size D. The agent maintains a belief state
+wt ∈ [0, 1]D , where each dimension represents the current support for a candidate hypothesis. Through iterative interaction,
+the agent actively queries the LLM-simulated user for diagnostic information, receives structured feedback, and updates each
+hypothesis score accordingly. The learning objective is to progressively concentrate belief mass onto the correct hypothesis.
+28
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+Table 5. Evaluations of AS and BT capabilities over vanilla RL and AR E W– AS + BT (PPO algorithm with Qwen-2.5-7B-Instruct). We
+compare two evaluation sources: (1) GPT-5 rubric-based labeling and (2) the critiques used in the main text. We annotate the improvement
+of AR E W over vanilla RL in each cell. Across all three tasks, AREW consistently improves over vanilla RL under both evaluation
+sources.
+AS
+
+BT
+
+GPT-5 labeling
+
+Used in the main text
+
+GPT-5 labeling
+
+Used in the main text
+
+PE-GS=3
+
+vanilla RL
+AR E W– AS + BT
+
+0.177
+0.669 ↑ 0.49
+
+0.049
+0.834 ↑ 0.79
+
+0.238
+0.459 ↑ 0.22
+
+-0.005
+0.014 ↑ 0.02
+
+M EDI Q
+
+vanilla RL
+AR E W– AS + BT
+
+0.275
+0.335 ↑ 0.06
+
+0.222
+0.539 ↑ 0.32
+
+0.355
+0.666 ↑ 0.31
+
+0.060
+0.103 ↑ 0.04
+
+F LO D IAL -H ARD
+
+vanilla RL
+AR E W– AS + BT
+
+0.343
+0.468 ↑ 0.13
+
+0.250
+0.370 ↑ 0.12
+
+0.495
+0.636 ↑ 0.14
+
+0.130
+0.790 ↑ 0.66
+
+FloDial, adapted from Raghu et al. (2021); Hu et al. (2024) consists of multi-turn diagnostic dialogues for resolving
+user-reported issues. It provides a scenario where a customer support technician interacts with customers to identify and
+resolve faults or issues within computer systems, electronic devices, machinery, or other complex systems. The agent
+simulates the customer support technician, which chat with the customer to further check the specific issues of device
+through multi-turn interactions.
+E.2. Baseline Details
+Here we introduce RL algorithms used in our experiments. Formally, given an actor model πθ , the likelihood of a response y
+Q|y|
+to a query x under the policy πθ is modeled as πθ (y|x) = t=1 πθ (yt |x, y<t ). Given a query-response pair (x, y), a verifier
+r generates its reward r(x, y) ∈ [0, 1].
+Proximal Policy Optimization (PPO) (Schulman et al., 2017) employs the following objective for policy optimization:
+
+
+|y|
+
+
+X
+1
+bt , clip (wt (θ), 1 − ε, 1 + ε) A
+bt  ,
+JPPO (θ) = Ex∼D, y∼πθold (·|x) 
+min wt (θ)A
+(26)
+|y| t=1
+<t )
+bt of yt is typically computed
+where the importance ratio of the token yt is defined as wt (θ) = ππθθ (y(yt |x,y
+, the advantage A
+t |x,y<t )
+old
+via Generalized Advantage Estimation (GAE) (Schulman et al., 2015) with temporal-difference errors, and ε is the clipping
+range of importance ratios.
+
+Group Relative Policy Optimization (GRPO) (Shao et al., 2024) proposes computing the relative advantage of each
+response within a group of responses of the same query using the following objective (omitting the KL regularization term):
+
+
+|yi |
+G
+
+
+X
+X
+1
+bi,t , clip (wi,t (θ), 1 − ε, 1 + ε) A
+bi,t  ,
+1
+JGRPO (θ) = Ex, {yi }G
+min wi,t (θ)A
+(27)
+i=1
+G i=1 |yi | t=1
+b
+where {yi }G
+i=1 ∼ πθold (·|x) and G is the group size. The importance ratio wi,t (θ) and advantage Ai,t of token yi,t are
+defined as:
+
+r(x, yi ) − mean {r(x, yi )}G
+πθ (yi,t |x, yi,<t ) b
+i=1
+
+wi,t (θ) =
+, Ai,t =
+,
+(28)
+πθold (yi,t |x, yi,<t )
+std {r(x, yi )}G
+i=1
+respectively, where all the tokens in yi share the same advantage.
+Group Sequence Policy Optimization (GSPO) (Zheng et al., 2025) extends GRPO by defining the importance ratio at the
+sequence level with length normalization, with sequence-level clipping, rewarding, and optimization. The objective is:
+"
+#
+G
+
+1 X
+bi , clip(si (θ), 1 − ϵ, 1 + ϵ)A
+bi ,
+JGSPO (θ) = Ex,{yi }G
+min si (θ)A
+(29)
+i=1
+G i=1
+where
+
+si (θ) =
+
+πθ (yi |x)
+πθold (yi |x)
+
+1/|yi |
+
+
+
+
+|yi |
+X
+1
+π
+(y
+|x,
+y
+)
+θ
+i,t
+i,<t
+.
+= exp
+log
+|yi | t=1
+πθold (yi,t |x, yi,<t )
+29
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+% By operating on entire sequences rather than token-level updates, GSPO achieves more stable training dynamics for LLM
+reinforcement learning.
+E.3. Supplementary Implementation Details
+E.3.1. A DDITIONAL S ETTING ON DATASETS
+Here we provide additional implementation details. The maximum number of interaction turns is set at 10 for PE-G, 12 for
+PE-F, 8 for MediQ, 10 for FloDial-Easy and FloDial-Hard. For RL training, we define task-specific rewards aligned with
+their evaluation metrics: for PE-G and PE-F, the reward is the similarity improvement compared to the initial default guess
+(all 0.5), where PE-G leverages binary reward (1[improvement] > 0.03) and PE-F leverages the continuous improvement
+value (normalized to [0, 1]). For MediQ and FloDial, the reward is binary, checking if the final decision made by the agents
+aligns with the ground-truth. All rewards are provided only at the terminal step of each trajectory, consistent with the
+outcome-based RL setting.
+The AS and BT proxies on PE and MediQ datasets can be seen in Sec. 2. For the FloDial dataset, the query is considered as
+uninformative if the user replies “unknown”, and the BT proxy is defined by whether the agent can increase the confidence
+of the ground truth when receiving informative feedback.
+Critique construction (AS vs. BT). Across datasets, we use two lightweight stepwise critiques: ztAS (AS-channel) evaluates
+whether the query step at turn t yields informative feedback, and ztBT (BT-channel) evaluates whether the subsequent belief
+update is consistent with that feedback. Below we summarize the dataset-specific instantiations.
+PE-G and PE-F.
+AS critique. Let the action be a comparison between two items, inducing a signed attribute-difference vector mij ∈ RD
+(restricted to the focused coordinates when applicable). We mark the query as informative if it exhibits a non-trivial trade-off
+across coordinates, i.e.,
+ztAS = +1 ⇐⇒ ∃k, ℓ ∈ [D] s.t. mij,k mij,ℓ < 0,
+and set ztAS = −1 for repeated or invalid queries or when mij is one-signed.
+BT critique. Conditioned on an informative query (ztAS = +1), we compare the updated preference estimate vt against the
+previous valid estimate vt−1 using similarity to the ground-truth preference w⋆ :
+
+
+ztBT = sign sim(vt , w⋆ ) − sim(vt−1 , w⋆ ) ,
+and set ztBT = 0 when the query is uninformative or invalid.
+MediQ.
+AS critique. Let ft denote the patient feedback to the query at turn t. We set ztAS = +1 iff the feedback is informative (i.e.,
+not an “Unknown / cannot answer” response) and the query is not repeated; otherwise ztAS = −1. We additionally explore
+counterfactual pattern (exploration on other datasets as future work). When counterfactual queries are enabled, we intervene
+the belief from the last turn and obtain the counterfactual query. We then discourage semantic repetition by requiring the
+counterfactual query to be sufficiently different from the actual query (measured by token-level overlap), and mark the step
+as uninformative when this difference is small.
+BT critique. Let wt ∈ [0, 1]4 be the belief over 4 hypotheses and s⋆ the ground-truth hypothesis. Define the margin
+mar(wt ; s⋆ ) := wt (s⋆ ) − max⋆ wt (s).
+s̸=s
+
+If the feedback is uninformative, we enforce invariance: ztBT = +1 if mar(wt ; s⋆ ) = mar(wt−1 ; s⋆ ) and ztBT = −1
+otherwise. If the feedback is informative, we employ a counterfactual-consistency check: We intervene the observation
+to “unknown” and obtain wtcf to be a counterfactual update from the same previous belief wt−1 but from the “unknown”
+response; then
+ztBT = +1 ⇐⇒ ∥wtcf − wt−1 ∥2 ≤ ∥wt − wt−1 ∥2 ,
+and ztBT = −1 otherwise.
+30
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+FloDial. AS critique. User feedback takes the form Yes/No when the query matches a reference diagnostic item, and
+Unknown otherwise. We set
+
+
++1, if feedback is Yes,
+AS
+zt = 0,
+if feedback is No,
+
+
+−1, if feedback is Unknown (no match).
+BT critique. Let wt ∈ [0, 1]S be the belief over candidate faults and s⋆ the ground-truth fault. When the feedback is
+informative (Yes/No), we encourage increasing confidence on s⋆ :
+ztBT = +1 ⇐⇒ wt (s⋆ ) > wt−1 (s⋆ ),
+
+ztBT = −1 otherwise.
+
+When the feedback is uninformative (Unknown), we use an invariance-style rule: we require the belief to remain unchanged
+(e.g., ztBT = +1 iff wt = wt−1 ).
+E.3.2. T RAINING C ONFIGURATIONS
+All expriments are trained on a single node with 8 B200 GPUs, based on the implementations of Verl (Sheng et al., 2025).
+All training tasks on PPO are conducted for 200 steps (GRPO and GSPO 100 steps) with the actor model optimized using a
+learning rate of 1.0 × 10−6 . % For distributed training, we adopt Fully Sharded Data Parallelism (FSDP), using BFloat16
+precision throughout both training and evaluation. % For efficient LLM rollouts, we adopt vLLM 1 with a tensor parallel
+size of 1. The rollout sampling uses a temperature of 1.0 for all datasets.
+For the PPO baseline, we use Generalized Advantage Estimation (GAE) with parameters λ = 1 and γ = 1. The clip ratio
+ε are set to 0.2. For GRPO training, we sample 3 responses per prompt, and the rollout parameters with the clip ratio
+are consistent with the PPO setting. For the GSPO algorithm, the clip ratio εlow and εhigh are set to 0.0003 and 0.0004,
+respectively, while others keep consistent with GRPO training.
+
+1
+
+https://docs.vllm.ai/en/latest/
+
+31
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Input Prompts for the MovieRec Preference Estimation Dataset
+You are an interactive preference estimation agent. The goal is to infer a user’s {len attributes}-dimensional hidden preference vector on movies through
+multi-round interaction.
+## Setup:
+- You are given {len seen} movies, each with scores on {len attributes} dimensions (indexed 1 . . . {len attributes}):
+{seen movie sample}
+- Maintain an estimate of the user’s preference vector:
+Guess: w1 , w2 , . . . , w{len attributes}
+- Initialization:
+Guess: 0.5, 0.5, . . . , 0.5
+## Interaction Protocol:
+Interaction alternates between two types of rounds.
+1) Action Round (odd-numbered rounds: 1,3,5,. . . )
+In an Action Round, you must choose which information to query. You must output exactly:
+<interact>
+Focus: k1,k2,k3
+Pair: p1,p2
+</interact>
+Rules:
+- Focus must contain exactly three distinct integers in [1, {len attributes}]. Ensure that all dimensions receive opportunities to be disambiguated over the
+course of interaction.
+- Pair must contain exactly two distinct integers in [1, {len seen}].
+- Avoid uninformative pairs, such as dominance pairs where one movie is better on all focused dimensions k1 , k2 , k3 .
+After you output Focus and Pair, the user will provide feedback:
+- User Feedback: “Yes”, “No”, or “Equal”.
+“Yes” means p1 is preferred when considering only dimensions k1 , k2 , k3 .
+2) Update Round (even-numbered rounds: 2,4,6,. . . )
+In an Update Round, you must update the preference estimate based on the most recent Focus, Pair, and User Feedback.
+You must output exactly:
+<interact>
+Guess: w1,w2,...,w{len attributes}
+</interact>
+Rules:
+- Guess must be comma-separated numbers.
+- Use the feedback to adjust the relative importance of the focused dimensions in a way consistent with the observed preference.
+## Reasoning:
+Before each <interact> block, you may briefly reason about what to do in a:
+<scratch>... </scratch>
+Round 1 is an Action Round.
+
+Figure 10. Prompt Template for MovieRec Preference Estimation.
+
+32
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Input Prompts for the MediQ Dataset
+You are an interactive medical inference agent. Your goal is to iteratively maintain and refine a 4-dimensional state vector that tracks the relative support for four
+potential hypotheses associated with a given medical question, through multi-round interaction.
+## Setup:
+- You are given: (i) a clinical vignette describing a patient scenario, and (ii) a medical question associated with this scenario.
+- The question admits four potential hypotheses, labeled A, B, C, and D.
+- Maintain a state vector (wA , wB , wC , wD ), where each w ∈ [0, 1], representing your current level of support for each hypothesis.
+- Initialization:
+Guess: 0.5, 0.5, 0.5, 0.5
+- In each Action round, you can issue only one query. The query must be a single, atomic question intended to reduce uncertainty among the four hypotheses;
+compound or multi-part questions are not allowed.
+## Alternating Interaction Protocol:
+Interaction alternates between two types of rounds:
+1) Action Round (odd-numbered rounds: 1,3,5,. . . )
+- You must output only a query in the exact format:
+<interact>
+Query: . . .
+</interact>
+- After you output a Query, the user will provide feedback.
+2) Update Round (even-numbered rounds: 2,4,6,. . . )
+- You must update and output only the state vector (Guess) based on: (a) the most recent Query, and (b) the feedback returned for that Query.
+- Output in the exact format:
+<interact>
+Guess: wA,wB,wC,wD
+</interact>
+- Guess must be comma-separated numbers.
+## State Update Rules (in Update rounds, after feedback):
+- Each dimension can be adjusted independently, depending on how the feedback affects that hypothesis.
+## Query Policy (in Action rounds):
+- Ask atomic, clinically meaningful queries that help differentiate among the four hypotheses.
+- Avoid repeating previously asked queries.
+Before each <interact> block, briefly reason (in a few sentences) about what you should do in a: <scratch>... </scratch> block, following the protocol
+above.
+Let’s get started:
+Clinical Vignette: {clinical vignette}
+Medical Question: {medical question}
+Potential Hypotheses: {potential hypotheses}
+Round 1 is an Action Round. Output your first Query.
+
+Figure 11. Prompt Template for MediQ.
+
+33
+
+On Information Self-Locking in Reinforcement Learning for Active Reasoning of LLM agents
+
+Input Prompts for the FloDial Dataset
+You are an interactive troubleshooting diagnosis agent. Your goal is to iteratively maintain and refine a state vector that tracks the relative plausibility of
+{num candidates} candidate descriptions for a given problem, through multi-round interaction.
+## Setup:
+- You are given: (i) a task description describing the user’s problem, and (ii) a list of {num candidates} candidate descriptions.
+- Each candidate is a possible explanation, diagnosis, or resolution suggestion related to the problem.
+- Exactly one of the candidate descriptions best matches the actual situation described by the user.
+- Your goal is to identify which candidate description is the most consistent with the situation, by asking diagnostic yes/no questions.
+- Maintain a state vector (w1 , w2 , . . . , w{num candidates} ), where each wi ∈ [0, 1], representing your current level of support for candidate i.
+- Initialization:
+Guess: 0.5, 0.5, . . . , 0.5 (length {num candidates})
+- In each Action Round, you issue only one query.
+## Alternating Interaction Protocol:
+Interaction alternates between two types of rounds:
+1) Action Round (odd-numbered rounds: 1,3,5,. . . )
+- Output only a query in the exact format:
+<interact>
+Query: . . .
+</interact>
+- The query must be a single, atomic yes/no diagnostic question intended to reduce uncertainty among the {num candidates} candidate descriptions.
+- Avoid repeating previously asked queries.
+- Do not directly ask whether a specific candidate description is correct or incorrect.
+- Compound or multi-part questions are not allowed.
+2) Update Round (even-numbered rounds: 2,4,6,. . . )
+- Update and output only the state vector (Guess), based on the most recent query and the feedback returned for that query.
+- Output in the exact format:
+<interact>
+Guess: w1,w2,...,w{num candidates}
+</interact>
+- Each wi must remain within [0, 1].
+- If the user replies “Unknown”, leave all weights unchanged.
+- Each dimension can be adjusted independently by 0 (not changed), +0.1, or −0.1, depending on how the feedback affects that candidate.
+Before each <interact> block, briefly reason (in a few sentences) in a <scratch>... </scratch> block about what to ask or how the feedback affects
+your belief.
+Let’s get started.
+Task Description:
+{task description}
+Candidate Descriptions:
+{candidate descriptions}
+Round 1 is an Action Round. Output your first query.
+
+Figure 12. Prompt Template for FloDial.
+
+34
+
+

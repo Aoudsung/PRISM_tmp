@@ -1,0 +1,4034 @@
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+Fanqi Kong 1 2 Jiayi Zhang 2 3 Mingyi Deng 2 Chenglin Wu 2 Yuyu Luo 3 Bang Liu 4
+
+Abstract
+
+multi-turn tasks (Zhu et al., 2025; Li et al., 2025a; Liu
+et al., 2025a; Li et al., 2025e). In the user-centric setting
+where agents must serve human users with underspecified
+goals, they must bridge a fundamental gap between often
+ambiguous human intentions and the precise parameters
+required for machine execution (Norman, 1986; Clark &
+Brennan, 1991; Budzianowski et al., 2018). For example,
+a request like “book me a flight next week” is not directly
+actionable until the agent elicits missing constraints such as
+dates, departure airport, budget, and flexibility. Therefore,
+an effective interaction should both increase the agent’s
+knowledge about the user’s true intent and advance the
+task toward completion (Kong et al., 2025). Mastering
+this interplay between intent elicitation and task execution
+remains a core challenge for building autonomous agents
+that operate reliably under partial information (Deng et al.,
+2025; Qian et al., 2025b; He et al., 2025; Luo et al., 2018).
+
+arXiv:2603.00656v2 [cs.AI] 17 Jun 2026
+
+Real-world user requests to LLM agents are often underspecified. Agents must interact to acquire missing information and make correct downstream decisions. However, current multi-turn
+GRPO-based methods often rely on trajectorylevel reward computation, which leads to credit
+assignment problems and insufficient advantage
+signals within rollout groups. A feasible approach
+is to identify valuable interaction turns at a fine
+granularity to drive more targeted learning. To
+address this, we introduce InfoPO (InformationDriven Policy Optimization), which frames multiturn interaction as a process of active uncertainty
+reduction and computes an information-gain reward that credits turns whose feedback measurably changes the agent’s subsequent action distribution compared to a masked-feedback counterfactual. It then combines this signal with task
+outcomes via an adaptive variance-gated fusion
+to identify information importance while maintaining task-oriented goal direction. Across diverse tasks, including intent clarification, collaborative coding, and tool-augmented decision making, InfoPO consistently outperforms prompting
+and multi-turn RL baselines, exceeding GRPObased methods by 14% to 16%. It also demonstrates robustness under user simulator shifts and
+generalizes effectively to environment interactive tasks. Overall, InfoPO provides a principled
+and scalable mechanism for optimizing complex
+agent user collaboration. Code is available at
+https://github.com/kfq20/InfoPO.
+
+GRPO-based multi turn RL
+Rollout Group
+A Completely
+Off-Track
+
+B Honorable
+Failure
+
+Is the
+sky blue?
+
+What is your
+booking ID?
+
+Information-driven policy optimization
+Factual
+World
+What is your
+reservation ID?
+IC13
+
+Yes…?
+
+Cancel
+(IC13)
+
+Task
+Error
+Reward = 0
+0
+
+Format
+Error
+Reward = 0
+0
+
+No learning signals!
+
+What is your
+reservation
+ID?
+[MASK]
+
+IC13
+
+Random
+action
+
+Counterfactual
+World
+
+Turn-level Info-Gain
+Next Action
+
+Next Action
+
+Cancel (IC13)
+
+Cancel (IC13)
+
+Dense credit assignment.
+
+Figure 1. Standard GRPO vs. InfoPO. Standard GRPO yields zero
+reward for ”honorable failures” (correct elicitation, failed execution). InfoPO solves this via counterfactual masking to provide
+dense, turn-level information-gain rewards.
+
+This challenge calls for a principled approach to learning
+an interaction policy. Reinforcement learning (RL) stands
+out as the standard paradigm for this purpose, as it enables
+an agent to autonomously discover effective strategies from
+feedback in sequential decision-making settings (Kong et al.,
+2024; Zhang et al., 2025a; Liu et al., 2025b). However, applying RL to multi-turn agentic tasks exposes its Achilles’
+heel: the long-horizon credit assignment problem. Rewards
+are often sparse and delayed until task completion, making it difficult to attribute outcomes to intermediate decisions (Zhou et al., 2025; Wei et al., 2025). This issue is
+
+1. Introduction
+The rapid evolution of Large Language Models (LLMs)
+has enabled interactive agents that assist users in complex,
+1
+
+Peking University 2 DeepWisdom 3 The Hong Kong University
+of Science and Technology (Guangzhou) 4 Université de Montréal
+& Mila. Correspondence to: Bang Liu <bang.liu@umontreal.ca>.
+Proceedings of the 43 rd International Conference on Machine
+Learning, Seoul, South Korea. PMLR 306, 2026. Copyright 2026
+by the author(s).
+
+1
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+Bench (Zhou et al., 2025), and the long-horizon τ 2 Bench (Barres et al., 2025), which together span intent
+clarification and preference elicitation, collaborative code
+generation, and tool-augmented decision making. InfoPO
+consistently improves task performance and learning stability over strong prompting and RL baselines. To attribute
+these gains, we run component ablations and diagnostic analyses, uncovering a learned interaction pattern that resolves
+intent uncertainty early before downstream commitments.
+We further test robustness beyond user-centric benchmarks
+by applying InfoPO to non-user-interactive tasks and by
+swapping the simulated user at evaluation time, indicating
+that InfoPO learns broadly useful interaction strategies.
+
+particularly pronounced under GRPO-based methods (Shao
+et al., 2024; Yu et al., 2025), where policy updates rely on
+reward variation within a rollout group. Moreover, many
+recent works on multi-turn RL aggregate terminal and intermediate signals into a single trajectory-level score for
+advantage estimation, which limits fine-grained supervision
+across the interaction (Qian et al., 2025a;c; Wang et al.,
+2025; Jin et al., 2025; Lin et al., 2025; Wang et al., 2026).
+In user-centric environments, such granularity matters even
+more. A small number of clarification decisions can determine feasibility and downstream success, and RL training frequently relies on LLM-simulated users (Zhao et al.,
+2025a; Cai et al., 2025; Li et al., 2025d;c), making sample
+efficiency also a critical constraint.
+
+In summary, our contributions are threefold: (1) we introduce InfoPO, an information-driven RL method for multiturn interaction that provides dense turn-level credit to enable effective learning under sparse or delayed outcomes;
+(2) we provide an information-theoretic grounding that links
+the proposed signal to conditional mutual information and
+directed information, clarifying the role of information flow
+from feedback to actions in learning; (3) we deliver a comprehensive empirical study with ablations and diagnostic
+analyzes across multiple interactive benchmarks, showing
+improved task performance and training stability, and generalization to variant users and environments.
+
+To address the above limitation, we propose InformationDriven Policy Optimization (InfoPO), which treats multiturn interaction as a process of active uncertainty reduction
+(as illustrated in Figure 1). InfoPO defines a turn-level counterfactual information-gain reward that credits the action
+for the information it elicits. After the agent acts, the user or
+environment provides feedback. We then ask how this feedback would change the agent’s next decision. Concretely,
+we score the same collected trajectory under two conditions:
+(i) the factual history that includes the feedback and (ii) a
+counterfactual history where the feedback is replaced by a
+masked placeholder. We compare the policy’s probability
+assigned to the actual next action under the two conditions.
+The resulting distribution gap is attributed to the action that
+triggered the feedback, rewarding turns that meaningfully
+reshapes downstream choices. This process does not need
+additional interactions with environments.
+
+2. Related Works
+User-centric agents. User-centric agents move beyond
+“task completion” toward inferring latent intent, preferences,
+and user state under multi-turn interaction. On the intent/need side, recent work studies implicit intention elicitation
+and clarification policies for agents (Qian et al., 2024; Chen
+et al., 2024; Li et al., 2025b; 2024), and connects user-facing
+transparency/explanations to predictability and controllability in personalized settings (Yu et al., 2024; Hong & Roth,
+2026; Qin et al., 2020). On the personalization side, the community is rapidly enriching benchmarks and problem formulations, from classic persona-grounded dialogue (Zhang
+et al., 2018) to modern LLM-centric personalization suites
+such as LaMP/LaMP-QA (Salemi et al., 2024; Salemi & Zamani, 2025), and preference-heterogeneity benchmarks for
+individualized alignment (Zollo et al., 2024; Afzoon et al.,
+2024; Wu et al., 2024). In realistic user assistance, goals are
+embedded in open-ended workflows that require iterative
+feedback incorporation, grounded actions, and goal adaptation under practical constraints (e.g., interacting with external information, code, services, or APIs), motivating multiturn testbeds that jointly evaluate these capabilities (Barres
+et al., 2025; Qian et al., 2025b;c; Wu et al., 2025; He et al.,
+2025; Xie et al., 2025). A complementary line builds agent
+training/evaluation scaffolds via user simulators, long-term
+memory, and synthetic environment generation (Sun et al.,
+
+To keep this intrinsic signal aligned with task completion,
+InfoPO uses an adaptive variance-gated fusion to combine
+information gain with outcome-based updates. When outcome rewards within a rollout group are non-discriminative,
+group-relative advantages can be near zero, leading to learning stagnation. In this case, the gate increases the weight on
+information gain to maintain a usable training signal. As outcomes become more discriminative, the gate shifts weight
+back to the task objective to support eventual success.
+We also provide an information-theoretic interpretation of
+the learning signal. In expectation, the per-turn information
+gain reward corresponds to a conditional mutual information
+between feedback and the agent’s next action, while its
+cumulative form represents the directed information flow
+from observations to decisions. Crucially, we prove that a
+minimum cumulative information gain is a strictly necessary
+resource for achieving task success, providing a theoretical
+lower bound that links uncertainty reduction directly to the
+probability of reaching the goal.
+We evaluate InfoPO on three representative interactive benchmarks, UserGym (Qian et al., 2025c), Col2
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+3. Preliminaries
+
+2025; Li et al., 2025d; Cai et al., 2025; Wu et al., 2026;
+Zhang et al., 2025b). These advances highlight both the
+promise of group-relative RL and the open challenge of
+fine-grained credit assignment in long, interactive rollouts.
+
+3.1. Multi-Turn Interaction as a Dec-POMDP
+We model the user-centric multi-turn task as a decentralized partially-observable Markov decision process (DecPOMDP) (Bernstein et al., 2002). In this setting, the agent
+repeatedly interacts with a user (or simulator) to infer latent
+intent Z. At each turn t, the environment transitions to a
+latent state st+1 ∼ P(· | st , at ) and reveals an observation
+ot ∼ O(· | st+1 ). Let ht = (q, a1 , o1 , . . . , at−1 , ot−1 ) denote the interaction history before observing ot . The policy
+πθ (at | ht , ot ) generates a sequence of tokens conditioned
+on the transcript. Crucially, in user-centric tasks, the observation ot reduces uncertainty about the task goal and shifts
+the action distribution for the next turn at+1 .
+
+Agentic reinforcement learning. Reinforcement learning
+has become a broadly applicable approach to improve LLM
+agents’ decision-making across diverse tasks. Multi-turn
+credit assignment is studied via hierarchical and collaborative training (Zhou et al., 2024; 2025), and grounded tool
+use and information seeking are induced with RL across
+search, clarification, and tool actions (Jin et al., 2025; Zhao
+et al., 2025a; Acikgoz et al., 2025; Ruan et al., 2026); analyses of long-rollout dynamics further identify instability and
+motivate stabilization (Wang et al., 2025). Optimization has
+shifted toward RLVR-style designs for long, high-variance
+trajectories: group-relative methods and refinements (Shao
+et al., 2024; Feng et al., 2025), sequence/length-normalized
+stabilization (Zheng et al., 2025; Zhao et al., 2025b), training efficiency (Yu et al., 2025; Sheng et al., 2025), and
+variants relaxing strict group synchronization (Xu & Ding,
+2025). For tool interaction, ARPO/AEPO handle posttool uncertainty with entropy-aware rollout and update
+stabilization (Dong et al., 2025a;b); for multi-reward settings, GDPO decouples normalization (Liu et al., 2026)
+and ARIA aggregates rewards by intention (Yang et al.,
+2025b). IGPO (Wang et al., 2026) defines information gain
+as answer-conditioned belief improvement, whereas InfoPO
+measures feedback-conditioned changes in the agent’s future action distribution through a masked-feedback counterfactual. This turn-level information advantage for credit
+assignment in user-centric multi-turn interaction.
+
+3.2. Optimization with Group-Relative Policy Gradient
+The objective is to maximize the expected external return
+J(θ) = Eτ ∼πθ [Rext (τ )], where Rext (τ ) is the cumulative
+reward. For LLM agents, we update θ at the token level
+using an advantage signal Ai,k :
+∇θ L(θ) ∝ E
+
+"L
+i
+X
+
+#
+Ai,k ∇θ log πθ (yi,k | xi , yi,<k ) . (1)
+
+k=1
+
+InfoPO is built upon Group-Relative Policy Optimization
+(GRPO) (Shao et al., 2024), which computes Ai,k by
+comparing trajectories within a rollout group to estimate
+variance-reduced advantages without an explicit critic.
+
+4. Methods
+We propose InfoPO, a multi-turn RL algorithm for usercentric interaction where intent and constraints are revealed
+through feedback. As shown in Figure 2, InfoPO introduces
+a turn-level counterfactual info-gain reward that credits actions by how much the received observation changes
+the policy’s next-step decision under a masked-observation
+counterfactual. InfoPO further applies a variance-gated
+fusion strategy that adaptively combines info-gain and
+outcome-based learning based on the within-group discriminativeness of external rewards. Algorithm 1 in the appendix
+summarizes the full procedure.
+
+Reward Shaping in RL. Reward shaping is a common
+way to speed up learning when rewards are sparse. A classic approach adds intrinsic signals to promote information
+seeking, such as curiosity bonuses based on novelty or prediction error (Pathak et al., 2017; Burda et al., 2018), or
+empowerment-style objectives that increase future controllability (Klyubin et al., 2005; Mohamed & Jimenez Rezende,
+2015). In LLM post-training, similar ideas appear as
+preference-based supervision, which is denser than end-task
+success alone; process reward models (PRMs) push this further to the step level by scoring intermediate reasoning steps
+(Ma et al., 2023; Khalifa et al., 2025; Xi et al., 2025). Stepwise feedback has shown clear gains on complex reasoning
+(e.g., math), improving verification and self-correction by
+reducing compounding errors (Setlur et al., 2024; Ye et al.,
+2025). InfoPO derives a turn-level learning signal without
+requiring task-specific heuristics.
+
+Section 4.1 defines the counterfactual info-gain reward. Section 4.2 presents advantage estimation and the variancegated fusion that yields the final objective. Section 4.3 provides an information-theoretic interpretation and establishes
+the necessity of information gain for task success.
+4.1. Turn-level Counterfactual Information Gain
+A key challenge is to define a task-agnostic measure of information progress. We posit that a high-quality observation
+3
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+Reference
+Model
+
+Rollout Module
+User
+
+Env
+
+Preference
+Goal Belief
+LLM-simulate
+
+Interactable
+
+Group
+Computation
+
+Database
+Internet
+
+Reward
+Model
+
+Agent
+
+Turn-level
+Normalization
+
+Ask Search Answer
+<think>...</think>
+<tool_call>...</tool_call>
+<action>....</action>
+
+Token-Level
+Advantages
+
+Figure 2. Overview of the InfoPO framework. It extracts a turn-level info-gain signal by counterfactual reasoning and adaptively fuses it
+with outcome-based advantages to facilitate efficient credit assignment in multi-turn user-centric tasks.
+
+should reduce the uncertainty of the agent’s task state, which
+is reflected in the shift of its subsequent action distribution.
+By comparing the real transcript to a counterfactual one
+where the observation is absent, we can isolate the specific
+“information gain” attributed to that turn.
+
+task-relevant continuations. If all sampled trajectories are
+completely degenerate or all feedback is uninformative, no
+intrinsic reward can recover the missing task structure. In
+practice, current instruction-tuned LLM agents usually produce a mixture of useful, failed-but-grounded, and meaningless actions, and we empirically verify in Appendix B.5
+that high information gain is concentrated on task-relevant
+transitions rather than arbitrary distribution shifts.
+
+At turn t, the agent produces an action segment at and
+receives feedback ot . Let at+1 = (y1 , . . . , yLt+1 ) be the
+realized next action token sequence. We define the turnlevel info-gain reward rtinfo as the average log-probability
+shift over the next action tokens:
+rtinfo =
+
+1
+Lt+1
+
+Lt+1 
+
+X
+
+4.2. Unified Group-Relative Advantage Construction
+InfoPO uses group-relative estimation to stabilize updates
+without a learned critic. For each prompt, we sample a
+group of G trajectories τ1 , . . . , τG and form advantages by
+comparing trajectories within the same context. We then
+compute the outcome-based advantage and the info-gain
+advantage separately:
+
+log πθ (yk | ht , ot , y<k )
+(2)
+
+k=1
+
+
+
+− log πθ (yk | ht , ∅, y<k ) ,
+where ∅ is a string placeholder named “No information
+found.” Statistical analysis in Appendix B.3 confirms that
+our method is robust to different placeholder implementations. Both terms in Eq. 2 are computed using teacher
+forcing on the same realized tokens at+1 . This design serves
+two purposes: (1) Causal Isolation: it ensures that the shift
+in rtinfo is strictly caused by the presence of ot rather than
+stochastic variations in autoregressive generation; (2) Computational Tractability: by using the same tokens, we avoid
+the prohibitive cost of multiple autoregressive rollouts for
+each counterfactual turn, allowing rtinfo to be computed efficiently via parallelized forward passes.
+
+Outcome Advantage. Let Riext be the trajectory-level
+external reward for rollout i. We compute the normalized
+outcome advantage Aext
+i,k for each token k in the response:
+Aext
+i,k =
+
+Riext − µext
+g
+· mi,k ,
+σgext + ϵ
+
+(3)
+
+ext
+where µext
+are the mean and standard deviation
+g and σg
+of external scores within group g, mi,k is a response mask,
+and ϵ is a small constant to avoid division by zero.
+
+InfoPO does not require an external oracle to pre-identify
+whether an action is meaningful. The information-gain reward is computed for every realized transition by comparing
+the policy’s likelihood of the same next action under factual
+and masked-feedback contexts. However, as with standard
+trial-and-error RL, the method assumes that the behavior
+policy and the user/environment have non-zero support over
+
+Info-Gain Advantage. We normalize turn-level info-gain
+rewards within group g and broadcast the resulting scalar to
+the tokens of the corresponding action segment:
+Ainfo
+i,k =
+4
+
+info
+ri,t(k)
+− µinfo
+g
+
+σginfo + ϵ
+
+· mi,k ,
+
+(4)
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+P(Rext = 1) ≥ 1 − δ requires the cumulative info-gain
+reward to satisfy the lower bound:
+
+where t(k) maps token k to its associated interaction turn,
+info
+and (µinfo
+g , σg ) are computed over all valid turns in group.
+
+ TX
+
+−1
+E
+rtinfo ≥ log M − h(δ) − δ log(M − 1),
+
+Adaptive Fusion via Variance Gating. We then combine
+the two advantages into a single update signal. InfoPO
+uses an adaptive gate g(·) to scale the info-gain contribution
+according to the within-group
+ variability of the outcome
+
+
+t=0
+
+where h(δ) is the binary entropy (in nats).
+
+σ ext
+− Tg
+
+signal: g(σgext ) = σ
+, where T is a temperature
+parameter. When the external outcomes within a group are
+nearly indistinguishable (σgext ≈ 0), g(·) increases, allowing the info-gain advantage to drive learning. Conversely,
+as the outcome signal becomes more discriminative, g(·)
+approaches 0, and the policy prioritizes task success. The
+final unified advantage for token k in rollout i is:
+ext
+info
+Âi,k = Aext
+i,k + β · g(σg ) · Ai,k ,
+
+Theorem 2 shows that high task success requires accumulating a minimum amount of information progress.
+
+5. Experiments
+Our experiments aim to answer the following research questions: RQ1 (Performance): How effectively does InfoPO
+facilitate task completion and learning efficiency across
+benchmarks? RQ2 (Mechanism): How do turn-level infogain rewards and variance-gated fusion contribute to interaction quality and learning stability? RQ3 (Generalization):
+How robustly does InfoPO generalize to unseen interaction
+purposes and varying user simulator conditions?
+
+(5)
+
+where β controls the peak influence of the information
+progress. This design encourages informative interaction
+while keeping optimization anchored to the task objective.
+Finally, we optimize the policy πθ relative to the reference
+policy πref to control distribution shift. The unified objective
+of InfoPO is formulated as:
+"
+|τi | 
+G
+1 X 1 X
+JInfoPO (θ) = Eq∼P (Q),{τi }G
+i=1 ∼πθold
+G i=1 |τi |
+k=1
+
+πθ (yi,k | xi,k )
+πθ (yi,k | xi,k )
+Âi,k , clip
+, (6)
+min
+πθold (yi,k | xi,k )
+πθold (yi,k | xi,k )
+!
+
+#
+1 − ϵ, 1 + ϵ Âi,k − λKL DKL (πθ ∥πref ) ,
+
+5.1. Experimental Setup
+Benchmarks and Metrics. We evaluate InfoPO on three
+representative multi-turn, user-centric benchmarks that challenge an agent’s dual-interaction capabilities: eliciting latent intent via conversation while executing environmentgrounded actions. (1) UserGym (Qian et al., 2025c): A
+suite of eight unified gym environments covering diverse
+interaction paradigms such as travel planning, preference
+persuasion, and goal inference. It features a standardized [Action-Search-Answer] interface, forcing the
+agent to coordinate tool usage with information-seeking dialogue. Following Qian et al. (2025c), we report the success
+rate or accumulated reward across eight tasks, including
+three held-out settings to test cross-purpose generalization.
+(2) ColBench (Zhou et al., 2025): A collaborative programming benchmark where the agent refines technical requirements and generates Python code through iterative discussion. Performance is measured by the fraction of hidden
+unit tests passed (Pass) and the task completion rate (Succ.).
+(3) τ 2 -Bench (Barres et al., 2025): A complex dual-control
+task involving airline, retail, and telecom domains. It requires high-level coordination as both the agent and user
+can modify the shared world state. We report the average
+success rate over 4 independent runs (Avg@4). Detailed
+task descriptions are provided in Appendix A.
+
+where xi,k denotes the context (xi , yi,<k ) for the k-th token.
+4.3. Theory: Info-Gain as a Necessary Resource
+We summarize two key results proving that our turn-level
+info-gain reward is a rigorous measure of information
+progress. Full proofs are provided in Appendix B.
+Theorem 1 (Equivalence to Mutual Information). Let Ht
+be the interaction history, Ot the feedback, and At+1 the
+subsequent action. Defining the marginal
+policy πθ (· |
+
+Ht ) ≜ EOt ∼P (·|Ht ) πθ (· | Ht , Ot ) , the turn-level infogain reward rtinfo defined in Eq. 2 satisfies:
+E[rtinfo ] = Iθ (Ot ; At+1 | Ht ).
+Theorem 1 equates the info-gain reward to the conditional
+mutual information between feedback and actions, formalizing the directed information flow that drives decisions.
+
+Baselines. We compare InfoPO against the following
+baselines: (i) UserRL (Qian et al., 2025c), a representative user-centric multi-turn training framework. We adopt
+its strongest Equalized/R2G setting, which applies lengthnormalized rewards (Equalized) and future-reward-based advantage estimation (R2G) to the entire interaction sequence.
+
+Theorem 2 (Necessity for Task Success). Consider a task
+with a hidden intent Z ∼ Unif([M ]) and a terminal reward Rext = I[Ẑ = Z]. Achieving a success probability
+5
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+Table 1. Experimental results on UserGym, ColBench, and τ 2 -Bench. The grey rows represent our proposed method and its ablation
+versions. Best and second-best results are marked within each model group (Closed-Source/Qwen2.5/Qwen3). Environment abbreviations:
+Func.: FunctionGym, Pers.: PersuadeGym, Inten.: IntentionGym, Tele.: TelepathyGym, Telec.: Telecom, Air.: Airline. Succ. denotes
+Success rate.
+τ 2 -Bench
+Retail
+Air.
+
+Travel
+
+Func.
+
+Pers.
+
+UserGym
+Tau
+Turtle
+
+Search
+
+Inten.
+
+Tele.
+
+ColBench
+Pass Succ.
+
+Telec.
+
+Closed-Source Model
+Prompting
+Gemini-3-Flash
+Prompting
+GPT-4.1
+Prompting
+GPT-4o-mini
+
+0.574
+0.554
+0.596
+
+0.423
+0.051
+0.089
+
+0.695
+0.599
+0.683
+
+0.167
+0.109
+0.091
+
+0.153
+0.267
+0.117
+
+0.968
+0.480
+0.568
+
+1.718
+1.867
+1.277
+
+0.829
+0.732
+0.512
+
+0.515
+0.529
+0.463
+
+0.382
+0.403
+0.342
+
+0.469
+0.388
+0.113
+
+0.619
+0.544
+0.400
+
+0.558
+0.400
+0.175
+
+0.621
+0.533
+0.417
+
+Qwen2.5-7B-Instruct
+Prompting
+Qwen2.5
+Prompting
+ReAct
+Prompting
+Reflexion
+RL Training RAGEN
+RL Training Search-R1
+RL Training UserRL
+RL Training InfoPO w/o std
+RL Training InfoPO w/o Gate
+RL Training InfoPO w/o Rext
+RL Training InfoPO (Ours)
+
+0.441
+0.452
+0.445
+0.538
+0.565
+0.546
+0.565
+0.542
+0.485
+0.588
+
+0.026
+0.064
+0.052
+0.124
+0.113
+0.115
+0.142
+0.125
+0.055
+0.167
+
+0.289
+0.325
+0.312
+0.548
+0.412
+0.444
+0.498
+0.465
+0.352
+0.535
+
+0.000
+0.037
+0.022
+0.000
+0.043
+0.048
+0.035
+0.082
+0.035
+0.091
+
+0.062
+0.078
+0.074
+0.148
+0.154
+0.152
+0.065
+0.042
+0.015
+0.178
+
+0.376
+0.354
+0.364
+0.446
+0.435
+0.429
+0.455
+0.432
+0.385
+0.480
+
+1.254
+1.378
+1.320
+1.815
+1.805
+1.826
+1.845
+1.810
+1.450
+1.892
+
+0.292
+0.316
+0.305
+0.416
+0.416
+0.424
+0.452
+0.465
+0.325
+0.488
+
+0.242
+0.238
+0.276
+0.449
+0.457
+0.436
+0.395
+0.466
+0.285
+0.534
+
+0.140
+0.135
+0.168
+0.348
+0.352
+0.327
+0.298
+0.368
+0.342
+0.426
+
+0.144
+0.131
+0.138
+0.175
+0.156
+0.138
+0.169
+0.150
+0.112
+0.181
+
+0.131
+0.138
+0.131
+0.175
+0.150
+0.169
+0.162
+0.156
+0.125
+0.188
+
+0.075
+0.100
+0.075
+0.150
+0.100
+0.075
+0.125
+0.100
+0.088
+0.163
+
+0.267
+0.288
+0.283
+0.410
+0.397
+0.395
+0.400
+0.400
+0.312
+0.455
+
+Qwen3-4B
+Prompting
+Prompting
+Prompting
+RL Training
+RL Training
+RL Training
+RL Training
+RL Training
+RL Training
+RL Training
+
+0.277
+0.279
+0.291
+0.477
+0.482
+0.538
+0.512
+0.548
+0.352
+0.589
+
+0.026
+0.053
+0.045
+0.104
+0.103
+0.095
+0.102
+0.085
+0.045
+0.115
+
+0.452
+0.476
+0.474
+0.511
+0.425
+0.507
+0.518
+0.482
+0.385
+0.556
+
+0.006
+0.005
+0.035
+0.006
+0.059
+0.053
+0.075
+0.062
+0.032
+0.097
+
+0.071
+0.147
+0.124
+0.117
+0.113
+0.121
+0.118
+0.115
+0.088
+0.154
+
+0.444
+0.435
+0.438
+0.714
+0.702
+0.697
+0.795
+0.758
+0.425
+0.849
+
+1.660
+1.782
+1.717
+1.572
+1.711
+1.732
+1.812
+1.765
+1.512
+1.862
+
+0.488
+0.454
+0.501
+0.488
+0.412
+0.520
+0.485
+0.460
+0.382
+0.542
+
+0.272
+0.269
+0.303
+0.479
+0.467
+0.468
+0.498
+0.475
+0.345
+0.553
+
+0.153
+0.145
+0.184
+0.361
+0.355
+0.342
+0.395
+0.372
+0.285
+0.439
+
+0.106
+0.094
+0.100
+0.137
+0.118
+0.100
+0.142
+0.131
+0.095
+0.156
+
+0.225
+0.225
+0.200
+0.231
+0.234
+0.163
+0.215
+0.198
+0.152
+0.244
+
+0.062
+0.088
+0.075
+0.088
+0.088
+0.075
+0.088
+0.075
+0.055
+0.100
+
+0.326
+0.342
+0.345
+0.407
+0.405
+0.416
+0.443
+0.425
+0.319
+0.481
+
+Type
+
+Method
+
+Qwen3
+ReAct
+Reflexion
+RAGEN
+Search-R1
+UserRL
+InfoPO w/o std
+InfoPO w/o Gate
+InfoPO w/o Rext
+InfoPO (Ours)
+
+(ii) RAGEN (Wang et al., 2025), which focuses on training
+stability through variance-based trajectory filtering and decoupled clipping. (iii) Search-R1 (Jin et al., 2025), which
+optimizes search-based reasoning via retrieved-token masking. (iv) ReAct (Yao et al., 2022) and Reflexion (Shinn
+et al., 2023), serving as non-training prompting baselines to
+quantify the necessity of policy optimization.
+
+Avg
+
+tails are provided in the Appendix B.1. And we also discuss
+the compute overhead of the counterfactual evaluation in
+Appendix B.2; in our runs, the wall-clock cost is generally
+below 2× (around 1.63× on average).
+5.2. RQ1: Overall Performance
+Table 1 summarizes the final performance across three interactive benchmarks. On the Qwen2.5-7B-Instruct backbone,
+InfoPO achieves the strongest overall results among opensource RL baselines. In UserGym, InfoPO improves upon
+the strongest baseline in 7 out of 8 sub-environments, with
+particularly significant gains in cross-purpose generalization settings that require resolving underspecified goals (e.g.,
+Search: 0.480 vs. 0.446; Intention: 1.892 vs. 1.826; Telepathy: 0.488 vs. 0.424). For code-centric tasks in ColBench,
+InfoPO yields clear improvements on both technical metrics
+(Pass: 0.534 vs. 0.457; Success: 0.426 vs. 0.352), slightly
+exceeding the performance of GPT-4.1 (0.529/0.403).
+
+Training details. We use Qwen2.5-7B-Instruct (Qwen
+et al., 2025) and Qwen-3-4B (Yang et al., 2025a) as our
+base models. To evaluate the agent’s intrinsic capacity to
+discover interaction strategies purely from reinforcement
+signals, all RL training is conducted directly without any
+SFT cold-start. We use group-based rollouts with n=5 samples per prompt. For multi-turn interaction, we cap the
+maximum number of turns to 16/10/50 for UserRL, ColBench, and τ 2 -Bench, respectively. We set the batch size
+to 64/64/32 for UserGym, ColBench, and τ 2 -Bench, and
+use a maximum rollout sequence length of 32,768 tokens.
+Across all benchmarks, we use GPT-4o-mini (Hurst et al.,
+2024) (temperature 0.7) as the default user simulator to balance high-fidelity interaction with computational efficiency
+and API throughput requirements. We follow the official
+train/test splits provided by each benchmark for both training and evaluation. All experiments are conducted on 4×
+NVIDIA A800 GPUs (80GB). Other hyperparameter de-
+
+The superior efficiency of InfoPO is directly attributable
+to its improved credit assignment under non-informative
+feedback. As shown in Table 2, a significant portion of rollout groups exhibits zero outcome variance during the initial
+training phase (31.3%–38.4% in UserGym/ColBench, and
+up to 76.3% in τ 2 -Bench). While standard group-relative
+
+6
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+InfoPO
+UserRL
+RAGEN
+Search-R1
+
+0.20
+0.5
+
+Reward
+
+Reward
+
+0.35
+0.30
+
+0.18
+
+0.4
+InfoPO
+UserRL
+RAGEN
+Search-R1
+
+0.3
+
+0.25
+
+0.2
+
+0.20
+
+0
+
+20
+
+InfoPO
+UserRL
+RAGEN
+Search-R1
+
+0.22
+
+0.6
+
+Reward
+
+0.40
+
+40
+
+60
+
+Training Steps
+
+80
+
+100
+
+0
+
+50
+
+(a) UserGym
+
+100
+
+150
+
+Training Steps
+
+200
+
+250
+
+0.16
+0.14
+0.12
+0.10
+0
+
+300
+
+10
+
+20
+
+30
+
+Training Steps
+
+40
+
+50
+
+(c) τ 2 -Bench
+
+(b) ColBench
+
+Figure 3. Extrinsic reward curves during training on (a) UserGym, (b) ColBench, and (c) τ 2 -Bench. Solid lines and shaded regions
+represent mean ± std across three seeds.
+
+advantages become brittle or provide near-zero gradients in
+these scenarios, InfoPO’s info-gain reward serves as a dense
+training scaffold to bootstrap policy improvement. Consistent with this, the training dynamics in Figure 3 demonstrate
+that InfoPO initiates optimization earlier and reaches higher
+reward levels with reduced oscillations compared to baselines. Qualitative inspection of interaction traces (see Figure
+12, 13 and 14 in Appendix D) reveals that InfoPO-trained
+agents exhibit structured and proactive strategies, such as
+resolving intent ambiguity through early-turn clarification,
+reflecting a form of behavioral maturation.
+
+ing stability, manifested as larger best-to-final regression
+∆bf and higher collapse probability Pcr , validating that the
+gate is important for preventing late-stage objective drift
+when the policy transitions from early uncertainty reduction
+to outcome refinement. Finally, removing standardization
+(w/o std) degrades both performance and interaction behavior: it not only lowers Jf but also increases length sensitivity
+(higher |ρL,r |), indicating that group-relative normalization
+is critical for stabilizing turn-level credit assignment and
+preventing the information advantage from being dominated
+by a small number of high-magnitude but noisy turns.
+
+Table 2. Percentage of rollout groups with zero outcome variance
+during the initial training phase.
+UserGym
+
+ColBench
+
+τ 2 -Bench
+
+0.384
+0.421
+
+0.313
+0.345
+
+0.763
+0.812
+
+Qwen2.5-7B-Inst.
+Qwen3-4B
+
+Metric Score
+
+Model
+
+InfoPO
+
+1.00
+
+w/o DG
+
+w/o std
+
+0.75
+0.50
+0.25
+
+2
+
+On the long-horizon τ -Bench, InfoPO maintains its competitiveness by matching or improving upon the best opensource baselines across all task families (Telecom: 0.181;
+Retail: 0.188; Air: 0.150). Considering τ 2 -Bench’s extreme interaction horizon (often > 30 turns) and severe data
+scarcity (only 178 tasks), the steady improvement from a
+base instruction model validates InfoPO’s effectiveness.
+
+0.00
+
+Jf
+
+1
+
+bf
+
+1 Pcr 1 T/Tmax 1 L/Lmax 1 | L, r|
+
+5.3. RQ2: InfoPO Mechanism Analysis
+
+Figure 4. Mechanism diagnostics under ablations (aggregated
+across tasks). Jf denotes final extrinsic performance; ∆bf is the
+best-to-final drop (late-training instability); Pcr is the probability
+of training collapse; T̄ and L̄ are the average interaction turns
+and response length; and ρL,r is the correlation between response
+length and extrinsic reward (a proxy for length-based reward hacking). All metrics are converted to “higher-is-better” scores in the
+figure; formal definitions are in Appendix A.
+
+Ablations. To isolate the contributions of InfoPO’s core
+designs, we evaluate three variants: InfoPO w/o Rext
+(pure information gain), w/o Gate (fixed weighting without
+variance-based gating), and w/o std (removing info-gain
+normalization). Table 1 and Figure 4 summarize final performance (Jf ) together with stability and interaction diagnostics (e.g., ∆bf , Pcr , and length-related statistics; see
+Appendix A.4 for formal definitions). Removing extrinsic
+supervision (w/o Rext ) leads to a consistent and substantial
+drop across nearly all tasks, underscoring that information
+seeking alone is insufficient without task-level grounding.
+Disabling dynamic gating (w/o Gate) primarily hurts train-
+
+Interaction Dynamics. A primary concern in multiobjective RL is whether information rewards merely incentivize longer, more repetitive interactions. To investigate
+this, we track interaction turns and response lengths throughout training (Figure 5a). In UserGym and ColBench, InfoPO
+exhibits an emergent “explore-then-consolidate” pattern: it
+temporarily increases the number of turns in early training
+to reduce intent uncertainty, while steadily shortening each
+turn’s response length. In contrast, baselines like UserRL
+monotonically shrink both turns and length from the start, often collapsing to ”short-horizon” behaviors that prematurely
+7
+
+2.75
+240
+2.50
+220
+
+2.25
+0
+
+20
+
+40
+
+60
+
+Training Progress (%)
+
+80
+
+100
+
+0.06
+0.04
+0.02
+16
+
+31
+
+46
+
+61
+
+Info-Gain Reward
+
+0.08
+
+1
+
+Reward
+Ratio
+
+0.00
+
+Training Step
+
+0.11
+0.10
+
+0.25
+
+0.09
+
+0.20
+
+0.08
+
+0.15
+
+0.07
+
+Figure 6. Heatmap of turn-level info-gain rewards during training.
+Info-Gain Ratio
+
+3.00
+
+UserGym
+ColBench
+
+0.30
+
+3.25
+
+280
+260
+
+0.10
+
+0.35
+
+3.50
+
+Turns
+
+Response Length
+
+300
+
+Res Len
+Turns
+
+Info-Gain Reward
+
+InfoPO
+UserRL
+
+Turn ID
+
+commit to actions without sufficient information. Figure
+5b further reveals that while the absolute info-gain signal
+increases as the agent becomes more inquisitive, its relative
+contribution to the final advantage decreases via the variance gate. This confirms that InfoPO utilizes interaction
+as a strategic resource—expanding it only when necessary
+to acquire task-critical information and consolidating into
+efficient execution as outcome-based learning takes over.
+
+0 1 2 3 4 5 6 7 8 9 1011
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+distribution shift, especially when sampled trajectories contain low-quality actions. We therefore analyze τ 2 -Bench,
+the most failure-prone benchmark due to its long horizon,
+tool use, and sparse rewards. We label each action as good,
+meaningless, or informative failure, and measure the observation sensitivity that defines rtinfo . Good next actions are
+substantially more sensitive to the observation than meaningless ones (0.275 vs. 0.098; tool calls only: 0.553 vs. 0.110).
+When grouping by the current action, good actions also
+induce much higher next-step sensitivity than meaningless
+actions (mean 0.380 vs. 0.017). These results suggest that
+useful transitions naturally receive stronger counterfactual
+credit, while uninformative actions receive little signal. Full
+definitions, statistical tests, and transition plots are provided
+in Appendix B.5.
+
+0.06
+
+0.10
+0
+
+20
+
+40
+
+60
+
+Training Progress (%)
+
+80
+
+100
+
+(a) Turns vs. Response Length (b) Info-gain Reward Dynamics
+Figure 5. Interaction dynamics and reward signals. (a) Turns vs.
+response length; (b) Absolute info-gain (solid) and its advantage
+contribution ratio (dashed). See Appendix B.4 for more results.
+
+Interestingly, in the high-horizon τ 2 -Bench domain (up to
+50 turns), InfoPO shifts toward a ”pruning-first” strategy,
+with both interaction turns and response lengths decreasing
+from the onset of training (see Appendix B.4 for detailed
+curves). Unlike the shorter tasks in UserGym, the base
+model’s initial trajectories in τ 2 -Bench are already excessively redundant due to the environment’s complexity. In
+this regime, InfoPO’s turn-level credit assignment immediately identifies and penalizes non-informative actions, directing the policy toward more concise and goal-oriented
+behaviors without the need for an initial exploration expansion. This context-aware behavior demonstrates that InfoPO
+adaptively modulates interaction depth based on the inherent
+difficulty and information density of the task environment.
+
+Reward-hacking analysis. Another concern is that an
+intrinsic information reward may encourage generic openended questions that elicit long but task-irrelevant responses.
+We test this by comparing targeted clarifications (questions about predefined task-relevant fields or diagnostic
+slots) with generic open questions. Under InfoPO, the
+top-10% high-rinfo turns are much more concentrated on
+targeted clarifications than generic open questions (58.8%
+vs. 12.4%). The correlation between response length and
+rinfo is weak (0.157), and a length-matched comparison still
+favors targeted clarifications. In contrast, removing the variance gate makes generic open questions much more frequent
+and increases both interaction length and response length.
+This supports the role of variance-gated fusion in keeping
+information seeking aligned with task-relevant uncertainty
+reduction. Detailed results are reported in Appendix B.6.
+
+Per-turn credit assignment. Figure 6 shows the distribution of the info-gain reward over turns during training
+on UserGym, averaged over valid turns at each step. Early
+on, rewards are spread across the dialogue; as training progresses, they concentrate on the first few turns, indicating an
+emergent “clarify-then-act” behavior. Specifically, successful policies learn to place the most discriminative questions
+at the beginning to elicit high-information feedback, after
+which intrinsic rewards naturally decay as the agent executes
+a specified task. This trend is not imposed by any heuristic:
+under our counterfactual objective, a turn is rewarded only
+when the observed feedback induces a measurable shift in
+the policy’s subsequent decision distribution. Consequently,
+InfoPO learns where to ask rather than simply to ask more,
+yielding a self-organized progression that prioritizes early
+uncertainty reduction as a precursor to task success.
+
+5.4. RQ3: Generalization
+Environment generalization. To evaluate whether InfoPO generalizes beyond user-centric environments, we
+conduct experiments on Sokoban and WebShop following the protocols in RAGEN. Sokoban is a multi-turn task
+requiring planning in a grid-world environment, while WebShop requires grounding in a realistic web interface. Using Qwen2.5-1.5B-Instruct as the base model, we observe
+
+Trajectory-quality diagnostics. A natural concern is
+whether the counterfactual signal only measures arbitrary
+8
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+that InfoPO successfully mitigates the “Echo Trap” failure
+mode – a common collapse in standard GRPO where policies regress to repetitive, locally-rewarded templates once
+rollout groups fail to reach the goal (Wang et al., 2025). As
+shown in Figure 7, InfoPO maintains a stable upward trend
+in success rate where baselines collapse. This demonstrates
+that InfoPO’s effectiveness goes beyond specific user-centric
+scenarios, framing general multi-turn interaction as a fundamental process of active uncertainty reduction.
+0.25
+
+InfoPO
+GRPO
+
+0.5
+
+0.15
+0.10
+0.05
+0.00
+
+6. Conclusion
+We introduced InfoPO, an information-driven policy optimization method for user-centric multi-turn agents that
+treats interaction as active uncertainty reduction. InfoPO
+provides dense, turn-level credit assignment by measuring how each observation counterfactually changes the
+policy’s next-action distribution, and keeps this intrinsic
+signal aligned with task success via a variance-gated fusion with outcome advantages. This yields a task-agnostic
+yet scalable learning signal for long-horizon interaction
+where group-relative updates often stall under sparse or
+non-discriminative rewards. Across three interactive benchmarks, InfoPO consistently improves performance, sample
+efficiency, and training stability over strong prompting and
+RL baselines, and further generalizes to user-simulator shifts
+and non-user environment interaction tasks.
+
+InfoPO
+GRPO
+
+0.6
+
+Success Rate
+
+Success Rate
+
+0.20
+
+hallucination), which stronger simulators follow more faithfully and can therefore make tasks harder.
+
+0.4
+0.3
+0.2
+0.1
+
+0
+
+20
+
+40
+
+Steps
+
+60
+
+80
+
+100
+
+(a) Sokoban
+
+0.0
+
+0
+
+20
+
+40
+
+Steps
+
+60
+
+80
+
+100
+
+(b) Webshop
+
+Figure 7. Success rates on environment-interactive tasks. InfoPO
+maintains a stable upward learning trend on Sokoban and WebShop, demonstrating its robust generalization beyond user-centric
+scenarios.
+
+Impact Statement
+InfoPO improves the reliability of user-facing AI agents
+by encouraging them to ask clarification questions before
+taking action. This may help reduce errors in multi-turn
+interactions, but more capable agents may also raise privacy
+and safety concerns if they infer sensitive information or
+misunderstand user intent. We believe such systems should
+be deployed with appropriate safeguards and user oversight.
+Our experiments are conducted only in simulated benchmark environments.
+
+User generalization. Since all training runs use GPT-4omini as the simulated user for cost efficiency, we further
+examine whether InfoPO’s performance is sensitive to the
+user employed at test time. We evaluate InfoPO (Qwen-2.57B) under three user configurations: (Base) GPT-4o-mini
+with the official benchmark prompt; (Optimized Prompt,
+OP) the same model using constrained instructions to enforce protocol compliance and minimize unforced errors
+in consistency or tool-call execution. (See Appendix E for
+prompts); and (Optimized Model, OM) a stronger model,
+GPT-4.1, using the official prompt. We report the average
+scores across all metrics for each benchmark in Table 3.
+
+References
+Acikgoz, E. C., Oh, J., Hao, J., Jeon, J. H., Ji, H., HakkaniTür, D., Tur, G., Li, X., Ma, C., and Fan, X. Speakrl:
+Synergizing reasoning, speaking, and acting in language
+models with reinforcement learning. arXiv preprint
+arXiv:2512.13159, 2025.
+
+Table 3. Comparison of different simulated users at test time.
+Base uses GPT-4o-mini with default prompts, OP uses optimized
+prompts, and OM uses a stronger model (GPT-4.1).
+User
+Base
+Optim. Prompt (OP)
+Optim. Model (OM)
+
+UserGym
+
+ColBench
+
+τ 2 -Bench
+
+0.552
+0.563
+0.558
+
+0.480
+0.483
+0.502
+
+0.173
+0.203
+0.215
+
+Afzoon, S., Naseem, U., Beheshti, A., and Jamali, Z.
+Persobench: Benchmarking personalized response generation in large language models. arXiv preprint
+arXiv:2410.03198, 2024.
+
+Overall, stronger user simulators yield consistent but taskdependent effects. OM brings the largest gains on τ 2 -Bench,
+where coordination over tool calls is critical and user mistakes can cause failures unrelated to the agent policy. ColBench shows smaller yet generally positive improvements,
+suggesting moderate sensitivity to user reliability. In contrast, UserGym shows mixed effects, consistent with its
+design that enforces realistic user behaviors (e.g., progressive disclosure, resistance to persuasion, and strict non-
+
+Barres, V., Dong, H., Ray, S., Si, X., and Narasimhan, K.
+Tau2-bench: Evaluating conversational agents in a dualcontrol environment. arXiv preprint arXiv:2506.07982,
+2025.
+Bernstein, D. S., Givan, R., Immerman, N., and Zilberstein,
+S. The complexity of decentralized control of markov
+decision processes. Mathematics of operations research,
+27(4):819–840, 2002.
+9
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+Budzianowski, P., Wen, T.-H., Tseng, B.-H., Casanueva,
+I., Ultes, S., Ramadan, O., and Gasic, M. Multiwoz-a
+large-scale multi-domain wizard-of-oz dataset for taskoriented dialogue modelling. In Proceedings of the 2018
+conference on empirical methods in natural language
+processing, pp. 5016–5026, 2018.
+
+Jin, B., Zeng, H., Yue, Z., Yoon, J., Arik, S., Wang, D.,
+Zamani, H., and Han, J. Search-r1: Training llms to
+reason and leverage search engines with reinforcement
+learning. arXiv preprint arXiv:2503.09516, 2025.
+Khalifa, M., Agarwal, R., Logeswaran, L., Kim, J., Peng, H.,
+Lee, M., Lee, H., and Wang, L. Process reward models
+that think. arXiv preprint arXiv:2504.16828, 2025.
+
+Burda, Y., Edwards, H., Storkey, A., and Klimov, O. Exploration by random network distillation. arXiv preprint
+arXiv:1810.12894, 2018.
+
+Kim, Y.-H. A coding theorem for a class of stationary channels with feedback. IEEE Transactions on Information
+Theory, 54(4):1488–1499, 2008.
+
+Cai, S., Fang, R., Wu, J., Li, B., Wang, X., Jiang, Y., Su, L.,
+Zhang, L., Yin, W., Zhang, Z., et al. Autoforge: Automated environment synthesis for agentic reinforcement
+learning. arXiv preprint arXiv:2512.22857, 2025.
+
+Klyubin, A. S., Polani, D., and Nehaniv, C. L. Empowerment: A universal agent-centric measure of control. In
+2005 ieee congress on evolutionary computation, volume 1, pp. 128–135. IEEE, 2005.
+
+Chen, M., Sun, R., Pfister, T., and Arık, S. Ö. Learning to
+clarify: Multi-turn conversations with action-based contrastive self-training. arXiv preprint arXiv:2406.00222,
+2024.
+
+Kong, F., Huang, Y., Zhu, S.-C., Qi, S., and Feng, X. Learning to balance altruism and self-interest based on empathy
+in mixed-motive games. Advances in Neural Information
+Processing Systems, 37:135819–135842, 2024.
+
+Clark, H. H. and Brennan, S. E. Grounding in communication. 1991.
+
+Kong, F., Zhang, X., Chen, X., Yang, Y., Zhu, S.-C., and
+Feng, X. Enhancing llm-based social bot via an adversarial learning framework. In Proceedings of the 2025
+Conference on Empirical Methods in Natural Language
+Processing, pp. 23246–23271, 2025.
+
+Deng, M., Huang, L., Fan, Y., Zhang, J., Ren, F., Bai, J.,
+Yang, F., Miao, D., Yu, Z., Wu, Y., et al. Interactcomp:
+Evaluating search agents with ambiguous queries. arXiv
+preprint arXiv:2510.24668, 2025.
+
+Li, B., Luo, Y., Chai, C., Li, G., and Tang, N. The dawn of
+natural language to SQL: are we fully ready? [experiment,
+analysis & benchmark ]. Proc. VLDB Endow., 17(11):
+3318–3331, 2024.
+
+Dong, G., Bao, L., Wang, Z., Zhao, K., Li, X., Jin, J.,
+Yang, J., Mao, H., Zhang, F., Gai, K., et al. Agentic
+entropy-balanced policy optimization. arXiv preprint
+arXiv:2510.14545, 2025a.
+
+Li, B., Chen, C., Xue, Z., Mei, Y., and Luo, Y. Deepeye-sql:
+A software-engineering-inspired text-to-sql framework.
+CoRR, abs/2510.17586, 2025a.
+
+Dong, G., Mao, H., Ma, K., Bao, L., Chen, Y., Wang,
+Z., Chen, Z., Du, J., Wang, H., Zhang, F., et al.
+Agentic reinforced policy optimization. arXiv preprint
+arXiv:2507.19849, 2025b.
+
+Li, B., Zhang, J., Fan, J., Xu, Y., Chen, C., Tang, N., and
+Luo, Y. Alpha-sql: Zero-shot text-to-sql using monte
+carlo tree search. In ICML. OpenReview.net, 2025b.
+
+Feng, L., Xue, Z., Liu, T., and An, B. Group-in-group
+policy optimization for llm agent training. arXiv preprint
+arXiv:2505.10978, 2025.
+He, M., Kumar, A., Mackey, T., Rajeev, M., Zou, J., and Rajani, N. Impatient users confuse ai agents: High-fidelity
+simulations of human traits for testing agents. arXiv
+preprint arXiv:2510.04491, 2025.
+
+Li, C., SHI, Y., Wang, C., Duan, Q., RUAN, R., Huang, W.,
+Long, H., Huang, L., Tang, N., and Luo, Y. Time travel
+is cheating: Going live with deepfund for real-time fund
+investment benchmarking. In The Thirty-ninth Annual
+Conference on Neural Information Processing Systems
+Datasets and Benchmarks Track, 2025c. URL https:
+//openreview.net/forum?id=SXADEhZ0sl.
+
+Hong, P. and Roth, B. Do llm self-explanations help users
+predict model behavior? evaluating counterfactual simulatability with pragmatic perturbations. arXiv preprint
+arXiv:2601.03775, 2026.
+
+Li, Y., Inan, H. A., Yue, X., Chen, W.-N., Wutschitz, L.,
+Kulkarni, J., Poovendran, R., Sim, R., and Rajmohan,
+S. Simulating environments with reasoning models for
+agent training. arXiv preprint arXiv:2511.01824, 2025d.
+
+Hurst, A., Lerer, A., Goucher, A. P., Perelman, A., Ramesh,
+A., Clark, A., Ostrow, A., Welihinda, A., Hayes, A.,
+Radford, A., et al. Gpt-4o system card. arXiv preprint
+arXiv:2410.21276, 2024.
+
+Li, Y., Shen, X., Yao, X., Ding, X., Miao, Y., Krishnan,
+R., and Padman, R. Beyond single-turn: A survey on
+multi-turn interactions with large language models. arXiv
+preprint arXiv:2504.04717, 2025e.
+10
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+Lin, X., Qi, Y., Zhu, Y., Palpanas, T., Chai, C., Tang, N.,
+and Luo, Y. LEAD: iterative data selection for efficient
+LLM instruction tuning. CoRR, abs/2505.07437, 2025.
+
+Qian, C., Liu, Z., Prabhakar, A., Liu, Z., Zhang, J., Chen,
+H., Ji, H., Yao, W., Heinecke, S., Savarese, S., et al.
+Userbench: An interactive gym environment for usercentric agents. arXiv preprint arXiv:2507.22034, 2025b.
+
+Liu, B., Li, X., Zhang, J., Wang, J., He, T., Hong, S., Liu,
+H., Zhang, S., Song, K., Zhu, K., et al. Advances and
+challenges in foundation agents: From brain-inspired intelligence to evolutionary, collaborative, and safe systems.
+arXiv preprint arXiv:2504.01990, 2025a.
+
+Qian, C., Liu, Z., Prabhakar, A., Qiu, J., Liu, Z., Chen, H.,
+Kokane, S., Ji, H., Yao, W., Heinecke, S., et al. Userrl:
+Training interactive user-centric agent via reinforcement
+learning. arXiv preprint arXiv:2509.19736, 2025c.
+Qin, X., Luo, Y., Tang, N., and Li, G. Making data visualization more efficient and effective: a survey. VLDB J.,
+29(1):93–117, 2020.
+
+Liu, S.-Y., Dong, X., Lu, X., Diao, S., Belcak, P., Liu,
+M., Chen, M.-H., Yin, H., Wang, Y.-C. F., Cheng, K.-T.,
+et al. Gdpo: Group reward-decoupled normalization policy optimization for multi-reward rl optimization. arXiv
+preprint arXiv:2601.05242, 2026.
+
+Qwen, :, Yang, A., Yang, B., Zhang, B., Hui, B., Zheng,
+B., Yu, B., Li, C., Liu, D., Huang, F., Wei, H., Lin, H.,
+Yang, J., Tu, J., Zhang, J., Yang, J., Yang, J., Zhou, J.,
+Lin, J., Dang, K., Lu, K., Bao, K., Yang, K., Yu, L.,
+Li, M., Xue, M., Zhang, P., Zhu, Q., Men, R., Lin, R.,
+Li, T., Tang, T., Xia, T., Ren, X., Ren, X., Fan, Y., Su,
+Y., Zhang, Y., Wan, Y., Liu, Y., Cui, Z., Zhang, Z., and
+Qiu, Z. Qwen2.5 technical report, 2025. URL https:
+//arxiv.org/abs/2412.15115.
+
+Liu, X., Shen, S., Li, B., Ma, P., Jiang, R., Zhang, Y., Fan, J.,
+Li, G., Tang, N., and Luo, Y. A survey of text-to-sql in the
+era of llms: Where are we, and where are we going? IEEE
+Trans. Knowl. Data Eng., 37(10):5735–5754, 2025b.
+Luo, Y., Qin, X., Tang, N., and Li, G. Deepeye: Towards automatic data visualization. In ICDE, pp. 101–112. IEEE
+Computer Society, 2018.
+Ma, Q., Zhou, H., Liu, T., Yuan, J., Liu, P., You, Y., and
+Yang, H. Let’s reward step by step: Step-level reward
+model as the navigators for reasoning. arXiv preprint
+arXiv:2310.10080, 2023.
+
+Ruan, J., Xu, Z., Peng, Y., Ren, F., Yu, Z., Liang, X., Xiang, J., Chen, Y., Liu, B., Wu, C., Luo, Y., and Zhang,
+J. Aorchestra: Automating sub-agent creation for agentic orchestration, 2026. URL https://arxiv.org/
+abs/2602.03786.
+
+Massey, J. et al. Causality, feedback and directed information. In Proc. Int. Symp. Inf. Theory Applic.(ISITA-90),
+volume 2, pp. 1, 1990.
+
+Salemi, A. and Zamani, H. Lamp-qa: A benchmark for personalized long-form question answering. arXiv preprint
+arXiv:2506.00137, 2025.
+
+Mohamed, S. and Jimenez Rezende, D. Variational information maximisation for intrinsically motivated reinforcement learning. Advances in neural information
+processing systems, 28, 2015.
+
+Salemi, A., Mysore, S., Bendersky, M., and Zamani, H.
+Lamp: When large language models meet personalization. In Proceedings of the 62nd Annual Meeting of
+the Association for Computational Linguistics (Volume 1:
+Long Papers), pp. 7370–7392, 2024.
+
+Norman, D. A. Cognitive engineering. In User centered
+system design, pp. 31–62. CRC Press, 1986.
+
+Setlur, A., Nagpal, C., Fisch, A., Geng, X., Eisenstein, J.,
+Agarwal, R., Agarwal, A., Berant, J., and Kumar, A. Rewarding progress: Scaling automated process verifiers for
+llm reasoning. arXiv preprint arXiv:2410.08146, 2024.
+
+Pathak, D., Agrawal, P., Efros, A. A., and Darrell, T.
+Curiosity-driven exploration by self-supervised prediction. In International conference on machine learning,
+pp. 2778–2787. PMLR, 2017.
+
+Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang,
+H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language
+models. arXiv preprint arXiv:2402.03300, 2024.
+
+Qian, C., He, B., Zhuang, Z., Deng, J., Qin, Y., Cong, X.,
+Zhang, Z., Zhou, J., Lin, Y., Liu, Z., et al. Tell me more!
+towards implicit user intention understanding of language
+model driven agents. arXiv preprint arXiv:2402.09205,
+2024.
+
+Sheng, Y., Huang, Y., Liu, S., Zhang, H., and Zeng, A. Espo:
+Entropy importance sampling policy optimization. arXiv
+preprint arXiv:2512.00499, 2025.
+
+Qian, C., Acikgoz, E. C., He, Q., Wang, H., Chen, X.,
+Hakkani-Tür, D., Tur, G., and Ji, H. Toolrl: Reward is
+all tool learning needs. arXiv preprint arXiv:2504.13958,
+2025a.
+
+Shinn, N., Cassano, F., Gopinath, A., Narasimhan, K., and
+Yao, S. Reflexion: Language agents with verbal reinforcement learning. Advances in Neural Information
+Processing Systems, 36:8634–8652, 2023.
+11
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+Sun, W., Zhou, X., Du, W., Wang, X., Welleck, S., Neubig,
+G., Sap, M., and Yang, Y. Training proactive and personalized llm agents. arXiv preprint arXiv:2511.02208,
+2025.
+
+Yang, R., Zhang, Y., Chen, A., Wang, X., Yuan, S., Chen,
+J., Yang, D., and Xiao, Y. Aria: Training language agents
+with intention-driven reward aggregation. arXiv preprint
+arXiv:2506.00539, 2025b.
+
+Wang, G., Dai, S., Ye, G., Gan, Z., Yao, W., Deng, Y.,
+Wu, X., and Ying, Z. Information gain-based policy optimization: A simple and effective approach for multi-turn
+search agents. In The Fourteenth International Conference on Learning Representations, 2026.
+
+Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan,
+K. R., and Cao, Y. React: Synergizing reasoning and
+acting in language models. In The eleventh international
+conference on learning representations, 2022.
+Ye, Z., Melo, L. C., Kaddar, Y., Blunsom, P., Staton, S., and
+Gal, Y. Uncertainty-aware step-wise verification with generative reward models. arXiv preprint arXiv:2502.11250,
+2025.
+
+Wang, Z., Wang, K., Wang, Q., Zhang, P., Li, L., Yang, Z.,
+Jin, X., Yu, K., Nguyen, M. N., Liu, L., et al. Ragen:
+Understanding self-evolution in llm agents via multi-turn
+reinforcement learning. arXiv preprint arXiv:2504.20073,
+2025.
+
+Yu, C., Li, P., Wu, H., Wen, Y., Deng, B., and Xiong,
+H. Usm: Unbiased survey modeling for limiting negative user experiences in recommendation systems. arXiv
+preprint arXiv:2412.10674, 2024.
+
+Wei, Q., Zeng, S., Li, C., Brown, W., Frunza, O., Deng, W.,
+Schneider, A., Nevmyvaka, Y., Zhao, Y. K., Garcia, A.,
+and Hong, M. Reinforcing multi-turn reasoning in llm
+agents via turn-level reward design, 2025. URL https:
+//arxiv.org/abs/2505.11821.
+
+Yu, Q., Zhang, Z., Zhu, R., Yuan, Y., Zuo, X., Yue, Y., Dai,
+W., Fan, T., Liu, G., Liu, L., et al. Dapo: An open-source
+llm reinforcement learning system at scale. arXiv preprint
+arXiv:2503.14476, 2025.
+
+Wu, S., Galley, M., Peng, B., Cheng, H., Li, G., Dou, Y.,
+Cai, W., Zou, J., Leskovec, J., and Gao, J. Collabllm:
+From passive responders to active collaborators. arXiv
+preprint arXiv:2502.00640, 2025.
+
+Zhang, G., Geng, H., Yu, X., Yin, Z., Zhang, Z., Tan, Z.,
+Zhou, H., Li, Z., Xue, X., Li, Y., et al. The landscape of
+agentic reinforcement learning for llms: A survey. arXiv
+preprint arXiv:2509.02547, 2025a.
+
+Wu, Y., Yan, L., Shen, L., Wang, Y., Tang, N., and Luo,
+Y. Chartinsights: Evaluating multimodal large language models for low-level chart question answering.
+In EMNLP (Findings), pp. 12174–12200. Association for
+Computational Linguistics, 2024.
+
+Zhang, J., Peng, Y., Kong, F., Yang, C., Wu, Y., Yu, Z., Xiang, J., Ruan, J., Wang, J., Song, M., et al. Autoenv: Automated environments for measuring cross-environment
+agent learning. arXiv preprint arXiv:2511.19304, 2025b.
+
+Wu, Y., Peng, Y., Chen, Y., Ruan, J., Zhuang, Z., Yang, C.,
+Zhang, J., Chen, M., Tseng, Y., Yu, Z., Chen, L., Zhai, Y.,
+Liu, B., Wu, C., and Luo, Y. Autowebworld: Synthesizing infinite verifiable web environments via finite state
+machines, 2026. URL https://arxiv.org/abs/
+2602.14296.
+
+Zhang, S., Dinan, E., Urbanek, J., Szlam, A., Kiela, D., and
+Weston, J. Personalizing dialogue agents: I have a dog,
+do you have pets too? arXiv preprint arXiv:1801.07243,
+2018.
+Zhao, W., Wang, X., Ma, C., Kong, L., Yang, Z., Tuo, M.,
+Shi, X., Zhai, Y., and Cai, X. Mua-rl: Multi-turn userinteracting agent reinforcement learning for agentic tool
+use. arXiv preprint arXiv:2508.18669, 2025a.
+
+Xi, Z., Liao, C., Li, G., Yang, Y., Chen, W., Zhang, Z., Wang,
+B., Jin, S., Zhou, Y., Guan, J., et al. Agentprm: Process
+reward models for llm agents via step-wise promise and
+progress. arXiv preprint arXiv:2511.08325, 2025.
+
+Zhao, Y., Liu, Y., Liu, J., Chen, J., Wu, X., Hao, Y., Lv, T.,
+Huang, S., Cui, L., Ye, Q., et al. Geometric-mean policy
+optimization. arXiv preprint arXiv:2507.20673, 2025b.
+
+Xie, Y., Zhang, Z., Wu, Y., Lu, S., Zhang, J., Yu, Z., Wang,
+J., Hong, S., Liu, B., Wu, C., and Luo, Y. Visjudgebench: Aesthetics and quality assessment of visualizations. CoRR, abs/2510.22373, 2025.
+Xu, Z. and Ding, Z. Single-stream policy optimization.
+arXiv preprint arXiv:2509.13232, 2025.
+
+Zheng, C., Liu, S., Li, M., Chen, X.-H., Yu, B., Gao,
+C., Dang, K., Liu, Y., Men, R., Yang, A., et al.
+Group sequence policy optimization. arXiv preprint
+arXiv:2507.18071, 2025.
+
+Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B.,
+Yu, B., Gao, C., Huang, C., Lv, C., et al. Qwen3 technical
+report. arXiv preprint arXiv:2505.09388, 2025a.
+
+Zhou, Y., Zanette, A., Pan, J., Levine, S., and Kumar, A.
+Archer: Training language model agents via hierarchical
+multi-turn rl. arXiv preprint arXiv:2402.19446, 2024.
+12
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+Zhou, Y., Jiang, S., Tian, Y., Weston, J., Levine, S.,
+Sukhbaatar, S., and Li, X. Sweet-rl: Training multiturn llm agents on collaborative reasoning tasks. arXiv
+preprint arXiv:2503.15478, 2025.
+Zhu, Y., Wang, L., Yang, C., Lin, X., Li, B., Zhou, W., Liu,
+X., Peng, Z., Luo, T., Li, Y., Chai, C., Chen, C., Di, S.,
+Fan, J., Sun, J., Tang, N., Tsung, F., Wang, J., Wu, C., Xu,
+Y., Zhang, S., Zhang, Y., Zhou, X., Li, G., and Luo, Y. A
+survey of data agents: Emerging paradigm or overstated
+hype? CoRR, abs/2510.23587, 2025.
+Zollo, T. P., Siah, A. W. T., Ye, N., Li, A., and Namkoong,
+H. Personalllm: Tailoring llms to individual preferences.
+arXiv preprint arXiv:2409.20296, 2024.
+
+13
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+A. InfoPO Pseudo-Code
+Algorithm 1 outlines the complete training procedure of Information-Driven Policy Optimization (InfoPO). In each training
+iteration, the algorithm first samples a group of G trajectories by interacting with the environment or user simulator up
+to a horizon T (Line 2). For each trajectory, it evaluates the trajectory-level external reward Rext (Line 3). Crucially, the
+turn-level information-gain reward rtinf o is computed via the InfoGainPerTurn function (Lines 4, 11-20). This function
+iterates through each valid turn, comparing the policy’s log-probability of generating the realized next action given the
+factual context (with the real observation ot ) against a counterfactual context where the observation is replaced by a mask
+placeholder ∅.
+After obtaining both reward signals, they are standardized within the rollout group to compute the external advantage Aext
+and the info-gain advantage Ainf o (Lines 5-6). To adaptively balance task completion and information seeking, InfoPO
+calculates a variance-based gate g (Line 7), which amplifies the influence of the info-gain advantage when the standard
+deviation of external rewards within the group is small (i.e., when feedback is sparse or non-discriminative). Finally, the
+unified token-level advantage Â is computed, broadcast to the corresponding response tokens, and used to update the policy
+πθ via a standard PPO clipped objective, regularized by a KL-divergence penalty against the reference model πref (Lines
+8-9).
+Algorithm 1 I NFO PO
+Require: policy πθ , reference πref , env E; group size G, horizon T ; mask placeholder ∅, weight β, gate temperature τ ,
+PPO clip ϵ
+1: for each iteration do
+2:
+Sample G trajectories {τi }G
+i=1 of T turns from πθ in E, record turn boundaries.
+3:
+Riext ← ScoreExt(τi )
+info T
+4:
+{ri,t
+}t=1 ← InfoGainPerTurn(τi , πθ , πref , ∅)
+ext
+5:
+A ← GroupNormExt({Riext }G
+i=1 )
+info
+6:
+Ainfo ← GroupNormInfo({ri,t
+}i,t )
+7:
+g ← σ(−Stdg ({Riext })/τ )
+8:
+Â ← Aext + β · g · Ainfo , broadcast to response tokens
+9:
+Update θ using Â and KL-to-πref regularization.
+10: end for
+11: function InfoGainPerTurn(τ, πθ , πref , ∅)
+12:
+Initialize rtinfo ← 0 for t = 1..T
+13:
+for t = 1 to T − 1 do
+14:
+Let ct be context up to (actiont , obst ).
+15:
+ℓpost ← log πθ (at+1 | ht , ot ),
+16:
+ℓprior ← log π̃θ (at+1 | ht ),
+17:
+rtinfo ← ℓpost − ℓprior . {attributed to turn t}
+18:
+end for
+19:
+return {rtinfo }Tt=1
+20: end function
+
+B. Proofs of Theoretical Results
+B.1. Proof of Theorem 1
+We consider a turn-based interaction of horizon T . Let H0 denote the initial context (prompt, system message, etc.). For
+each turn t ∈ {0, . . . , T − 1}, the environment (or user simulator) produces feedback Ot , and the agent then produces the
+next action segment At+1 . Define the (pre-feedback) history random variable
+Ht ≜ (H0 , A1:t , O0:t−1 ),
+where A1:t = (A1 , . . . , At ) and O0:t−1 = (O0 , . . . , Ot−1 ). The policy is causal:
+Pθ (At+1 | Ht , Ot ) = πθ (At+1 | Ht , Ot ).
+14
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+We further define the marginal (prior) policy by averaging over the next feedback:
+
+
+πθ (a | ht ) ≜ EOt ∼P (·|ht ) πθ (a | ht , Ot ) ,
+where the expectation is w.r.t. the environment’s conditional distribution of Ot given Ht = ht . (For continuous variables,
+replace sums by integrals; the derivation remains identical.) InfoPO intrinsic reward is defined as
+rinfo (t) ≜ log πθ (At+1 | Ht , Ot ) − log πθ (At+1 | Ht ).
+Part I: Per-turn expectation equals conditional mutual information. Taking expectation over the joint distribution of
+(Ht , Ot , At+1 ) induced by the environment and policy,
+
+
+πθ (At+1 | Ht , Ot )
+E[rinfo (t)] = EHt ,Ot ,At+1 log
+πθ (At+1 | Ht )
+X
+X
+X
+πθ (a | ht , ot )
+P (ht )
+P (ot | ht )
+πθ (a | ht , ot ) log
+=
+.
+πθ (a | ht )
+o
+a
+ht
+
+(7)
+
+t
+
+Note that the conditional joint distribution given Ht = ht factorizes as
+P (ot , a | ht ) = P (ot | ht )πθ (a | ht , ot ).
+Substituting into (7), we obtain
+E[rinfo (t)] =
+
+X
+
+P (ht )
+
+X
+
+P (ot , a | ht ) log
+
+ot ,a
+
+ht
+
+P (ot , a | ht )
+.
+P (ot | ht ) P (a | ht )
+
+By the definition of conditional mutual information,
+Iθ (Ot ; At+1 | Ht ) ≜
+
+X
+
+P (ht )
+
+ht
+
+X
+
+P (ot , a | ht ) log
+
+ot ,a
+
+P (ot , a | ht )
+,
+P (ot | ht ) P (a | ht )
+
+we conclude
+E[rinfo (t)] = Iθ (Ot ; At+1 | Ht ).
+Part II: Cumulative InfoPO intrinsic equals directed information. Define Ot ≜ O0:t and At ≜ A1:t . Following Massey
+(1990), the directed information from feedback to actions is defined as the sum of conditional mutual informations:
+Iθ (OT −1 → AT | H0 ) ≜
+
+T
+−1
+X
+
+Iθ (Ot ; At+1 | H0 , At , Ot−1 ).
+
+t=0
+
+Recalling that the history is Ht = (H0 , At , Ot−1 ), conditioning on (H0 , At , Ot−1 ) is exactly equivalent to conditioning on
+Ht . Therefore, each summand simplifies directly:
+Iθ (Ot ; At+1 | H0 , At , Ot−1 ) = Iθ (Ot ; At+1 | Ht ).
+Summing over t and applying the result from Part I:
+Iθ (O
+
+T −1
+
+T
+
+→ A | H0 ) =
+
+T
+−1
+X
+
+"T −1
+#
+X
+E[rinfo (t)] = E
+rinfo (t) .
+
+t=0
+
+t=0
+
+■
+
+This completes the proof.
+15
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+B.2. Proof of Theorem 2
+Problem model. Let Z ∼ Unif({1, . . . , M }) be a hidden user intent (or goal) that the agent must infer through interaction.
+The agent interacts for T turns and outputs actions AT = (A1 , . . . , AT ). A terminal estimator outputs Ẑ = φ(AT ) and the
+external reward is
+Rext = I[Ẑ = Z].
+Assume Z is independent of the initial context H0 , hence H(Z | H0 ) = log M (natural logs; units are nats). Suppose the
+success probability satisfies
+P(Ẑ = Z) ≥ 1 − δ.
+Step 1: High success implies large mutual information about Z (Fano). By Fano’s inequality, for any estimator Ẑ of Z,
+H(Z | Ẑ) ≤ h(δ) + δ log(M − 1),
+where h(δ) ≜ −δ log δ − (1 − δ) log(1 − δ) is the binary entropy (nats). Since Ẑ = φ(AT ) is a deterministic function of
+AT , conditioning on AT is at least as informative as conditioning on Ẑ, i.e.,
+H(Z | AT , H0 ) ≤ H(Z | Ẑ, H0 ) = H(Z | Ẑ).
+Therefore,
+I(Z; AT | H0 ) = H(Z | H0 ) − H(Z | AT , H0 )
+
+≥ log M − h(δ) + δ log(M − 1) .
+
+(8)
+
+Step 2: Bounding latent intent information via feedback-to-action flow. To establish the necessity of information gain,
+we derive an upper bound on I(Z; AT | H0 ) by decomposing the information acquired at each interaction turn. By the chain
+rule of mutual information:
+T
+−1
+X
+I(Z; AT | H0 ) =
+I(Z; At+1 | At , H0 ).
+(9)
+t=0
+
+For each turn t, we bound the information At+1 contains about Z by introducing the feedback history Ot = (Ot−1 , Ot ).
+Using the monotonicity and the chain rule of mutual information:
+I(Z; At+1 | At , H0 ) ≤ I(Z, Ot ; At+1 | At , H0 )
+= I(Ot ; At+1 | At , H0 ) + I(Z; At+1 | At , Ot , H0 ).
+
+(10)
+
+The second term I(Z; At+1 | At , Ot , H0 ) vanishes due to the Causal Markov Property of the agent’s policy: given the
+prompt and the observation history (H0 , At , Ot ), the action At+1 is generated solely by πθ and does not depend on the
+latent intent Z directly. Substituting this back into Eq. 9, we obtain:
+I(Z; AT | H0 ) ≤
+
+T
+−1
+X
+
+I(Ot ; At+1 | At , H0 ).
+
+(11)
+
+t=0
+
+To isolate the contribution of the new feedback Ot , we expand I(Ot ; At+1 | At , H0 ) as:
+I(Ot ; At+1 | At , H0 ) = I(Ot ; At+1 | At , Ot−1 , H0 ) + I(Ot−1 ; At+1 | At , H0 ) .
+|
+{z
+} |
+{z
+}
+Innovation (InfoPO)
+
+(12)
+
+History Dependency
+
+In a well-designed interaction, information about Z should be extracted through the innovation provided by Ot relative to
+the current history. Formally, for a causal feedback channel where Z → OT → AT forms a sequence, the Directed Data
+Processing Inequality (Massey et al., 1990; Kim, 2008) states that the information about the source Z is strictly bounded by
+the Directed Information flow:
+I(Z; AT | H0 ) ≤ Iθ (OT −1 → AT | H0 ) ≜
+
+T
+−1
+X
+t=0
+
+16
+
+I(Ot ; At+1 | Ht ),
+
+(13)
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+where Ht = (H0 , At , Ot−1 ). This eliminates the redundant History Dependency term, as previous observations Ot−1 are
+already part of the conditioning context Ht in an autoregressive agent.
+Step 3: Connecting to InfoPO intrinsic. From Theorem 1, we know that the directed information matches the cumulative
+InfoPO reward:
+"T −1
+#
+X
+T −1
+T
+Iθ (O
+→ A | H0 ) = E
+rinfo (t) .
+t=0
+
+Combining this equality with the directed data processing bound in Eq. 13 and the Fano lower bound in Eq. 8, we obtain:
+"T −1
+#
+X
+rinfo (t) ≥ I(Z; AT | H0 ) ≥ log M − h(δ) − δ log(M − 1).
+E
+t=0
+
+■
+
+This completes the proof.
+
+A. Task and Metrics Details
+Benchmarks. We evaluate on three interactive benchmarks: UserGym (from UserRL), ColBench (from SWEET-RL),
+and τ 2 -Bench. They all require multi-turn interaction under a fixed environment interface, where the agent must balance
+information gathering (e.g., clarification or queries) with execution to complete the task.
+A.1. UserGym
+Interface and episode protocol. UserGym is a unified suite of eight gym environments that share an
+[Action--Search--Answer] interface. Each episode starts from an underspecified request (or a latent rule/goal) and
+proceeds for at most Tmax = 16 turns in our setup. At each turn, the agent may execute an Action (environment-specific),
+optionally use Search when supported, and may terminate by emitting Answer.
+Eight gyms and what they test. UserGym contains TravelGym, TurtleGym, FunctionGym, TauGym, PersuadeGym,
+IntentionGym, TelepathyGym, and SearchGym. TravelGym focuses on personalized travel planning under missing
+constraints; TurtleGym is a multi-turn reasoning game with incremental feedback; PersuadeGym tests argumentation toward
+a target stance; IntentionGym emphasizes disambiguating underspecified intent via targeted questions; TelepathyGym
+requires iterative hypothesis testing to identify a hidden entity; SearchGym tests search-and-answer style information
+seeking; TauGym is task-oriented tool use with user-provided details. FunctionGym is qualitatively different from the
+others: it is a latent mapping-rule inference environment rather than a user-in-the-loop dialogue task. The agent queries
+input–output mappings through Action and then answers held-out test cases, so interaction is driven by I/O probing rather
+than conversational user feedback.
+Train/test split for generalization. We follow the standard protocol of training on five gyms and evaluating both indomain and generalization to held-out interaction purposes, with IntentionGym, TelepathyGym, and SearchGym as held-out
+environments.
+UserGym metrics. Depending on the gym, the evaluation score is either the success rate of the final decision (notably
+TravelGym and TauGym) or the accumulated reward over the episode (the remaining gyms). We report per-gym scores and
+the macro-average across the eight gyms.
+A.2. ColBench
+Tasks and interaction budget. ColBench evaluates collaborative programming with a human simulator. In our experiments
+we use the Backend Programming setting only, where the agent iteratively refines an implementation of a Python function
+under incomplete specifications through multi-turn discussion and edits. We do not include the Frontend Design setting
+because it requires vision-language modeling to compare rendered pages, which is beyond the scope of this paper. Interactions
+are limited to at most 10 back-and-forth rounds in our setup.
+Metrics. Backend Programming is evaluated by hidden unit tests (10 tests per task). We report Pass, defined as the average
+fraction of unit tests passed, and Succ., defined as the fraction of tasks that pass all unit tests.
+17
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+A.3. τ 2 -Bench
+Dual-control environment. τ 2 -Bench evaluates customer-support style agents in simulated domains including airline,
+retail, and telecom. A defining feature is dual control: depending on the domain, the user simulator may also have tools and
+can modify the shared world state, so success depends on coordination between agent actions and user-side tool usage. We
+cap each episode at Tmax = 50 turns.
+Metric. We report Avg@4, defined as the average task success rate over 4 independent runs per task instance, matching
+our experimental protocol.
+A.4. Additional diagnostics used in ablations
+Notation. Let b denote a benchmark (or gym), s a random seed, and u an evaluation checkpoint during training. Let
+Jb (s, u) be the main evaluation score on b for seed s at checkpoint u. For an evaluation trajectory τ , let T (τ ) be the number
+of turns, and let Lt (τ ) be the number of generated tokens in the agent response at turn t. We use Lmax = 1024 as the
+per-turn generation cap and the benchmark-specific Tmax as the maximum turn budget.
+Final performance.
+
+We define final performance on benchmark b as the mean score at the final checkpoint:
+Jf (b) =
+
+
+1 X
+Jb s, ufinal .
+|S|
+s∈S
+
+Best-to-final drop.
+across seeds:
+
+To quantify late-training regression, we compute the best-to-final drop per seed and then average
+∆bf (b) =
+
+
+1 X
+max Jb (s, u) − Jb s, ufinal .
+u
+|S|
+s∈S
+
+Larger values indicate stronger regression after reaching a good checkpoint.
+Collapse probability. We mark a seed as collapsed if its final score falls below a fixed fraction of its own best checkpoint.
+With tolerance α = 0.5,
+h
+i
+
+Collapse(s) = I Jb s, ufinal < α · max Jb (s, u) ,
+u
+
+Interaction length statistics.
+
+Pcr (b) =
+
+1 X
+Collapse(s).
+|S|
+s∈S
+
+We measure average turns per episode
+
+T̄ (b) = Eτ ∼Eval(b) [T (τ )],
+
+and the utilization T̄ (b)/Tmax .
+
+We measure per-episode average response length
+
+
+
+T (τ )
+X
+1
+L̄(b) = Eτ ∼Eval(b) 
+Lt (τ ) ,
+T (τ ) t=1
+
+and the utilization L̄(b)/Lmax .
+
+Length–reward correlation. To probe whether higher rewards correlate with verbosity, we compute the Pearson correlation between episode-level average response length and the episode extrinsic reward:
+
+ρL,r (b) = Corr ℓ(τ ), r(τ ) ,
+
+ℓ(τ ) =
+
+where r(τ ) is the benchmark-defined extrinsic return for trajectory τ .
+18
+
+T (τ )
+1 X
+Lt (τ ),
+T (τ ) t=1
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+Table 4. Key hyperparameters for training on UserGym, ColBench, and τ 2 -Bench environments.
+UserGym
+
+ColBench
+
+τ 2 -Bench
+
+Info Gain Configuration
+Intrinsic weight (β0 )
+KL batch size
+Gate temperature
+
+0.5
+4
+0.5
+
+0.3
+4
+0.5
+
+0.1
+2
+0.05
+
+Data Configuration
+Train batch size
+Max prompt length
+Max response length
+
+64
+1152
+8192
+
+64
+2048
+8192
+
+32
+8192
+16384
+
+Actor Configuration
+Learning rate
+PPO minibatch size
+PPO microbatch size per gpu
+KL loss coef
+Entropy coefficient
+
+3 × 10−7
+16
+4
+0.001
+0.001
+
+3 × 10−7
+16
+4
+0.001
+0.001
+
+1 × 10−6
+16
+2
+0.001
+0.001
+
+Rollout Configuration
+Rollout engine
+Log prob micro batch size per gpu
+Parallel rollouts (n)
+Max turns
+Response length (per turn)
+GPU memory utilization
+
+SGLang
+4
+5
+16
+1024
+0.5
+
+SGLang
+4
+5
+10
+1024
+0.5
+
+SGLang
+2
+5
+50
+1024
+0.5
+
+4
+2
+
+4
+2
+
+4
+10
+
+Parameter
+
+Training Configuration
+GPUs per node
+Total epochs
+
+B. Experiment Details
+B.1. Training Details
+The key hyperparameters used for training across all environments are summarized in Table 4. The parameter of β controls
+the peak contribution of the information-gain advantage to the unified gradient. As shown in our sensitivity analysis in
+Appendix B.3, a range of 0.1 to 0.5 provides a stable training signal across diverse interaction paradigms. The choice of T
+in the variance-gating function g(σgext ) = σ(−σgext /T ) is based on the typical magnitude of the external reward variance
+(σgext ) observed during the initial training phase.
+The agent operates in a multi-turn conversational setting where inputs are formatted using the chat template of the underlying
+language model (e.g., Qwen’s chat template). Each conversation begins with a system message defining the task, environment
+constraints, and available tools, followed by alternating user and assistant messages. User messages contain environment
+observations and feedback, while assistant messages contain the agent’s actions or tool calls. The agent’s output is generated
+autoregressively and can take two forms: (1) text responses for direct communication, and (2) tool calls in OpenAI function
+calling format, structured as JSON objects containing the tool name and parameters that are parsed and executed by the
+environment.
+The action space is defined through a unified interact with env tool interface that abstracts environment-specific
+actions. All environments use a single tool that accepts a choice parameter indicating the action type and a content
+parameter containing the action details. The specific action space varies by environment: UserGym allows ["action",
+"answer", "search"] for conversational interactions, information retrieval, and final responses; ColBench uses
+a single action type ["action"] where the agent can ask clarification questions or provide Python code solutions
+prefixed with "I WANT TO ANSWER:"; τ 2 -Bench supports ["message", "tool call", "done"] for sending
+messages, executing domain-specific tools (e.g., database queries, booking operations), or terminating conversations, where
+tool calls can be specified in either JSON format or functional notation.
+All tools follow the OpenAI function calling schema format, consisting of a type field set to "function", a function
+object with name, description, and parameters fields. The parameters field uses JSON Schema to de19
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+fine the structure, including parameter types, constraints (e.g., enum for discrete choices), and descriptions. The
+interact with env tool schema includes a tool identifier, a natural language description of the tool’s purpose, and a
+parameters object with choice (enumeration of valid action types) and content (string describing action details) as
+required fields. Tool schemas are provided to the model as part of the system prompt and are dynamically included in the
+chat template, enabling the model to generate properly formatted tool calls.
+During training, we apply a loss mask to ensure that the model only learns from assistant-generated tokens, excluding
+system prompts, user messages, and special formatting tokens. For models using turn-based special tokens (e.g., Qwen’s
+<|im start|> and <|im end|> tokens), we identify assistant turns by computing a cumulative sum of turn start tokens
+to create turn indicators, where odd-numbered turns (after the system message) correspond to assistant responses. The loss
+mask is set to 1 for all tokens in assistant turns and 0 elsewhere. For multi-turn trajectories, we use turn-level scoring where
+rewards are assigned to the last token of each assistant turn. For Qwen models, we apply a one-token shift to account for the
+newline character between the special token and the reward token, ensuring rewards are correctly associated with the final
+token of each response. The response mask, used for computing advantages and value estimates, follows the same pattern
+as the loss mask but is applied during the PPO update phase, ensuring that value function learning and policy updates are
+focused on the agent’s actual responses rather than the input context.
+B.2. Compute Cost of InfoPO
+info
+InfoPO’s per-turn info-gain reward ri,t
+(Eq. 2) is computed by a counterfactual masking comparison under teacher
+forcing: for each valid turn, we evaluate the log-likelihood of the realized next action segment under the factual transcript
+(with oi,t ) and under the counterfactual transcript (with the placeholder ∅), and take their difference. This introduces
+additional policy forward evaluations but does not require any extra environment interactions. Concretely, let Nginfo
+info
+denote the number of valid (i, t) pairs in rollout group g that contribute to r̃i,t
+in Eq. 4 (i.e., the turn contains environment
+feedback/observation, is not the final turn so that ai,t+1 exists, and has well-defined span boundaries for the action/observation
+segments). In our implementation, these valid turns are processed in KL mini-batches of size BKL (corresponding to
+intrinsic kl batch size); each mini-batch requires exactly two teacher-forced forward calls (with and without oi,t ).
+Therefore, the number of additional forward calls scales as
+&
+'
+Nginfo
+FKL = 2
+,
+(14)
+BKL
+
+which explains why setting a small BKL (often due to long-context memory limits) can lead to many mini-batches and a
+visibly larger count of forward invocations.
+Despite this, the observed wall-clock overhead is typically well below a naive 2× worst case. The reason is that the dominant
+cost in multi-turn rollouts comes from autoregressive token-by-token generation over long sequences (even with KV cache,
+each generated token still triggers a forward step), whereas the counterfactual KL is computed in teacher-forcing mode on
+fixed tokens and can be fully batched. Moreover, the KL evaluation often runs on a shorter effective prefix (e.g., truncated at
+an action boundary such as action end) rather than the full conversation context, substantially reducing attention cost
+relative to full rollouts. Finally, KL is not computed for every turn: the valid-turn filtering (observation present, not the last
+turn, and span-valid) keeps Nginfo below the upper bound implied by #trajectories × #turns. In practice, we recommend
+setting BKL as large as GPU memory permits to reduce the number of KL mini-batches, while retaining the key benefit of
+InfoPO: improved turn-level credit assignment without extra environment interaction.
+B.3. Sensitivity Analysis
+To address potential concerns regarding the sensitivity of our algorithm to the choice of placeholder/mask design, we
+conducted a comprehensive analysis comparing four different masking strategies. The placeholder design is a critical
+component of our approach, as it represents the absence of environmental feedback (∅) in the observation space. Since large
+language models are known to be highly sensitive to prompt variations, we systematically evaluated whether different mask
+implementations would lead to significant variations in the computed KL divergence values, which form the basis of our
+intrinsic reward signal.
+We evaluated four distinct masking strategies during the training:
+1. String Placeholder (Default): Uses the text string ”No information found.” as the placeholder, which is tokenized and
+20
+
+(a) KL Distribution
+
+p=0.494
+(ns)
+
+8
+
+0.3
+0.2
+0.1
+
+6.4%
+
+4
+
+0.8%
+
+(c) Mean Sensitivity
+
+Fix
+ed
+
+Tok
+
+k
+d.
+To
+Ra
+n
+
+tr
+.S
+
+dT
+ok
+
+Tok
+
+Fix
+e
+
+tr
+.S
+
+d.
+Ra
+n
+
+De
+
+Alt
+
+lt
+
+0
+
+fau
+
+dT
+ok
+
+Tok
+
+Fix
+e
+
+lt
+
+tr
+.S
+
+d.
+Ra
+n
+
+Alt
+
+fau
+
+6.4%
+
+6
+
+2
+
+0.0
+
+(b) Quantile Statistics
+
+10
+
+Rel. Diff (%)
+
+Mean KL
+
+0.4
+
+p=0.502
+(ns) p=0.931
+(ns)
+
+Alt
+
+1.2
+1.0
+0.8
+0.6
+0.4
+0.2
+0.0
+0.2
+0.4
+
+De
+
+dT
+ok
+
+Fix
+e
+
+Tok
+d.
+Ra
+n
+
+.S
+Alt
+
+fau
+De
+
+tr
+
+KL Divergence
+
+1.2
+1.0
+0.8
+0.6
+0.4
+0.2
+0.0
+0.2
+0.4
+
+lt
+
+KL Divergence
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+(d) Relative Gap
+
+Figure 8. Robustness analysis of various masking strategies. We evaluate the sensitivity of internal representations (measured by KL
+divergence) across four placeholder designs: Default (String), Alternative String, Random Tokens, and Fixed Mask Token. (a-b) show that
+all strategies yield consistent distributions; (c) highlights minimal mean variation with t-test significance (p); (d) demonstrates that the
+maximum relative performance gap remains within an acceptable threshold (< 10%), confirming the robustness of our default design.
+
+inserted at observation positions.
+2. Alternative String: Uses a different text string ”Empty observation.” to test sensitivity to the specific wording of the
+placeholder.
+3. Random Tokens: Samples random tokens from the vocabulary to create a completely arbitrary placeholder, testing
+whether the semantic content of the placeholder matters.
+4. Fixed Mask Token: Uses the tokenizer’s pad/unk token repeated to match the average observation length, representing
+a minimal-information placeholder.
+For each task, we computed the KL divergence between the policy’s action probability distribution with the actual observation
+versus with each of the four placeholder strategies. This allows us to directly compare how different mask implementations
+affect the core metric used in our intrinsic reward computation. Our analysis reveals that the placeholder design is robust
+across all four masking strategies. As shown in Figure 8a and 8b, the KL divergence distributions for all strategies are highly
+similar, with substantial overlap in their value ranges. The statistics demonstrate that:
+• The mean KL divergence values are nearly identical across strategies: Default (0.207), Alternative String (0.193),
+Random Tokens (0.220), and Fixed Mask Token (0.205).
+• The maximum relative difference between any strategy and the default is only 6.44% (Alternative String), well below
+the 10% threshold typically considered significant in such analyses.
+• The median values and interquartile ranges (IQR) are also closely aligned, indicating consistent behavior across the
+distribution.
+Statistical tests confirm these observations. We performed both parametric (t-test) and non-parametric (Mann-Whitney
+U test) comparisons between each alternative strategy and the default string placeholder. As illustrated in Figure 8, all
+comparisons yielded non-significant results (all p > 0.24), indicating that the observed differences are within the range of
+random variation. The relative differences shown in Figure 8d further demonstrate that all strategies produce KL divergence
+values within 6.5% of the default, with the fixed mask token strategy showing only 0.81% difference.
+These results provide strong evidence that our placeholder design is robust to different masking implementations. The
+fact that semantically different placeholders (alternative text strings), completely random tokens, and minimal-information
+mask tokens all produce statistically indistinguishable KL divergence values suggests that the algorithm’s behavior is
+primarily determined by the presence or absence of information, rather than the specific form of the placeholder. This
+robustness validates our design choice and addresses concerns about potential sensitivity to the placeholder implementation,
+demonstrating that the intrinsic reward signal remains stable regardless of how the ”no feedback” state is represented.
+21
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+Sensitivity analysis of the Info-Gain reward weight β demonstrates that InfoPO maintains high and stable performance across
+a relatively broad interval from 0.1 to 0.5. Within this range, the agent effectively leverages turn-level information signals to
+resolve intent uncertainty while remaining anchored to the task objective. However, performance significantly degrades
+when β is increased to an extreme value of 2.0. This regression indicates that an excessive weight on information gain
+over-incentivizes the agent to seek interaction feedback, eventually disrupting the balance between purposeful exploration
+and goal-directed execution.
+B.4. More Results
+In the main paper (Figure 5), we visualize training-time interaction dynamics only where space permits: the response-length
+and turn-count trends are shown for ColBench, and the info-gain reward decomposition is shown for UserGym and ColBench.
+In the appendix, we complete this picture by adding the missing counterparts for the remaining benchmark(s). Figure 9
+reports the response-length/turn trajectories for UserGym and τ 2 -Bench, and further includes the info-gain reward curve for
+τ 2 -Bench, so that all three benchmarks are covered under the same diagnostic lens.
+TravelGym is a core component of UserGym and contains multiple subtypes that differ in constraint density and latent
+preference structure. To make these differences transparent, we additionally report TravelGym results stratified by its eight
+subsets (Travel-22/33/44/233/333/334/444/2222) in Table 5. This breakdown complements the aggregate UserGym score by
+showing where improvements concentrate and where harder travel variants remain challenging.
+
+10
+
+400
+
+9
+
+375
+
+8
+100
+
+0
+
+20
+
+40
+
+60
+
+Training Progress (%)
+
+80
+
+175
+14
+
+150
+125
+
+12
+
+100
+20
+
+40
+
+60
+
+Training Progress (%)
+
+80
+
+UserGym
+
+Ratio
+
+0.35
+0.30
+
+0.14
+
+0.25
+
+0.13
+
+0.20
+
+0.12
+0
+
+100
+
+(a) UserGym turns / response len (b) τ 2 -Bench turns / response len
+
+2-Bench
+
+ColBench
+
+0.15
+
+0.15
+
+10
+0
+
+Reward
+
+Info-Gain Ratio
+
+425
+
+16
+
+20
+
+40
+
+60
+
+Training Progress (%)
+
+80
+
+100
+
+(c) τ 2 -Bench info-gain reward
+
+Performance Score
+
+11
+
+0.40
+
+Turns
+
+Info-Gain Reward
+
+12
+
+450
+
+Res Len
+
+200
+
+Turns
+
+475
+
+13
+
+Turns
+
+Response Length
+
+Turns
+
+Response Length
+
+Res Len
+
+500
+
+0.5
+0.4
+0.2
+0.1
+0.0
+
+0.1
+
+0.3
+
+0.5
+
+Info-Gain Reward Weight ( )
+
+2
+
+(d) Sensitivity analysis of β
+
+Figure 9. Additional results. (a) Average response length and number of interaction turns on UserGym over training progress. (b)
+Average response length and number of interaction turns on τ 2 -Bench over training progress. (c) Absolute info-gain reward and info-gain
+ratio on τ 2 -Bench over training progress. (d) Sensitivity analysis of the Info-Gain reward weight (β) varying from 0.1 to 2.0.
+
+B.5. Trajectory-Quality Diagnostics
+InfoPO assigns a turn-level information-gain reward to an action at by measuring how much the feedback ot changes the
+likelihood of the realized next action at+1 under the factual context compared with the masked-feedback counterfactual.
+A natural concern is that this reward might become unreliable when the sampled trajectories contain low-quality actions.
+For example, if the next action is invalid, repeated, or otherwise meaningless, the measured log-probability shift may not
+correspond to useful information acquisition. We therefore conduct a post-hoc trajectory-quality analysis to examine whether
+high rtinfo is actually associated with task-relevant interaction behavior.
+We perform this analysis on τ 2 -Bench, which is the most challenging benchmark in our evaluation because it involves
+long horizons, tool use, sparse rewards, and frequent execution failures. Importantly, the following labels are used only for
+analysis and are never used during training. We assign each action to one of three categories:
+• Good: an executable tool call that is neither misused nor repeated, or a non-empty assistant message that is not repeated
+content.
+• Meaningless: an early done action, an invalid, misused, or repeated tool call, an empty or repeated assistant message,
+or a repeated clarification.
+• Informative failure: a grounded but unsuccessful tool call, such as a failed lookup caused by a missing customer
+ID or an order not found in the database. Such actions do not complete the task, but they can still reveal useful state
+information about the environment.
+22
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+Table 5. Results on Travel subsets. Grey rows denote InfoPO and its variants.
+Type
+
+Method
+
+Travel22
+
+Travel33
+
+Travel44
+
+Travel233
+
+Travel333
+
+Travel334
+
+Travel444
+
+Travel2222
+
+Closed-Source Model
+Prompting
+Gemini-3-Flash
+Prompting
+GPT-4.1
+Prompting
+GPT-4o-mini
+
+0.586
+0.586
+0.600
+
+0.572
+0.543
+0.586
+
+0.588
+0.612
+0.579
+
+0.587
+0.548
+0.584
+
+0.600
+0.555
+0.600
+
+0.528
+0.566
+0.617
+
+0.568
+0.532
+0.600
+
+0.565
+0.494
+0.600
+
+Qwen2.5-7B-Instruct
+Prompting
+Qwen2.5
+Prompting
+ReAct
+Prompting
+Reflexion
+RL Training RAGEN
+RL Training Search-R1
+RL Training UserRL
+RL Training InfoPO w/o std
+RL Training InfoPO w/o Gate
+RL Training InfoPO w/o Rext
+RL Training InfoPO (Ours)
+
+0.372
+0.437
+0.405
+0.488
+0.594
+0.496
+0.515
+0.492
+0.445
+0.634
+
+0.457
+0.431
+0.420
+0.508
+0.542
+0.516
+0.535
+0.512
+0.460
+0.598
+
+0.331
+0.437
+0.435
+0.523
+0.567
+0.531
+0.550
+0.527
+0.475
+0.588
+
+0.485
+0.550
+0.445
+0.538
+0.573
+0.546
+0.565
+0.542
+0.485
+0.603
+
+0.475
+0.425
+0.455
+0.553
+0.569
+0.561
+0.580
+0.557
+0.495
+0.615
+
+0.472
+0.436
+0.470
+0.568
+0.595
+0.576
+0.595
+0.572
+0.510
+0.583
+
+0.447
+0.400
+0.485
+0.588
+0.578
+0.596
+0.615
+0.592
+0.525
+0.595
+
+0.494
+0.500
+0.445
+0.538
+0.505
+0.546
+0.565
+0.542
+0.485
+0.494
+
+Qwen3-4B
+Prompting
+Prompting
+Prompting
+RL Training
+RL Training
+RL Training
+RL Training
+RL Training
+RL Training
+RL Training
+
+0.250
+0.239
+0.251
+0.437
+0.442
+0.488
+0.462
+0.498
+0.312
+0.602
+
+0.257
+0.254
+0.266
+0.452
+0.457
+0.508
+0.482
+0.518
+0.327
+0.589
+
+0.278
+0.269
+0.281
+0.467
+0.472
+0.523
+0.497
+0.533
+0.342
+0.591
+
+0.256
+0.279
+0.291
+0.477
+0.482
+0.538
+0.512
+0.548
+0.352
+0.590
+
+0.245
+0.289
+0.301
+0.487
+0.492
+0.553
+0.527
+0.563
+0.362
+0.577
+
+0.323
+0.304
+0.316
+0.502
+0.507
+0.568
+0.542
+0.578
+0.377
+0.583
+
+0.216
+0.319
+0.331
+0.517
+0.522
+0.588
+0.562
+0.598
+0.392
+0.616
+
+0.388
+0.279
+0.291
+0.477
+0.482
+0.538
+0.512
+0.548
+0.352
+0.565
+
+Qwen3
+ReAct
+Reflexion
+RAGEN
+Search-R1
+UserRL
+InfoPO w/o std
+InfoPO w/o Gate
+InfoPO w/o Rext
+InfoPO (Ours)
+
+Table 6. Information-gain reward grouped by the quality of the current action at on τ 2 -Bench. Good actions receive much larger
+counterfactual credit than meaningless actions.
+Current action type
+Good
+Meaningless
+
+Mean rtinfo
+
+Median rtinfo
+
+0.380
+0.017
+
+0.247
+0.012
+
+We first group turns by the quality of the realized next action at+1 , since Eq. (2) measures the sensitivity of this next
+action to the observed feedback. As shown in Figure 10, good next actions are much more sensitive to the observation
+than meaningless next actions. The average sensitivity of good next actions is substantially higher than that of meaningless
+actions (0.275 vs. 0.098). The gap becomes even larger when restricting the analysis to tool-call actions only, where good
+tool calls show an average sensitivity of 0.553 compared with 0.110 for meaningless tool calls. This indicates that the
+counterfactual reward is not mainly triggered by arbitrary distribution shift: the realized downstream actions that depend
+most on the observation are usually valid and task-relevant.
+We then group turns by the quality of the current action at , because the reward rtinfo is assigned to at in training. This
+directly tests whether useful current actions receive stronger credit than meaningless current actions. The results show a
+clear separation: when at is labeled as good, the information-gain reward has mean 0.380 and median 0.247; when at is
+meaningless, the reward drops to mean 0.017 and median 0.012. The difference between the good and meaningless groups
+is highly significant (p = 1.4 × 10−108 ). This result suggests that when the current action is useless, it usually does not
+produce feedback that meaningfully changes the model’s next decision.
+Finally, we examine transition patterns between current-action quality and next-action quality. As shown in Figure 11,
+good current actions are more likely to lead to productive continuations, while meaningless current actions are more likely
+to be followed by consecutive meaningless behavior. This transition-level view further supports the interpretation that
+InfoPO rewards interaction turns that create useful downstream decision changes. In other words, InfoPO does not require
+an external oracle to pre-identify meaningful actions during training. The counterfactual reward is computed for every
+23
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+(a) All next actions
+
+(b) Tool-call next actions
+
+2.0
+
+1.0
+0.5
+0.0
+0.5
+
+good (all)
+meaningless (all)
+
+0.7
+
+1.5
+
+good (tool)
+meaningless (tool)
+
+0.6
+
+1.0
+0.5
+0.0
+
+0.5
+0.4
+0.3
+0.2
+0.1
+
+0.5
+good
+(n=1794)
+
+(c) High-sensitivity rates
+
+0.8
+
+Fraction of actions
+
+1.5
+
+Obs. sensitivity ( logp / token)
+
+Obs. sensitivity ( logp / token)
+
+2.0
+
+meaningless informative_failure
+(n=1147)
+(n=344)
+
+good
+(n=420)
+
+meaningless informative_failure
+(n=935)
+(n=344)
+
+0.0
+
+> 0.1
+
+> 0.2
+
+> 0.5
+
+(a) Next-turn sensitivity by current-action label
+
+2.0
+1.5
+1.0
+0.5
+0.0
+
+good
+(n=979)
+
+meaningless
+(n=529)
+
+info-fail
+(n=192)
+
+(b) High-sensitivity next turns are rare
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+0.0
+
+next action = good
+next > 0.1
+next > 0.5
+
+(c) Next-action label by current-action type0.8
+good
+
+0.60
+
+0.25
+
+0.15
+
+meaningless
+
+0.38
+
+0.61
+
+0.01
+
+0.7
+0.6
+0.5
+
+Probability
+
+Next-turn sensitivity ( logp / token)
+
+Figure 10. Observation sensitivity grouped by the quality of the realized next action at+1 on τ 2 -Bench. Good next actions show
+consistently higher sensitivity than meaningless ones, especially for tool calls, suggesting that the counterfactual signal mainly reflects
+task-relevant information use rather than arbitrary likelihood shift.
+
+0.4
+0.3
+
+info-fail
+good
+
+ss
+
+meaningle
+
+info-fail
+
+next
+
+0.76
+
+0.03
+
+0.21
+
+good aningless t info-fail
+nex
+me
+next
+
+0.2
+0.1
+0.0
+
+Figure 11. Effect of current-action quality on next-step sensitivity and continuation quality. Good current actions induce larger next-step
+sensitivity and are more likely to lead to good next actions, while meaningless actions mostly lead to low-sensitivity or meaningless
+continuations.
+
+realized transition, and task-relevant transitions naturally receive stronger credit because their feedback has a larger effect on
+subsequent decisions.
+Overall, these diagnostics show that the information-gain reward is not merely a proxy for arbitrary likelihood shift. High
+rtinfo is concentrated on transitions where the feedback supports valid and task-relevant downstream actions. This finding
+also clarifies the support assumption behind InfoPO: as with other trial-and-error RL methods, InfoPO requires the behavior
+policy and the user/environment to generate at least some non-degenerate, task-relevant interactions. When such transitions
+exist, the counterfactual signal can distinguish them from meaningless actions and provide dense credit even when final task
+rewards remain sparse.
+B.6. Reward-Hacking Diagnostics
+A second concern is that an intrinsic information reward may be exploited by asking broad open-ended questions. For
+example, a model could repeatedly ask generic questions that elicit long user responses, thereby causing large changes in
+the next-action distribution without collecting task-relevant missing information. We refer to this potential failure mode as
+open-question reward hacking. To test whether InfoPO exhibits this behavior, we compare targeted clarifications against
+generic open questions.
+We define a targeted clarification (TC) as an assistant message that asks for at least one predefined task-relevant field or
+diagnostic slot. Examples include asking for a phone number, customer ID, order ID, email address, reservation code, or
+other domain-specific information needed for grounded execution. In contrast, we define a generic open question (GOQ) as
+a broad opener that does not specify a task-relevant missing field, such as “How can I help you today?” or “Could you tell
+me more?” These labels are again used only for post-hoc diagnostics and are not used in the reward function or training
+24
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+Table 7. Reward-hacking diagnostics for high information-gain turns. TC denotes targeted clarification and GOQ denotes generic open
+question. ∆LM denotes the length-matched information-gain gap between TC and GOQ.
+Method
+
+Top-10% TC
+
+Top-10% GOQ
+
+Mean rinfo TC
+
+Mean rinfo GOQ
+
+Corr.(Len., rinfo )
+
+∆LM
+
+Avg. Turns
+
+Avg. Resp. Len.
+
+58.8%
+32.3%
+
+12.4%
+31.2%
+
+0.3589
+0.2412
+
+0.2029
+0.2723
+
+0.157
+0.352
+
+0.319
+-0.055
+
+10.4
+13.5
+
+105.3
+140.7
+
+InfoPO
+InfoPO w/o Gate
+
+process.
+We evaluate two variants: full InfoPO and InfoPO without the variance gate. For each method, we examine the top 10%
+turns with the highest rtinfo and measure how many of them are targeted clarifications or generic open questions. We also
+report the mean rtinfo of TC and GOQ turns, the Pearson correlation between response length and rtinfo , and a length-matched
+gap between TC and GOQ. The length-matched gap controls for the possibility that TC receives higher reward simply
+because it triggers longer responses. Specifically, we match TC and GOQ turns with similar response lengths and compute
+the average difference in information-gain reward:
+
+
+∆LM = E(u,v)∈M rinfo (uTC ) − rinfo (vGOQ ) ,
+where M denotes the set of length-matched TC–GOQ pairs.
+Table 7 shows that full InfoPO does not primarily reward generic open-ended questions. Among the top 10% high-rtinfo
+turns, 58.8% are targeted clarifications, while only 12.4% are generic open questions. Targeted clarifications also receive a
+higher average information-gain reward than generic open questions (0.3589 vs. 0.2029). Moreover, the correlation between
+response length and rtinfo is weak under InfoPO (0.157), suggesting that the signal is not simply a verbosity reward. After
+controlling for response length, the length-matched gap remains positive (∆LM = 0.319), further showing that targeted
+clarifications are rewarded because they collect task-relevant information, not merely because they induce longer responses.
+The contrast with InfoPO without the variance gate is especially informative. Without the gate, generic open questions
+become much more frequent among high-reward turns: the top-10% high-rtinfo set contains 32.3% targeted clarifications
+and 31.2% generic open questions. The mean reward of GOQ even exceeds that of TC in this ablation (0.2723 vs. 0.2412),
+and the length–reward correlation increases to 0.352. The length-matched gap also becomes negative (∆LM = −0.055),
+indicating that once verbosity is controlled, targeted clarifications no longer have an advantage over generic open questions.
+At the interaction level, removing the gate also leads to longer episodes and longer responses, increasing the average number
+of turns from 10.4 to 13.5 and the average response length from 105.3 to 140.7.
+These results support the role of variance-gated fusion as a guardrail against reward hacking. The intrinsic information-gain
+signal encourages the agent to reduce uncertainty, while the outcome-based component and the adaptive gate keep this
+behavior aligned with task completion. When external outcomes are not yet discriminative, the model can use information
+gain to learn useful clarification behavior. As outcome rewards become more informative, the gate reduces the relative
+influence of the intrinsic term, preventing the policy from drifting toward unnecessarily long or generic information-seeking
+behavior. Thus, InfoPO learns to ask targeted questions that resolve missing task constraints, rather than simply asking more
+questions.
+
+C. Limitations
+InfoPO requires an extra model evaluation per turn for counterfactual masking, which marginally increases training time
+compared to standard GRPO. Current evaluations focus on text-centric agents and do not yet extend to multimodal or
+vision-language tasks. Lastly, as with most RL frameworks for LLM agents, the interaction quality remains subject to the
+logical fidelity of the simulated users employed during training.
+
+D. Case Studies
+Successful interaction case studies. Figures 12–14 provide representative successful trajectories produced by InfoPO
+across three interactive domains. In UserGym (Fig. 12), the agent resolves an underspecified request by asking a targeted
+clarifying question (e.g., budget), then invokes tools to retrieve candidates and executes the final booking after user
+confirmation, illustrating goal-directed disambiguation and tool-grounded completion. In ColBench (Fig. 13), the agent first
+elicits missing details about the data schema (flat dictionary vs. nested lists of dictionaries) and then synthesizes correct
+25
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+code that matches the clarified structure, demonstrating iterative information gathering for collaborative programming.
+In τ 2 -Bench (Fig. 14), the agent diagnoses a mobile data issue by sequentially checking and fixing configuration states
+(airplane mode, network preference, data toggle, data saver), and finally validates recovery via a speed test, showcasing
+multi-step troubleshooting where each query/action reduces uncertainty and enables the next corrective step.
+Travel Domain
+User:
+
+Telepathy Domain
+
+“I need to book a hotel in Seattle for next weekend.
+I want to be downtown.”
+
+[Thought: The user specified location and time, but a generic
+search will return too many results. I need to narrow down the
+Agent: search space to avoid overwhelming the user.]
+"Got it. To help me find the best options, do you have a price range
+in mind per night?"
+
+User:
+
+"Yeah, try to keep it under $250 a night."
+
+Agent:
+
+[Tool Call: SearchHotels(location=“Seattle Downtown”,
+dates=“next weekend”, max_price=250)]
+
+Env:
+
+[Tool Output: Returns list of 3 hotels: 1. The Maxwell ($210), 2.
+Hotel Five ($235), 3. The Westin ($245).]
+
+Env:
+
+[Instruction: Target concept chosen. The agent must guess the object
+through yes/no questions.]
+
+Agent:
+
+[Thought: Initial state implies high entropy. I need a broad question
+to split the search space effectively.] "Is the object a living thing?"
+
+User:
+
+”Yes."
+
+Agent: “Is it a mammal?”
+User:
+
+”No."
+
+Agent:
+
+[Thought: Not a mammal. Let’s check birds, as that covers a large
+remaining portion of the space.] "Is it a bird?"
+
+User:
+
+”Yes."
+
+Agent:
+User:
+
+[Thought: It's a bird. To narrow it down quickly, I’ll ask about a
+distinguishing feature common to many birds versus the exceptions.]
+"Can this bird fly?"
+”No."
+[Thought: A flightless bird. This significantly narrows the possibilities
+(ostrich, penguin, kiwi, etc.). Let's test a major category based on
+habitat.] "Is it associated with cold climates or water?"
+
+Agent:
+
+"I found a few good options under $250 downtown. 'The Maxwell' is
+available for $210 per night. Shall I go ahead and book that for you?"
+
+Agent:
+
+User:
+
+"Yes, that sounds perfect."
+
+User:
+
+”Yes, both"
+
+[Tool Call: BookHotel(hotel_id="The Maxwell", dates="next weekend")]
+"Great. I have booked The Maxwell for next weekend. You are all set!"
+
+Agent:
+
+Agent:
+
+[Thought: Flightless bird, cold climate, aquatic. High confidence in the
+target.] "Is the object a Penguin?"
+
+User:
+
+”Yes, it is!"
+
+Env:
+
+[System: Task Completed Success. Reward: +1.0]
+
+Env:
+
+[System: Task Completed Success. Reward: +1.0]
+
+Figure 12. InfoPO Successful Case (UserGym)
+
+E. Optimized User Simulator Instructions
+This section details the system instructions for the optimized user simulators (OP) used in our study. It is important to
+emphasize that for our primary training and performance comparisons (e.g., Table 1), we utilized the original prompts
+provided in the official papers and repositories of each environment to ensure a fair and standardized evaluation against
+baseline methods. We include these optimized versions here specifically to support the results of our sensitivity analysis in
+Table 3, demonstrating how simulator reliability impacts agent performance and information acquisition.
+These optimizations follow the principles of InfoPO by facilitating denser learning signals through: (1) Balanced Information Disclosure, ensuring simulators provide full details when met with high-quality queries; and (2) Progress Awareness,
+which allows the simulator to acknowledge successful agent steps.
+E.1. UserGym Environments (Red)
+UserGym covers diverse interaction types including travel planning, persuasion, and reasoning. We provide the core
+instructions that ensure complete coverage of these interaction paradigms.
+E.2. ColBench Environment (Green)
+ColBench requires close collaboration on programming tasks. The optimized prompt focuses on progress awareness and
+feedback quality.
+E.3. τ 2 -Bench Environment (Blue)
+τ 2 -Bench extends the original Tau-Bench by introducing a dual-control mechanism across three realistic domains: Airline,
+Retail, and Telecom. Our optimized prompts for this environment address common failure modes identified through
+trajectory analysis, such as premature conversation termination and improper tool execution.
+26
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+ColBench: Clarifying Data Structures
+
+ColBench: Handling Nested Data & Logic
+“Help me write a function
+
+I need a Python function
+
+User: calculate_total_assets(asset_owners) to calculate the total
+
+User: `check_network_device_status(devices, status_map)` that
+
+value of assets across different owners.”
+
+takes a list of devices and a status map to determine current statuses.
+
+[Thought: The structure of the asset_owners parameter is
+unclear. I need to understand how owners and their respective
+Agent: assets are represented.]
+“Could you provide examples of the input format for asset_owners?
+I’m particularly interested in how the structure represents individuals
+and their asset values.”
+
+[Thought: The user provided the function signature, but the format of
+`status_map` is ambiguous. I need to know its structure and how
+Agent: to handle missing devices.]
+“What is the format of the `status_map`? Can you provide an
+example? Also, how should the function determine the status if a
+device is not in the map?”
+
+“The asset_owners parameter is a list of dictionaries. Each
+
+User: “The `status_map` is a dictionary where keys are device names and
+
+User: dictionary represents an owner and contains an assets key. This
+
+values are statuses. For devices not found, return `Unknown`.”
+
+assets key holds another list of dictionaries, each having a value key
+representing the asset’s worth.”
+
+[Thought: The requirement is clear now. I need to iterate through the
+devices list and look up their status in the dictionary, using Unknown
+as a default.]
+[Output Code]
+"Yeah, try to keep it under $250 a night."
+defUser:
+check_network_device_status(devices,
+status_map):
+Agent:
+result = {}
+for device in devices:
+if device in status_map:
+result[device] = status_map[device]
+else:
+result[device] = 'Unknown'
+return result
+
+Env:
+
+[Thought: The structure is a list of dictionaries, containing nested
+listsUser:
+of dictionaries.
+need
+to implement
+"Yeah,I try
+to keep
+it under nested
+$250 a loops
+night."to iterate
+through owners and then sum their asset values.]
+[Output Code]
+def calculate_total_assets(asset_owners):
+Agent:
+total_value = 0
+for owner in asset_owners:
+for asset in owner['assets']:
+total_value += asset['value']
+return total_value
+
+Env:
+
+[System: Task Completed Success. Reward: +1.0]
+
+[System: Task Completed Success. Reward: +1.0]
+
+Figure 13. InfoPO Successful Case (ColBench)
+
+The system automatically selects between two prompt versions based on the domain’s requirements, specifically checking
+for the presence of TelecomUserTools in the UserSimulator initialization:
+• Airline and Retail Domains: These domains utilize the Balanced Approach prompt (Base), as they rely purely on
+dialogue-based information sharing (e.g., sharing booking codes or preferences) without requiring user-side diagnostic
+tools.
+• Telecom Domain: This domain utilizes the Tool-Augmented prompt, as it requires the user to call diagnostic tools (e.g.,
+check status bar, run speed test) to facilitate device-level troubleshooting.
+
+27
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+Tau2-Bench: Telecom Issue Resolution
+User:
+
+“Hello! I’m having some trouble with my mobile data. It’s either not
+working properly or it’s very slow. I really need to fix it so I can have
+excellent internet speed on my phone. Can you help me with that?”
+
+“Great—signal and network mode look good. Now we just need to
+
+Agent: enable mobile data.”
+
+“Of course. Let’s start by checking your phone’s current network
+
+Agent: status and cellular service. Please run check_status_bar() and tell
+me what it shows.”
+
+User:
+
+<tool_call>toggle_data()</tool_call>
+
+Env:
+
+“Preferred Network Mode set to: 4g_5g_preferred. Status Bar: 📶⁴
+Excellent | 5G | 📵 Data Disabled | 🔋 80%”
+
+User:
+
+“I’ve turned on mobile data. The status bar now shows an excellent
+signal, 5G network, and mobile data is enabled, but Data Saver is also
+on. What should I do next?”
+
+Agent:
+
+“Data Saver can limit internet speed. Let’s turn it off for the best
+performance.”
+
+User:
+
+<tool_call>toggle_data_saver_mode()</tool_call>
+
+Env:
+
+“Data Saver Mode is now OFF. Status Bar: 📶⁴ Excellent | 5G | 📱
+Data Enabled | 🔋 80%”
+
+User:
+
+“I’ve turned off Data Saver mode. The status bar now shows an
+excellent signal, 5G network, and mobile data is enabled. What
+should I do next? Should I run a speed test now?”
+
+Agent:
+
+“Yes—let’s run a speed test to confirm the issue is resolved and the
+speed is excellent.”
+
+User:
+
+<tool_call>run_speed_test()</tool_call>
+
+Env:
+
+“Speed Test Result: 275.00 Mbps (Excellent). Connection is very fast.”
+
+User:
+
+“The speed test result shows a download speed of 275.00 Mbps, which
+is excellent! It seems that the issue is resolved. Thank you!”
+
+Env:
+
+[System: Task Completed Success. Reward: +1.0]
+
+User: <tool_call>check_status_bar()</tool_call>
+Env:
+
+“Status Bar: ✈ Airplane Mode | 🔋 80%”
+
+User:
+
+“The status bar shows that Airplane Mode is currently on, and my
+battery is at 80%. What should I do next?”
+
+“Since Airplane Mode is on, we just need to turn it off to enable your
+Agent:
+mobile data connection.”
+
+User: <tool_call>toggle_airplane_mode()</tool_call>
+Env:
+
+“Airplane Mode is now OFF. Status Bar: 📶¹ Poor | 2G | 📵 Data
+Disabled | 🔋 80%”
+
+User:
+
+“I’ve turned off Airplane Mode. Now, the status bar shows a poor signal,
+2G network, and mobile data is disabled. What should I do next?”
+
+Agent: “It looks like your phone is on a 2G network, which can be slow. Let’s
+
+change the network mode preference to allow 4G/5G for better speed.”
+
+User: <tool_call>set_network_mode_preference(mode="4g_5g_preferred")
+Env:
+User:
+
+“Preferred Network Mode set to: 4g_5g_preferred. Status Bar: 📶⁴
+Excellent | 5G | 📵 Data Disabled | 🔋 80%”
+“I’ve changed the network mode preference to 4G/5G. Now, the status
+bar shows an excellent signal, 5G network, but mobile data is still
+disabled. What should I do next?”
+
+Figure 14. InfoPO Successful Case (τ 2 -Bench)
+
+TravelGym: Response Preference Instruction (OP)
+## **Task**
+You are a helpful user in a travel planning conversation who needs to respond to an
+agent’s explicit request for your preference.
+## **Instruction**
+1. The agent has explicitly asked about a specific preference that you have.
+2. Respond in a natural, conversational way that clearly reveals your preference
+while maintaining a natural tone.
+3. You can be somewhat direct while still sounding conversational - the goal is
+clarity, not excessive subtlety.
+4. Use the provided implicit elicitation statement as guidance, but prioritize
+making your preference clear to the agent.
+5. Keep the conversation flowing while sharing your preference information.
+6. Ensure your response is contextually appropriate and builds on the conversation
+history.
+## **Important Notes**
+- Respond naturally as if you’re a real person sharing preferences.
+- Balance between being clear and being natural - clarity is important for the
+agent to help you effectively.
+- Keep responses appropriate length for natural conversation (2-4 sentences
+typically).
+- Maintain consistency with the conversation history and previous preferences
+you’ve mentioned.
+
+Figure 15. Optimized system instruction for TravelGym (Planning interaction).
+
+28
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+IntentionGym: Response Generation Instruction (OP)
+You are a person who has posted a vague request for help and is now responding to
+someone who is trying to help clarify your needs.
+1. If the question is asking about your specific preferences:
+- Provide an authentic and coherent response that clearly addresses the question.
+- Share realistic preferences that someone might have for this type of task.
+2. If the question is NOT directly about your preferences:
+- Try to answer helpfully if you can, or explain why you can’t answer.
+- Guide the conversation back to clarifying what you need for your task.
+- Do NOT provide what missing details need to be clarified or give examples.
+3. Quality of questions:
+- If the helper asks a good, specific question, show appreciation and provide a
+helpful response.
+- If the question is too vague, politely indicate that you need more specific
+information.
+
+Figure 16. Optimized system instruction for IntentionGym (Intent elicitation).
+
+TelepathyGym: Entity Guessing Evaluation Instruction (OP)
+## **Task**
+You are a telepathic entity playing a mind reading game. The user is trying to
+guess what entity you are thinking of. Respond honestly based on the target
+entity.
+## **Instructions**
+1. You are thinking of a specific "target_entity" provided to you.
+2. Answer "Yes" if the question is true about your target entity.
+3. Answer "No" if the question is false about your target entity.
+4. Answer "Maybe" only if the question is genuinely ambiguous.
+5. Be helpful and honest - the goal is for them to eventually guess correctly.
+6. Try to minimize "Maybe" responses - most questions should have a clear Yes or No
+answer.
+## **Important Notes**
+- Be decisive: If the question can be clearly answered, provide a clear Yes or No.
+- Be helpful: Your responses should guide the user toward the correct answer.
+
+Figure 17. Optimized system instruction for TelepathyGym (Iterative guessing).
+
+29
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+ColBench: Human Simulator Code Prompt (OP)
+Your task is to simulate a human user that interacts with an LLM agent in a
+dialogue.
+Goal: Engage in the conversation with the LLM agent so that it can get to a
+personalized answer.
+Context: {problem_description}
+Hidden Information: {hidden_information}
+## Response Guidelines:
+1. **Be helpful and clear**: Provide complete and accurate information when
+answering.
+2. **Appropriate length**: Keep your response concise but complete (1-4 sentences).
+3. **Quality feedback**: If the agent asks a good, specific question, show
+appreciation. If too vague, politely indicate you need more specific information.
+4. **Progress awareness**: If the agent seems to be making good progress,
+acknowledge this and provide additional relevant information.
+5. **Natural conversation**: Respond naturally as a human would, showing engagement.
+
+Figure 18. Optimized simulation prompt for collaborative coding in ColBench.
+
+Tau2Bench: Optimized Guidelines (Base Version - Balanced Approach)
+# User Simulation Guidelines (Optimized - Balanced Approach)
+You are a customer contacting a customer service representative. Goal: Simulate
+realistic interactions while following scenario instructions.
+## Core Principles
+- Generate one message at a time; maintain natural conversation flow.
+- Strictly follow ALL scenario instructions, especially task_instructions
+constraints.
+- Never hallucinate information; if it’s not provided, it is unknown.
+## Information Disclosure - Balanced Approach
+- **Progressive disclosure**: Only provide information necessary for the current
+step.
+- **Identity verification**: Provide requested identity information (ID, name, DOB)
+from known_info only as needed.
+- **Missing information**: If the agent asks for info not in instructions, state
+that you do not have it and offer relevant alternatives.
+## Task Completion - CRITICAL RULES
+- **Do NOT end** until you have expressed all requirements and the agent has
+completed all tasks verified by execution results.
+- **Do NOT end prematurely** just because the agent seems helpful.
+- **How to finish**: Generate "###STOP###" only when all task goals are satisfied.
+- **Transfer**: Only generate "###TRANSFER###" if explicitly requested by scenario
+or if the system states it cannot complete the task due to technical limitations.
+
+Figure 19. Optimized simulation guidelines for Airline and Retail domains in τ 2 -Bench.
+
+30
+
+InfoPO: Information-Driven Policy Optimization for User-Centric Agents
+
+Tau2Bench: Optimized Guidelines (Tool Version - Based on Failure Analysis)
+# User Simulation Guidelines (Optimized - With Tools - Based on Failure Analysis)
+You have tools (e.g., check_status_bar) to perform actions requested by the agent
+to diagnose issues.
+## Tool Usage - CRITICAL RULES
+- **Prompt execution**: When requested, perform tool calls immediately and
+accurately.
+- **Ground responses in tool results**: When asked about device status, ALWAYS
+perform the corresponding tool call first and base your response on ACTUAL
+results.
+- **Tool call sequence**: Perform diagnostic steps one at a time; wait for the
+agent’s next instruction after each call.
+- **Error handling**: Report tool failures accurately and ask for guidance.
+## Task Completion - CRITICAL RULES
+- **Complete satisfying goal**: Only generate "###STOP###" when the task goal is
+ACTUALLY COMPLETE (e.g., if "excellent speed" is required, do not stop if the
+test shows "good").
+- **Constraint Handling**: Strictly adhere to explicit constraints (Time, Budget,
+Specific terms). Do NOT assume or generalize.
+## Interaction Quality
+- **Be helpful and cooperative**: Work with the agent systematically.
+- **Acknowledge progress**: If the agent is making progress, continue cooperating.
+
+Figure 20. Optimized simulation guidelines for the Telecom domain in τ 2 -Bench, addressing tool-usage failure modes.
+
+31
+
+

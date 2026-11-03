@@ -1,0 +1,17 @@
+{
+  "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "resolved_model_path": "/apps/users/cxw/Document/CodeSpace/Selfs/WrongLessonBench/models/Meta-Llama-3.1-8B-Instruct",
+  "hostname": "mgt01",
+  "hidden_size": 4096,
+  "num_hidden_layers": 32,
+  "vocab_size": 128256,
+  "lora_adapter_dim": 512,
+  "lora_rank": 16,
+  "lora_alpha": 32.0,
+  "gpu_device": "cuda:3",
+  "gpu_name": "NVIDIA L40",
+  "num_texts": 4200,
+  "total_encoded_tokens": 428887,
+  "gpu_elapsed_sec": 106.33115820679814,
+  "total_subprocess_sec": 226.1053288485855
+}

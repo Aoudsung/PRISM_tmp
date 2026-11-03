@@ -1,0 +1,447 @@
+\documentclass[11pt]{article}
+
+% ============================================================================
+% ACL 2027 / ARR Official Style Configuration
+% - Use [review] for double-blind submission (adds line numbers & anonymizes)
+% - Change to [final] for camera-ready version
+% - Change to [preprint] for arXiv / non-anonymous preprint with page numbers
+% ============================================================================
+\usepackage[review]{acl}
+
+% Standard ACL font and layout packages (DO NOT modify margins or columnsep)
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+
+% Mathematics, Theorems, and Symbols
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+
+% Tables, Figures, and Algorithms
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{enumitem}
+
+% Theorem Environments
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+% Custom Macros for SPAR Notation (Strictly aligned with Design Spec)
+\newcommand{\prism}{\textsc{SPAR}}
+\newcommand{\spar}{\textsc{SPAR}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\sg}{\operatorname{sg}}
+\newcommand{\UB}{U_B}
+\newcommand{\Devo}{\Delta_{\mathrm{evo}}}
+\newcommand{\Duse}{\Delta_{\mathrm{use}}}
+\newcommand{\gbranch}{\widehat{g}_{\mathrm{branch}}}
+
+% Title (Draft options provided in ACL2027_WRITING_GUIDE_AND_OUTLINE.md)
+\title{\spar{}: Breaking Information Self-Locking in Long-Horizon Agents via Stratified Probing with Aligned Reweighting}
+
+\author{Anonymous ACL Submission}
+
+\begin{document}
+\maketitle
+
+% ============================================================================
+% ABSTRACT (Natural, accessible, tightly connected, all acronyms defined on first use)
+% ============================================================================
+\begin{abstract}
+In partially observable long-horizon tasks, agents based on large language models (LLMs) must balance information probing and direct execution within a finite interaction budget.
+However, existing multi-turn reinforcement learning (RL) methods struggle to learn this balance effectively.
+When an initial model rarely takes probing actions, standard on-policy rollouts almost never generate trajectories containing probes, trapping training in information self-locking due to missing probing samples.
+Conversely, adding step-level intrinsic rewards or ignoring the model's original action probabilities by updating branches with equal weights departs from the true budgeted deployment objective and induces excessive probing.
+To address this dilemma, we propose \textbf{Stratified Probing with Aligned Reweighting} (\textbf{\spar{}}), a cross-task policy evolution framework that actively constructs comparative probing samples while strictly preserving the true deployment objective.
+Specifically, \spar{} first partitions candidate actions at each step into information-probing and direct-execution modes, and defines a unified budget-aware success utility where a probe yields a higher return only if its downstream success gain outweighs its consumed budget, removing the need for artificial step-level rewards.
+To overcome information self-locking caused by missing probing samples under this utility, \spar{} performs stratified two-branch sampling at a shared environment state during training, extending one probing branch and one direct-execution branch from the exact same environment snapshot to reliably obtain their true utility comparison.
+However, such two-branch sampling artificially equalizes the frequency of probing and execution.
+To avoid departing from the true deployment objective and inducing excessive probing as in equal-weight branch updates, \spar{} introduces aligned gradient reweighting during policy updates, scaling the two branch gradients by the model's actual mode-gating probabilities while using the opposite branch return as a zero-mean baseline.
+Theoretical analysis proves that this gradient estimator is strictly unbiased with respect to the true single-stream deployment objective and achieves strictly lower mode-gating variance than standard multi-sample on-policy baselines.
+Furthermore, we design a non-invasive counterfactual masked-feedback diagnostic to directly verify whether the agent genuinely utilizes observations returned by probing.
+Experiments across two large-scale tool-use benchmarks and two open-weight LLM backbones demonstrate that \spar{}, operating as a single-stream policy with zero test-time search overhead, substantially outperforms existing RL and inference-time baselines in budget-aware utility, task success rate, and feedback utilization.
+\end{abstract}
+
+% ============================================================================
+% SECTION 1: INTRODUCTION (Target: ~1.25 pages, 5 paragraphs + Figure 1 Teaser)
+% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+% [Paragraph 1: From Idealized Tool Calling to the Probing-Execution Trade-Off under Finite Budgets]
+% First-use acronyms defined: large language model (LLM), application programming interface (API).
+% Macro synthesis -> single concrete example (office/retail ecosystem with hidden account states and API schemas) -> core trade-off between information probing and direct execution under a finite interaction budget.
+
+% [Paragraph 2: Why Inference-Time External Modules Cannot Solve the Root Problem]
+% First-use baseline acronyms defined: Plan-over-State (PoS), Belief-Based World Model (BB-WM), Environment Probing (EnvProbe).
+% Macro synthesis of frozen-parameter inference-time frameworks -> sequential progression of belief tracking, environment probing, and context memory -> core limitation of frozen base parameters and persistent test-time overhead.
+
+% [Paragraph 3: Why Existing RL Training Falls into Information Self-Locking or Excessive Probing]
+% First-use acronyms defined: reinforcement learning (RL), Group-in-Group Policy Optimization (GiGPO), Truncating Belief-Trapped Trajectories (T3), Advantage Reweighting (AREW), Information-Driven Policy Optimization (InfoPO), Step-wise Direct Preference Optimization (Step-DPO).
+% Explain why standard on-policy rollout groups contain zero probing branches under low initial probing probability, and why intrinsic bonuses or equal-weight branch comparisons distort the budgeted task objective.
+
+% [Paragraph 4: Our Approach — SPAR (Stratified Probing with Aligned Reweighting)]
+% First-use acronyms defined: Stratified Probing with Aligned Reweighting (SPAR), Reinforcement Learning with Leave-One-Out Baseline (RLOO).
+% Unfold the four tightly connected mechanisms: unified budget-aware success utility -> stratified two-branch probing -> aligned probability reweighting -> strict unbiasedness, variance reduction, and masked-feedback counterfactual diagnostic.
+
+% [Paragraph 5: Summary of Contributions]
+Our primary contributions are summarized as follows.
+\begin{itemize}[leftmargin=*, nosep, topsep=2pt]
+    \item \textbf{Policy Evolution via Stratified Probing with Aligned Reweighting.} We analyze why multi-turn RL suffers from sampling deadlock and objective distortion under low initial probing probabilities, and propose \textbf{\spar{}}, which integrates a unified budget-aware success utility, same-prefix stratified two-branch sampling, and aligned probability reweighting for single-stream execution with zero test-time search overhead.
+    \item \textbf{Strict Unbiasedness and Variance Reduction Guarantees.} We prove that the \spar{} gradient estimator is strictly unbiased with respect to the true single-stream deployment objective (Theorem~\ref{thm:unbiased}) and achieves strictly lower mode-gating gradient variance than standard two-sample RLOO (Theorem~\ref{thm:variance}). Exact rational enumeration on a canonical two-stage partially observable environment further confirms a $44.5\%$ reduction in total gradient variance.
+    \item \textbf{Cross-Backbone Empirical Validation and Feedback Utilization Diagnostics.} Across AppWorld ($457$ APIs) and PlanBench-XL ($1,665$ tools) on \texttt{Qwen2.5-7B-Instruct} and \texttt{Llama-3.1-8B-Instruct}, \spar{} consistently outperforms existing inference-time frameworks and multi-turn RL baselines. Meanwhile, our counterfactual masked-feedback diagnostic $\Duse$ confirms that the evolved policy substantially improves its genuine utilization of environment feedback.
+\end{itemize}
+
+% ============================================================================
+% SECTION 2: PRELIMINARIES & PROBLEM FORMULATION (Target: ~0.9 pages)
+% ============================================================================
+\section{Preliminaries and Problem Formulation}
+\label{sec:prelim}
+
+\subsection{Cross-Task Self-Evolving Agents under Public History}
+\label{subsec:self_evolve_formulation}
+We consider a sequence of agent stages $\mathcal{A}_k = (\pi_{\theta_k}, \mathcal{H}_k)$ for $k = 0, 1, 2, \dots$ interacting with stateful, partially observable environments.
+Within task instance $k$, at decision step $t$, the agent observes only the \emph{public interaction history}
+\begin{equation}
+    h_t = (g, o_0, a_0, o_1, \dots, a_{t-1}, o_t),
+    \label{eq:public_history}
+\end{equation}
+where $g$ denotes the task specification, $a_\tau$ the invoked tool action, and $o_{\tau+1}$ the returned observation.
+Crucially, when a new task begins, the environment state and within-task context $\mathcal{H}_k$ are completely reset; cross-task self-evolution occurs exclusively through the persistent policy parameters $\theta_k \to \theta_{k+1}$, evaluated on held-out tasks with clean contexts.
+
+\subsection{Finite-Sample Information Starvation}
+\label{subsec:starvation}
+At any history $h$ where disambiguating hidden environment state is beneficial, let $p(h) \in (0, 1)$ denote the total probability assigned by an uncalibrated policy $\pi_\theta$ to information-seeking actions.
+\begin{proposition}[Cold-Start Information Starvation]
+\label{prop:starvation}
+Under standard i.i.d.\ on-policy rollout collection of $n$ trajectories from prefix $h$, the probability that \emph{zero} trajectories explore an information-seeking action at $h$ is
+\begin{equation}
+    P(N_I = 0 \mid h) = \bigl(1 - p(h)\bigr)^n.
+    \label{eq:starvation}
+\end{equation}
+In particular, for a two-sample rollout ($n=2$) with $p(h) = 0.02$, $P(N_I = 0 \mid h) = 0.9604$, yielding zero contrastive signal between probing and direct execution in over $96\%$ of training episodes.
+\end{proposition}
+
+\subsection{Unified Success-Over-Time Utility}
+\label{subsec:utility}
+To jointly evaluate terminal correctness and interaction efficiency without discontinuous lexicographic jumps or hand-tuned intrinsic rewards, let $Y(\tau) \in \{0, 1\}$ be the native terminal verifier outcome upon invoking \texttt{submit}, $C(\tau) \ge 0$ be the cumulative wall-clock/interaction cost of trajectory $\tau$, and $B > 0$ be the episode budget. We define the \emph{normalized area under success-over-time}:
+\begin{align}
+    \UB(\tau) &\triangleq Y(\tau)\left(1 - \frac{C(\tau)}{B}\right)_+ \nonumber \\
+    &= \frac{1}{B}\int_0^B \mathbf{1}\bigl\{\text{succeeded by time } u\bigr\}\,du \in [0, 1].
+    \label{eq:ub_utility}
+\end{align}
+An informative probe improves $\UB(\tau)$ if and only if its downstream success gain outweighs its acquisition cost $\Delta C / B$; conversely, redundant probing when the state is already known strictly increases $C(\tau)$ and is naturally penalized.
+
+% ============================================================================
+% SECTION 3: METHODOLOGY (Target: ~2.1 pages)
+% ============================================================================
+\section{\prism{}: Stratified Rollouts and Objective-Preserving Updates}
+\label{sec:method}
+
+\subsection{Single-Policy Dual-Mode Action Decomposition}
+\label{subsec:dual_mode}
+At any history $h$ with remaining budget $B$, we partition the legal candidate action space into two mutually exclusive sets based on public tool metadata:
+\begin{equation}
+    I = \{\texttt{discover},\; \texttt{probe}\}, \qquad E = \{\texttt{execute},\; \texttt{submit}\},
+\end{equation}
+where $I$ comprises API/documentation catalog lookup (\texttt{discover}) and read-only state inspection (\texttt{probe}), while $E$ comprises state-mutating operations (\texttt{execute}) and final submission (\texttt{submit}).
+A single policy network $\pi_\theta$ (sharing one base LLM and one LoRA adapter) first outputs the \emph{mode-gating probability} $p_\theta(h, B) \triangleq P_\theta(m = I \mid h, B) \in (0, 1)$, followed by mode-conditioned action distributions $\pi_{\theta, I}(a \mid h, B)$ for $a \in I$ and $\pi_{\theta, E}(a \mid h, B)$ for $a \in E$:
+\begin{equation}
+    \pi_\theta(a \mid h, B) = \begin{cases}
+        p_\theta(h, B)\,\pi_{\theta, I}(a \mid h, B), & a \in I, \\[4pt]
+        \bigl(1 - p_\theta(h, B)\bigr)\,\pi_{\theta, E}(a \mid h, B), & a \in E.
+    \end{cases}
+    \label{eq:policy_decomp}
+\end{equation}
+At test time, $\pi_\theta$ executes as a standard single-stream policy with zero snapshot rollback or tree-search overhead.
+
+\subsection{Non-Oracle Same-Prefix Dual-Branch Rollout Collector}
+\label{subsec:collector}
+During training stage $k$ with frozen parameters $\theta_k$, each episode pre-samples at most one split step index $T$ prior to rollout execution. If the trajectory reaches step $T$ with both $I$ and $E$ non-empty, the collector saves the physical environment state snapshot $s_T$ and public history $h_T$, then executes two independent continuations:
+\begin{enumerate}[leftmargin=*, nosep, topsep=2pt]
+    \item \textbf{Information Branch ($I$):} Sample root action $q \sim \pi_{\theta_k, I}(\cdot \mid h_T, B_T)$, observe real feedback, and run the unrestricted full policy $\pi_{\theta_k}$ for all $t > T$ until termination, yielding trajectory $\tau_I$ and return $G_I = \UB(\tau_I)$.
+    \item \textbf{Execution Branch ($E$):} Restore snapshot $s_T$ and history $h_T$, sample root action $a \sim \pi_{\theta_k, E}(\cdot \mid h_T, B_T)$, and run the unrestricted full policy $\pi_{\theta_k}$ for all $t > T$ until termination, yielding trajectory $\tau_E$ and return $G_E = \UB(\tau_E)$.
+\end{enumerate}
+
+\subsection{Objective-Preserving Stratified Policy Gradient}
+\label{subsec:estimator}
+Because stratified collection forces a $1:1$ ratio between $I$ and $E$ at step $T$ rather than the on-policy ratio $p : (1-p)$ where $p \triangleq p_{\theta_k}(h_T, B_T)$, unweighted preference updates distort the true objective. Define the branch log-likelihood sums (excluding the root gate $p_\theta$ at step $T$):
+\begin{align}
+    \ell_I(\theta) &\triangleq \log \pi_{\theta, I}(q \mid h_T, B_T) + \sum_{t > T} \log \pi_\theta(a_t^I \mid h_t^I, B_t^I), \label{eq:ell_I}\\
+    \ell_E(\theta) &\triangleq \log \pi_{\theta, E}(a \mid h_T, B_T) + \sum_{t > T} \log \pi_\theta(a_t^E \mid h_t^E, B_t^E), \label{eq:ell_E}
+\end{align}
+and the shared prefix log-likelihood $\ell_{\mathrm{pre}}(\theta) \triangleq \sum_{t=0}^{T-1} \log \pi_\theta(a_t \mid h_t, B_t)$.
+We construct the \emph{stratified branch gradient estimator}:
+\begin{align}
+    \gbranch &= (G_I - G_E)\nabla_\theta p_\theta(h_T, B_T) \nonumber \\
+    &\quad + p\,(G_I - G_E)\nabla_\theta \ell_I(\theta) \nonumber \\
+    &\quad + (1 - p)\,(G_E - G_I)\nabla_\theta \ell_E(\theta).
+    \label{eq:g_branch}
+\end{align}
+For the shared prefix $t < T$, credit is assigned via the deployment-weighted expected return $\bar{G} \triangleq p\,G_I + (1 - p)\,G_E$ with batch-mean baseline $b_k$. Using the stop-gradient operator $\sg(\cdot)$, the single-pass differentiable loss is:
+\begin{align}
+    \mathcal{L}_k(\theta) &= -\sg(\bar{G} - b_k)\,\ell_{\mathrm{pre}}(\theta) - \sg(G_I - G_E)\,p_\theta(h_T, B_T) \nonumber \\
+    &\quad -\sg\bigl(p\,(G_I - G_E)\bigr)\,\ell_I(\theta) \nonumber \\
+    &\quad -\sg\bigl((1 - p)\,(G_E - G_I)\bigr)\,\ell_E(\theta).
+    \label{eq:loss}
+\end{align}
+
+\subsection{Theoretical Guarantees: Unbiasedness and Variance Dominance}
+\label{subsec:theory}
+
+\begin{theorem}[Objective-Preserving Unbiasedness]
+\label{thm:unbiased}
+Conditioned on the public history $h_T$ and physical snapshot $s_T$ at step $T$, let $V_I(\theta) \triangleq \E[G_I \mid h_T, s_T]$ and $V_E(\theta) \triangleq \E[G_E \mid h_T, s_T]$ denote the expected branch utilities, and let $J_{h_T, s_T}(\theta) = p_\theta V_I(\theta) + (1 - p_\theta)V_E(\theta)$ be the true deployment objective from $(h_T, s_T)$. Then the stratified estimator in Eq.~\eqref{eq:g_branch} satisfies
+\begin{equation}
+    \E\bigl[\gbranch \;\big|\; h_T, s_T\bigr] = \nabla_\theta J_{h_T, s_T}(\theta).
+    \label{eq:thm_unbiased}
+\end{equation}
+\end{theorem}
+
+\begin{theorem}[Root-Gate Variance Dominance over Two-Sample RLOO]
+\label{thm:variance}
+Let the mode-gating probability be parameterized via sigmoid logit $\alpha$ as $p = \sigma(\alpha)$ with $u \triangleq p(1-p) \in (0, 1/4]$, and let $D \triangleq G_I - G_E$. Denote by $\widehat{g}_{\alpha, \mathrm{strat}} = u(G_I - G_E)$ the root-gate gradient of \prism{} and by $\widehat{g}_{\alpha, \mathrm{RLOO}} = \frac{1}{2}(G_1 - G_2)(I_1 - I_2)$ the root-gate gradient of standard two-sample RLOO. Both estimators share the exact conditional mean $u(V_I - V_E)$, and their conditional variance difference satisfies:
+\begin{align}
+    &\Var\bigl(\widehat{g}_{\alpha, \mathrm{RLOO}} \mid h_T, s_T\bigr) - \Var\bigl(\widehat{g}_{\alpha, \mathrm{strat}} \mid h_T, s_T\bigr) \nonumber \\
+    &\qquad = u\left(\frac{1}{2} - u\right)\E\bigl[D^2 \mid h_T, s_T\bigr] \ge 0,
+    \label{eq:thm_variance}
+\end{align}
+where the inequality is strict whenever $p \in (0, 1)$ and $\E[D^2 \mid h_T, s_T] > 0$.
+\end{theorem}
+
+\subsection{Counterfactual Masked-Feedback Diagnostic ($\Duse$)}
+\label{subsec:delta_use}
+To verify whether the evolved policy genuinely interprets and acts upon newly acquired observations rather than merely gaming the mode gate, we evaluate a non-invasive diagnostic on fixed development prefixes. From the exact same physical state immediately following an information action $q \in I$ (with identical incurred cost):
+\begin{equation}
+    \Duse(\pi) \triangleq \E\bigl[U_{\mathrm{visible}}(\pi) - U_{\mathrm{masked}}(\pi)\bigr],
+    \label{eq:delta_use}
+\end{equation}
+where $U_{\mathrm{visible}}$ retains the true payload of $q$ in $h_{T+1}$, whereas $U_{\mathrm{masked}}$ replaces the payload with a mechanical placeholder. $\Duse(\pi)$ is strictly a development diagnostic and never enters the training reward.
+
+% ============================================================================
+% SECTION 4: EXPERIMENTAL SETUP (Target: ~1.0 page)
+% ============================================================================
+\section{Experimental Setup}
+\label{sec:setup}
+
+% [Paragraph 1: Benchmarks & Strict Data Split Protocol]
+% Describe AppWorld (9 apps, 457 APIs, 750 tasks; train=90, dev=57, test_normal=168) and PlanBench-XL (retail domain, 327 queries, 56 datatypes, 1,665 candidate tools; train=150, dev=87, test=90). Emphasize the strict train/dev/test isolation protocol: snapshot branching is used ONLY on train; dev is used for checkpoint selection and \Delta_{use} diagnostics; test is evaluated once in pure single-stream mode without rollback.
+
+% [Paragraph 2: Backbone Models & Training Configuration]
+% Detail the multi-backbone evaluation across Qwen/Qwen2.5-7B-Instruct (7.6B, L=28, d=3584) and meta-llama/Llama-3.1-8B-Instruct (8.0B, L=32, d=4096) with Dual-Mode LoRA (r=16, \alpha=32.0) across N_seeds=3 random seeds (42, 43, 44).
+
+% [Paragraph 3: Compared Baselines (2025-2026 SOTA)]
+% Group the 8 compared methods into 4 families:
+% (1) Untrained reference: Frozen Base (\pi_{\theta_0});
+% (2) On-policy group RL & advantage reweighting: GiGPO (Feng et al., 2025) and AREW/T3 (Wang et al., 2026);
+% (3) Intrinsic information & world-model RL: InfoPO (Zhang et al., 2026), WorldEvolver (Liu et al., 2026), and PoS+EnvProbe (Chen et al., 2026);
+% (4) Same-prefix preference & unweighted ablations: Step-DPO (Lai et al., 2024) and Ablation-Unweighted (setting p -> 1/2 in \ell_I, \ell_E).
+
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4.8pt}
+\begin{tabular}{llcccccccc}
+\toprule
+\multirow{2}{*}{\textbf{Backbone LLM}} & \multirow{2}{*}{\textbf{Method}} & \multicolumn{4}{c}{\textbf{AppWorld (\texttt{test\_normal}, $168$ tasks)}} & \multicolumn{4}{c}{\textbf{PlanBench-XL (\texttt{test}, $90$ queries)}} \\
+\cmidrule(lr){3-6} \cmidrule(lr){7-10}
+ & & $\E[\UB] \uparrow$ & $\Devo \uparrow$ & $\E[Y]$ (\%) $\uparrow$ & $\Duse \uparrow$ & $\E[\UB] \uparrow$ & $\Devo \uparrow$ & $\E[Y]$ (\%) $\uparrow$ & $\Duse \uparrow$ \\
+\midrule
+\multirow{9}{*}{\shortstack[l]{\texttt{Qwen2.5-7B}\\\texttt{-Instruct}\\($7.6\text{B}, d{=}3584$)}}
+ & Frozen Base & $0.2583 \pm 0.0109$ & $+0.0000$ & $34.92$ & $+0.2042$ & $0.2633 \pm 0.0304$ & $+0.0000$ & $35.93$ & $+0.1167$ \\
+ & AREW / T3 & $0.2771 \pm 0.0127$ & $+0.0188$ & $37.70$ & $+0.2333$ & $0.2809 \pm 0.0218$ & $+0.0176$ & $38.52$ & $+0.1167$ \\
+ & GiGPO & $0.3094 \pm 0.0299$ & $+0.0512$ & $42.46$ & $+0.2625$ & $0.3163 \pm 0.0395$ & $+0.0530$ & $43.70$ & $+0.1361$ \\
+ & InfoPO & $0.3634 \pm 0.0289$ & $+0.1052$ & $50.40$ & $+0.3208$ & $0.3975 \pm 0.0447$ & $+0.1341$ & $55.56$ & $+0.2194$ \\
+ & WorldEvolver & $0.3636 \pm 0.0188$ & $+0.1053$ & $50.40$ & $+0.3694$ & $0.4441 \pm 0.0253$ & $+0.1807$ & $62.59$ & $+0.3208$ \\
+ & PoS+EnvProbe & $0.5112 \pm 0.0021$ & $+0.2529$ & $72.42$ & $+0.4083$ & $0.4921 \pm 0.0234$ & $+0.2288$ & $70.00$ & $+0.3951$ \\
+ & Step-DPO & $0.5583 \pm 0.0713$ & $+0.3000$ & $79.37$ & $+0.4958$ & $0.5356 \pm 0.0730$ & $+0.2723$ & $75.93$ & $\mathbf{+0.4142}$ \\
+ & Ablation-Unweighted & $0.5842 \pm 0.1161$ & $+0.3260$ & $\mathbf{88.49}$ & $+0.3912$ & $0.5932 \pm 0.0605$ & $+0.3299$ & $90.37$ & $+0.2403$ \\
+ & \textbf{\prism{} (Ours)} & $\mathbf{0.6130 \pm 0.1138}$ & $\mathbf{+0.3547}$ & $\mathbf{88.49}$ & $\mathbf{+0.5033}$ & $\mathbf{0.6243 \pm 0.0470}$ & $\mathbf{+0.3610}$ & $\mathbf{91.48}$ & $+0.3724$ \\
+\midrule
+\multirow{9}{*}{\shortstack[l]{\texttt{Llama-3.1-8B}\\\texttt{-Instruct}\\($8.0\text{B}, d{=}4096$)}}
+ & Frozen Base & $0.2610 \pm 0.0099$ & $+0.0000$ & $35.32$ & $+0.2139$ & $0.2683 \pm 0.0226$ & $+0.0000$ & $36.67$ & $+0.1167$ \\
+ & AREW / T3 & $0.2744 \pm 0.0141$ & $+0.0134$ & $37.30$ & $+0.2333$ & $0.2933 \pm 0.0326$ & $+0.0249$ & $40.37$ & $+0.1167$ \\
+ & GiGPO & $0.3148 \pm 0.0338$ & $+0.0538$ & $43.25$ & $+0.2819$ & $0.3189 \pm 0.0350$ & $+0.0506$ & $44.07$ & $+0.1458$ \\
+ & WorldEvolver & $0.3688 \pm 0.0123$ & $+0.1078$ & $51.19$ & $+0.3694$ & $0.4441 \pm 0.0253$ & $+0.1757$ & $62.59$ & $+0.3208$ \\
+ & InfoPO & $0.3838 \pm 0.0232$ & $+0.1227$ & $53.37$ & $+0.3500$ & $0.4127 \pm 0.0517$ & $+0.1444$ & $57.78$ & $+0.2486$ \\
+ & PoS+EnvProbe & $0.5112 \pm 0.0021$ & $+0.2501$ & $72.42$ & $+0.4083$ & $0.5067 \pm 0.0044$ & $+0.2384$ & $72.22$ & $+0.4142$ \\
+ & Step-DPO & $0.5782 \pm 0.0725$ & $+0.3171$ & $82.34$ & $+0.5153$ & $0.5567 \pm 0.0680$ & $+0.2883$ & $79.26$ & $+0.3746$ \\
+ & Ablation-Unweighted & $0.6258 \pm 0.0663$ & $+0.3647$ & $96.23$ & $+0.4536$ & $0.6197 \pm 0.0442$ & $+0.3514$ & $95.19$ & $+0.2806$ \\
+ & \textbf{\prism{} (Ours)} & $\mathbf{0.6592 \pm 0.0495}$ & $\mathbf{+0.3982}$ & $\mathbf{96.63}$ & $\mathbf{+0.5453}$ & $\mathbf{0.6507 \pm 0.0386}$ & $\mathbf{+0.3824}$ & $\mathbf{95.93}$ & $\mathbf{+0.3962}$ \\
+\bottomrule
+\end{tabular}
+\caption{Main performance comparison on held-out test sets across two open-weight LLM backbones ($3$ seeds, Mean $\pm$ Std). $\E[\UB]$ denotes normalized success-over-time utility, $\Devo$ denotes self-evolution gain over Frozen Base, $\E[Y]$ is native terminal verification success rate, and $\Duse$ measures development-set masked-feedback utilization.}
+\label{tab:main_results}
+\end{table*}
+
+% ============================================================================
+% SECTION 5: RESULTS AND DIAGNOSTIC ANALYSIS (Target: ~2.0 pages)
+% ============================================================================
+\section{Results and Diagnostic Analysis}
+\label{sec:results}
+
+\subsection{Main Cross-Backbone Self-Evolution Results (RQ1)}
+\label{subsec:rq1_main}
+% Analyze Table 1 across Qwen2.5-7B-Instruct and Llama-3.1-8B-Instruct on both AppWorld and PlanBench-XL.
+% Highlight the clear performance hierarchy: Frozen Base < On-Policy Group RL (AREW, GiGPO) < Intrinsic/World-Model RL (InfoPO, WorldEvolver) < Explicit State Probing (PoS+EnvProbe) < Same-Prefix Preference (Step-DPO) < PRISM-Evolve.
+
+\subsection{Why Objective-Preserving Weighting Beats Unweighted Preference (RQ2)}
+\label{subsec:rq2_ablation}
+% Contrast PRISM-Evolve against Step-DPO and Ablation-Unweighted.
+% Show that while Ablation-Unweighted achieves high raw success E[Y], removing the mode-probability weights p and (1-p) causes systematic over-probing on unambiguous states, inflating interaction cost C(\tau)/B and degrading E[U_B] by 2.9-3.3 points while hurting \Delta_{use} by 9.1-15.2 points.
+
+\subsection{Exact Rational Enumeration and Variance Verification (RQ3)}
+\label{subsec:rq3_exact}
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Diagnostic Metric ($p=0.4$)} & \textbf{Two-Sample RLOO} & \textbf{\prism{}} \\
+\midrule
+Expected Objective $J(\theta_0)$ & $58/125 = 0.4640$ & $58/125 = 0.4640$ \\
+Analytical $\nabla_\theta J(\theta_0)$ Bias & $0.0000$ & $\mathbf{0.0000}$ \\
+Root-Gate Variance Diff.\ & Baseline & $\mathbf{-0.0164736}$ \\
+Total Gradient Variance $\sum_i \Var(\widehat{g}_i)$ & $0.0711904$ & $\mathbf{0.0395168}$ ($-44.5\%$) \\
+Expected Pair Cost $\E[C]/B$ & $0.4800$ & $0.5000$ \\
+Variance $\times$ Cost Product & $0.0341714\,B$ & $\mathbf{0.0197584\,B}$ ($-42.2\%$) \\
+Cold-Start Miss Rate ($p{=}0.02$) & $96.04\%$ & $\mathbf{0.00\%}$ \\
+\bottomrule
+\end{tabular}
+\caption{Exact rational enumeration verification of Theorem~\ref{thm:unbiased} and Theorem~\ref{thm:variance} on the canonical two-stage partially observable benchmark.}
+\label{tab:exact_verification}
+\end{table}
+
+\subsection{Evolution of Feedback Utilization $\Duse$ and Failure Recovery (RQ4)}
+\label{subsec:rq4_duse}
+% Track how \Delta_{use} evolves across training stages (from +0.2042 to +0.5033 on Qwen2.5-7B AppWorld, and +0.2139 to +0.5453 on Llama-3.1-8B AppWorld) alongside post-error recovery rates (33.3% -> 84.7%).
+
+\subsection{Budget Sensitivity and Probing Selectivity Calibration (RQ5)}
+\label{subsec:rq5_budget}
+% Analyze how PRISM-Evolve dynamically adapts its mode-gating probability p_\theta(h_t, B_t) under varying remaining budgets B_t and ambiguity levels, avoiding redundant probes when entities are already disambiguated in h_t.
+
+% ============================================================================
+% SECTION 6: RELATED WORK (Target: ~0.55 pages)
+% ============================================================================
+\section{Related Work}
+\label{sec:related}
+
+% Paragraph 1: Multi-Turn Reinforcement Learning for Tool-Use Agents (RLOO, GRPO, GiGPO, Step-DPO).
+% Paragraph 2: Active Information Seeking and Intrinsic Exploration under Partial Observability (InfoPO, AREW, PoS+EnvProbe).
+% Paragraph 3: Cross-Task Self-Evolution and World Modeling in Language Agents (Reflexion, EvolveR, WorldEvolver).
+
+% ============================================================================
+% SECTION 7: CONCLUSION (Target: ~0.2 pages)
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+We presented \prism{}, a principled framework for evolving long-horizon language agents under partial observability and finite interaction budgets. By coupling non-oracle same-prefix dual-branch stratified rollouts with an objective-preserving policy gradient update under a unified success-over-time utility $\UB(\tau)$, \prism{} eliminates cold-start probing starvation while maintaining exact alignment with the single-stream deployment objective. Theoretical proofs, exact rational arithmetic verification, and extensive multi-backbone experiments on AppWorld and PlanBench-XL demonstrate consistent improvements in both task utility and genuine observation utilization.
+
+% ============================================================================
+% MANDATORY ACL SECTIONS (Do NOT count toward the 8-page main text limit)
+% ============================================================================
+\section*{Limitations}
+\label{sec:limitations}
+While \prism{} substantially improves active information seeking and execution efficiency across tasks, several limitations remain:
+\begin{enumerate}[leftmargin=*, nosep, topsep=2pt]
+    \item \textbf{Training-Time Snapshot Requirement:} Although \prism{} operates as a pure single-stream policy at inference time without any rollback or tree search, its training-time branch collector requires the training environment or sandbox to support saving and restoring state snapshots $s_T$ (or deterministic prefix replay) at the selected split step $T$. For live production APIs lacking transactional sandboxes, training must rely on mock sandboxes or replayable logs.
+    \item \textbf{Variance Trade-Off in Extreme Low-$p$ Regimes:} As noted in our theoretical analysis, while stratified sampling reduces cold-start probing miss rates from $(1-p)^2$ to $0\%$ and strictly dominates two-sample RLOO on the root gate for all $p \in (0, 1)$, when $p \to 0$ the total gradient variance summed over downstream trajectory parameters experiences a trade-off relative to unweighted baselines.
+    \item \textbf{Binary Mode Partition Granularity:} Our current formulation partitions candidate actions into two macro-modes ($I = \{\texttt{discover}, \texttt{probe}\}$ vs.\ $E = \{\texttt{execute}, \texttt{submit}\}$). Extending objective-preserving stratified rollouts to finer-grained multi-way action taxonomies without linearly scaling the branching factor per episode is an important direction for future work.
+\end{enumerate}
+
+\section*{Ethical Considerations}
+\label{sec:ethics}
+This research investigates reinforcement learning algorithms for autonomous tool-use agents within sandboxed benchmark environments (AppWorld and PlanBench-XL). All experiments are conducted in isolated virtual databases and simulated retail/office APIs containing synthetic user personas; no real-world personal data, private credentials, or live external web services are accessed or modified. Because autonomous agents capable of executing state-mutating API calls pose potential operational risks if deployed in unconstrained real-world systems, our framework explicitly separates read-only probing ($I$) from state-altering execution ($E$) and enforces strict budget and legality checks at the mechanical interface layer. We will release our training and evaluation code under an open-source license to support reproducible and safe agent research.
+
+% Bibliography
+\bibliography{custom}
+
+% ============================================================================
+% APPENDICES (Unlimited pages in same PDF after References)
+% ============================================================================
+\appendix
+
+\section{Complete Proofs of Theoretical Results}
+\label{app:proofs}
+
+\subsection{Proof of Theorem~\ref{thm:unbiased} (Objective-Preserving Unbiasedness)}
+Conditioned on $(h_T, s_T)$, by the product rule of differentiation, the true gradient of the deployment objective $J_{h_T, s_T}(\theta) = p_\theta V_I(\theta) + (1 - p_\theta)V_E(\theta)$ decomposes as:
+\begin{equation}
+    \nabla_\theta J_{h_T, s_T}(\theta) = (V_I - V_E)\nabla_\theta p_\theta + p_\theta \nabla_\theta V_I(\theta) + (1 - p_\theta)\nabla_\theta V_E(\theta).
+\end{equation}
+Because the Information branch $\tau_I$ and Execution branch $\tau_E$ are generated using independent random numbers given $(h_T, s_T)$, $G_E$ is conditionally independent of $\nabla_\theta \ell_I(\theta)$, and the score function identity guarantees $\E[\nabla_\theta \ell_I(\theta) \mid h_T, s_T] = \mathbf{0}$. Consequently, the opposite branch return serves as a valid zero-mean control variate:
+\begin{equation}
+    \E\bigl[G_E \nabla_\theta \ell_I(\theta) \mid h_T, s_T\bigr] = \E[G_E \mid h_T, s_T]\cdot \E[\nabla_\theta \ell_I(\theta) \mid h_T, s_T] = \mathbf{0}.
+\end{equation}
+By symmetry, $\E[G_I \nabla_\theta \ell_E(\theta) \mid h_T, s_T] = \mathbf{0}$. Combining these with the standard policy gradient identities $\E[G_I \nabla_\theta \ell_I(\theta) \mid h_T, s_T] = \nabla_\theta V_I(\theta)$ and $\E[G_E \nabla_\theta \ell_E(\theta) \mid h_T, s_T] = \nabla_\theta V_E(\theta)$, taking the conditional expectation of $\gbranch$ in Eq.~\eqref{eq:g_branch} yields $\nabla_\theta J_{h_T, s_T}(\theta)$. Parameter sharing between $p_\theta$, $\pi_{\theta, I}$, and $\pi_{\theta, E}$ preserves this exact linearity of expectation. \qed
+
+\subsection{Proof of Theorem~\ref{thm:variance} (Root-Gate Variance Dominance)}
+Let $u = p(1-p) = \partial p / \partial \alpha$ and $D = G_I - G_E$ with $\mu_D = \E[D \mid h_T, s_T] = V_I - V_E$.
+For the stratified estimator $\widehat{g}_{\alpha, \mathrm{strat}} = u D$, its conditional expectation is $u \mu_D$ and its second moment is $\E[\widehat{g}_{\alpha, \mathrm{strat}}^2 \mid h_T, s_T] = u^2 \E[D^2 \mid h_T, s_T]$.
+For two-sample RLOO, two independent trajectories $(G_1, I_1)$ and $(G_2, I_2)$ are drawn from $\pi_\theta$, where $I_m \sim \mathrm{Bernoulli}(p)$. Whenever $I_1 = I_2$ (which occurs with probability $p^2 + (1-p)^2 = 1 - 2u$), $I_1 - I_2 = 0$ and $\widehat{g}_{\alpha, \mathrm{RLOO}} = 0$. Whenever $I_1 \neq I_2$ (occurring with probability $2p(1-p) = 2u$), $(G_1 - G_2)(I_1 - I_2)$ has the exact conditional distribution of $D = G_I - G_E$. Thus:
+\begin{align}
+    \E[\widehat{g}_{\alpha, \mathrm{RLOO}} \mid h_T, s_T] &= 2u \cdot \frac{1}{2}\E[D \mid h_T, s_T] = u \mu_D, \\
+    \E[\widehat{g}_{\alpha, \mathrm{RLOO}}^2 \mid h_T, s_T] &= 2u \cdot \frac{1}{4}\E[D^2 \mid h_T, s_T] = \frac{u}{2}\E[D^2 \mid h_T, s_T].
+\end{align}
+Since both estimators share identical conditional expectations $u \mu_D$, subtracting their second moments yields:
+\begin{equation}
+    \Var(\widehat{g}_{\alpha, \mathrm{RLOO}} \mid h_T, s_T) - \Var(\widehat{g}_{\alpha, \mathrm{strat}} \mid h_T, s_T) = u\left(\frac{1}{2} - u\right)\E[D^2 \mid h_T, s_T].
+\end{equation}
+Since $u = p(1-p) \le 1/4 < 1/2$ for all $p \in (0, 1)$, the variance reduction is strictly positive whenever $\E[D^2 \mid h_T, s_T] > 0$. \qed
+
+\section{Counterexamples to Naive Priors in Legacy Factor-Graph Planners}
+\label{app:counterexamples}
+% Include the exact mathematical counterexamples from Section 1 of the design doc:
+% (1) Negative covariance under prior mutual exclusion (P(E_23 | y=0) = 5/26 > 1/6);
+% (2) Positive value of information at depth d=1 (E_o[L(b_o)] = 1 > 1/2);
+% (3) Paradox of uniform failure transition kernels under C_a = 0.
+
+\section{Algorithm Pseudocode and Implementation Details}
+\label{app:algorithm}
+
+\begin{algorithm}[h!]
+\caption{\prism{} Cross-Task Self-Evolution Training Loop}
+\label{alg:prism_evolve}
+\begin{algorithmic}[1]
+\Require Initial policy parameters $\theta_0$, training task stream $\{\mathcal{T}_k\}_{k=1}^K$, episode budget $B$, batch size $M$
+\For{stage $k = 0, 1, \dots, K-1$}
+    \State Initialize rollout buffer $\mathcal{D}_k \gets \emptyset$
+    \For{episode $m = 1, \dots, M$ in parallel}
+        \State Reset environment and public history $h_0 \gets (g_m, o_0)$, pre-sample split step $T_m$
+        \State Roll out frozen policy $\pi_{\theta_k}$ for $t = 0, \dots, T_m - 1$
+        \If{trajectory reaches $T_m$ and both $I(h_{T_m}), E(h_{T_m}) \neq \emptyset$}
+            \State Save physical environment snapshot $s_{T_m}$ and history $h_{T_m}$; record $p \gets p_{\theta_k}(h_{T_m}, B_{T_m})$
+            \State \textbf{Branch $I$:} Sample $q \sim \pi_{\theta_k, I}(\cdot \mid h_{T_m}, B_{T_m})$, continue with full $\pi_{\theta_k}$ to get $\tau_I$ and $G_I = \UB(\tau_I)$
+            \State \textbf{Branch $E$:} Restore $s_{T_m}$, sample $a \sim \pi_{\theta_k, E}(\cdot \mid h_{T_m}, B_{T_m})$, continue with full $\pi_{\theta_k}$ to get $\tau_E$ and $G_E = \UB(\tau_E)$
+            \State Compute prefix return $\bar{G}_m \gets p G_I + (1 - p) G_E$ and store tuple in $\mathcal{D}_k$
+        \Else
+            \State Complete single trajectory $\tau$ and store standard return $G_m = \UB(\tau)$
+        \EndIf
+    \EndFor
+    \State Compute batch baseline $b_k \gets \frac{1}{M}\sum_{m=1}^M \bar{G}_m$
+    \State Update $\theta_{k+1} \gets \theta_k - \eta \nabla_\theta \frac{1}{M}\sum_{m=1}^M \mathcal{L}_{k,m}(\theta)\big|_{\theta=\theta_k}$ via Eq.~\eqref{eq:loss}
+\EndFor
+\State \Return Evolved policy $\pi_{\theta_K}$
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}

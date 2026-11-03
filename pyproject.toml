@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prism-evolve"
+version = "0.1.0"
+description = "PRISM-Evolve: Online Cross-Task Policy Evolution via Stratified Dual-Mode Counterfactual Branching"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26,<3", "torch>=2.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+open = ["requests>=2.31,<3", "datasets>=3,<5"]
+profile = ["psutil>=6,<8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

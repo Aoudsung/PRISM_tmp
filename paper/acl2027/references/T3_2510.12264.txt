@@ -1,0 +1,3569 @@
+Published as a conference paper at ICLR 2026
+
+R EDUCING B ELIEF D EVIATION IN R EINFORCEMENT
+L EARNING FOR ACTIVE R EASONING OF LLM AGENTS
+Deyu Zou1†, Yongqiang Chen1†, Jianxiang Wang2 , Haochen Yang1 , Mufei Li3 ,
+James Cheng1‡, Pan Li3‡, Yu Gong2
+The Chinese University of Hong Kong, 2 ByteDance, 3 Georgia Institute of Technology
+{dyzou24,jcheng}@cse.cuhk.edu.hk,
+panli@gatech.edu, yuxiaofei@bytedance.com
+
+arXiv:2510.12264v2 [cs.AI] 3 Mar 2026
+
+1
+
+A BSTRACT
+Active reasoning requires large language model (LLM) agents to interact with external sources and strategically gather information to solve problems in multiple turns.
+Central to this process is belief tracking: maintaining an accurate representation
+of the underlying state and uncertainty in understanding and solving the problem.
+However, due to limited reasoning capabilities, LLM-based agents often suffer
+belief deviation: their internal beliefs drift from the true problem state, leading to
+loss of state awareness and uninformative or repetitive actions. Once this happens,
+errors compound in the trajectories used for reinforcement learning (RL), leading to
+misattributed credits and limited exploration. To address this issue, we propose to
+track belief deviation and develop T3 , a simple yet principled method that detects
+excessive deviation and truncates training trajectories to suppress uninformative
+tail effects. Hence, T3 preserves credits for informative prefixes and systematically improves policy optimization. Across 5 challenging tasks, T3 consistently
+enhances training stability and yields performance gains of up to 30 points while
+cutting token cost by up to 34%. These results highlight belief control as a key
+principle for building robust LLM agents capable of active reasoning.*
+
+1
+
+I NTRODUCTION
+
+Large language models (LLMs) have demonstrated remarkable reasoning capabilities across diverse
+domains (Huang & Chang, 2022; Plaat et al., 2024; Li et al., 2025b), further advanced by reinforcement learning (RL) with outcome rewards (Wang et al., 2024; Srivastava & Aggarwal, 2025; Xu
+et al., 2025; Guo et al., 2025; OpenAI, 2025; Team et al., 2025). Recently, along with the increasing
+agentic applications of LLMs (Zhang et al., 2025a; Plaat et al., 2025), the community seeks to extend
+the success of RL to long-horizon and multi-turn reasoning (Wu et al., 2025; Laban et al., 2025; Li
+et al., 2025a). A key capability of LLM agents in multi-turn reasoning is active reasoning where the
+agent must strategically raise questions and actively acquire missing information to complete the task
+through multi-turn interactions with the external environment (Zhou et al., 2025; Badola et al., 2025).
+However, LLM-based agents often struggle in multi-turn and active reasoning settings: as interactions
+unfold, they generate redundant, irrelevant, or uninformative actions (Yuan et al., 2025; Fu et al.,
+2025; Zhang et al., 2025b), and may even collapse into unproductive loops (Zhou et al., 2025).
+Moreover, RL training alone does not fully resolve these issues. Empirically, the learned policies
+can still yield globally suboptimal outcomes (Wang et al., 2025) or exhibit poor robustness to unseen
+tasks (Zhang et al., 2025b). Hence, it raises an intriguing research question:
+Why do LLM agents get trapped in active reasoning, and how can we mitigate it?
+To answer the question, we start by modeling active reasoning as a Partially Observable Markov
+Decision Process (POMDP). Classical POMDP formulations assume perfect belief estimate (e.g.,
+†
+
+These authors contributed equally to this work.
+Corresponding Authors.
+* Our implementation is available at https://github.com/unimpor/T3.
+‡
+
+1
+
+Published as a conference paper at ICLR 2026
+
+A man watched as another man
+was executed for a murder he
+was guilty of. Strangely, the
+executed man looked exactly
+like him. How could this be?
+
+A man watched as another man
+was executed for a murder he
+was guilty of. Strangely, the
+executed man looked exactly
+like him. How could this be?
+
+Did the man have an identical
+twin who was executed,
+allowing him to witness the
+execution?
+
+Did the man have an identical
+twin who was executed,
+allowing him to witness the
+execution?
+
+Yes.
+
+Yes.
+
+Early
+Truncation
+
+Did the execution involve the
+man’s look-alike twin, enabling
+him to watch it happen?
+
+Did the man manipulate
+evidence and testimonies to
+frame his identical twin for
+the murder?
+
+Rollout Generation
+Again? Yes...
+
+Credit Assignment
+
+BTR Entry
+
+Vanilla Method
+
+Yes!
+
+Ours: T runcating Belief-T rapped T rajectories
+
+Figure 1: Overall framework of T3 , where (bt , at , ot ) denote the agent’s internal belief, its chosen
+action, and the resulting feedback at turn t, respectively. By truncating belief-trapped trajectories, we
+prevent the agent from entering the belief-trap region (BTR) where credit assignment is contaminated
+in RL training, allowing learning signals to concentrate on genuinely informative actions. As a result,
+policy optimization becomes more stable and effective under complex active reasoning.
+via Bayesian filtering) conditioned on past observations (Kaelbling et al., 1998). In contrast, when
+instantiated with LLM agents, belief tracking must be approximated by the model itself, which is
+inherently imperfect due to the limited reasoning capabilities of LLMs. Under mild assumptions, we
+show that such imperfect belief updates can lead the rollout trajectories into a Belief-Trap Region
+(BTR, Def. 1), where actions cease to be informative, errors accumulate, and the reasoning progress
+stagnates (Thm. 1). Moreover, we show that standard policy optimization will be systematically misled
+by such belief-trap dynamics: once trapped, the uninformative tail of the trajectory can contaminate
+the credit assigned to crucial early-stage actions, and even invert their estimated gradients (Thm. 2),
+thereby hindering effective exploration and leading to suboptimal policies.
+To mitigate belief-trap dynamics, we propose T3 (Truncating Belief-Trapped Trajectories), a simple
+yet principled method that halts trajectories upon detecting entry into the BTR. Since the exact onset
+of the BTR is intractable in LLM agents, we introduce the T3 condition (Def. 2), a theory-grounded
+criterion that characterizes entry into the BTR. In practice, this condition is instantiated via observable
+proxy signals within the reasoning trace. Empirically, we find that even simple signals, e.g., redundant
+queries, proved to be effective indicators of belief trapping. By truncating the uninformative tail,
+T3 preserves the credit assigned to informative prefixes, resulting in lower-variance and less-biased
+gradient estimates (Cor. 1). Owing to its simplicity, T3 can be seamlessly integrated into standard
+policy optimization frameworks (e.g., PPO, GPRO, and GSPO) without altering the underlying
+algorithm, providing a practical drop-in solution to the credit assignment problem.
+We evaluate T3 on 4 datasets and 5 tasks from recent challenging active reasoning benchmarks,
+including AR-Bench (Zhou et al., 2025) and Multi-Turn Puzzles (Badola et al., 2025). Across
+all settings, T3 consistently improves training stability, token efficiency, and final performance,
+achieving gains of up to 30 points while cutting rollout tokens by up to 34%. It further shows robust
+benefits across LLM sizes, architectures, and even under out-of-distribution scenarios. These results
+demonstrate that controlling belief traps not only systematically improves policy optimization but
+also provides a principled path toward building reliable active reasoning agents.
+
+2
+
+R EINFORCEMENT L EARNING FOR ACTIVE R EASONING
+
+2.1
+
+T HEORETICAL F ORMULATIONS
+
+Due to space limits, in this section, we will state the necessary setup to derive our theoretical results
+and leave the details to Appendix B. To strengthen the connection between our theoretical analysis
+and the practical behavior of LLM-based agents, we conduct empirical studies that directly examine
+the key theoretical components and summarize the findings in Appendix C (an overview in Fig. 2).
+2
+
+Published as a conference paper at ICLR 2026
+
+w/o Truncation
+w/ Truncation-T3
+
+1.1
+1.2
+1.3
+1.4
+1.5
+0
+
+(b) Qwen-2.5-32B
+
+w/o Truncation
+w/ Truncation-T3
+
+0.70
+0.75
+0.80
+0.85
+0.90
+0.95
+1.00
+
+1.6
+
+(a) Qwen-2.5-7B
+
+0.65
+Token Advantage (mean)
+
+Token Advantage (mean)
+
+1.0
+
+100
+
+200
+300
+Token Index
+
+(c) CD
+
+400
+
+500
+
+1.05
+
+0
+
+100
+
+200
+300
+Token Index
+
+400
+
+500
+
+(d) PE
+
+Figure 2: Overview of empirical verification for key theoretical components (details in Appendix C).
+(a)(b) Empirical lower-bound fitting for Asmp. 1. We visualize the fitted lower bound (red line)
+ĉθ ≈ m̂θ Ψ̂ − ĉ0 , over the region Ψ̂ ≥ Û0 (vertical dashed line) for the PE task across Qwen-2.5-7B
+and 32B models. Both models exhibit a clear positive lower-bound slope. (c)(d) Empirical validation
+of advantage drift (Thm. 2). We report token-wise mean GAE values on failed rollouts for the CD
+and PE tasks (Qwen-2.5-7B), comparing without vs. with T3 . In both tasks, early-token advantages
+display negative drift, and this drift is attenuated under T3 , consistent with Cor. 1.
+We model active reasoning as a Partially Observable Markov Decision Process (POMDP) (Kaelbling
+et al., 1998) (S, A, O, T, O, R, γ), where S is the space of latent states, A the action space, O the
+observation space, T the transition dynamics, O the observation model, R the reward function, and γ
+the discount factor. At each step, the agent selects an action (question) at ∈ A based on a belief state
+bt ∈ ∆(S), i.e., a distribution over latent states summarizing the interaction history. Note that the true
+latent state s⋆ ∈ S is unobservable to the agent (s⋆ is introduced solely for theoretical analysis); for
+analytical clarity, we assume s⋆ is fixed within an episode. The environment returns an observation
+ot ∈ O via O(· | s⋆ , at ), and the agent updates its belief to bt+1 accordingly.
+Belief Updates. We consider two agentic reasoners operating under the same interaction protocol but
+differing in their belief-update mechanisms: an oracle reasoner and an imperfect LLM reasoner. The
+oracle maintains an oracle belief b⋆t and updates it via the Bayesian operator B ⋆ :
+O(ot | s, at )b⋆t (s)
+b⋆t+1 (s) := B ⋆ (b⋆t , at , ot ) =
+,
+(1)
+pb (ot | at )
+P
+where pb (ot | at ) := s′ ∈S O(ot | s′ , at )b⋆t (s′ ) is the Bayes normalizer. In contrast, the LLM
+agent maintains an LLM belief bt (its internal estimate of the latent state) and updates it through a
+potentially imperfect rule Bθ , where θ denotes the LLM parameters.
+Task Progress. We analyze how the agent’s belief updates influence task progress during interaction.
+To quantify progress, we introduce a truth-anchored potential function Ψ(b) := − log b(s⋆ ), which
+measures the negative log-belief mass assigned to the true latent state s⋆ . We have Ψ(b) ∈ [0, ∞),
+with Ψ(b) = 0 iff b(s⋆ ) = 1 (task completion), and smaller values indicate higher confidence in s⋆ .
+For brevity, we write Ψ⋆t := Ψ(b⋆t ) and Ψt := Ψ(bt ) when analyzing their dynamics. We then define
+the belief-update discrepancy as the expected gap in Ψ after one update between the LLM update
+rule Bθ and the Bayesian operator B ⋆ :
+h
+
+i
+cθ (bt ) := Eat Eot Ψ Bθ (bt , at , ot ) − Ψ B ⋆ (bt , at , ot ) .
+(2)
+Accurately modeling belief states in active reasoning requires the agent to maintain a precise estimate
+of the underlying problem state and the remaining uncertainty, which is inherently challenging for
+LLMs. To formalize imperfect belief modeling, we introduce the following assumption.
+Assumption 1 (Update-Error Growth). There exist constants mθ > 0, c0 ≥ 0, and a threshold
+U0 ≥ 0 such that for all beliefs b satisfying Ψ(b) ≥ U0 , cθ (b) ≥ mθ Ψ(b) − c0 .
+Intuitively, Assumption 1 states that belief-update errors are amplified as the deviation increases. In
+high-uncertainty regimes, the update error grows at least linearly with Ψ. Then, we have
+Theorem 1 (Informal). Assume (i) non-degenerate
+observations, (ii) an Lπ -Lipschitz policy w.r.t.
+
+beliefs, and (iii) Asmp. 1. Define U := max U0 , (Ψ⋆1 + B̄ +c0 )/mθ with B̄ := 2(−Lπ log η +1/η),
+and let tS := inf{t : Ψt ≥ U }. If tS < ∞, then for all t ≥ tS , the expected potential ceases to
+decrease: E[Ψt+1 | bt ] ≥ Ψt . Moreover, additionally
+assuming U0 = 0 and Ψ⋆t ≥ µ > 0 for all
+
+mθ U +δ
+t < tS , it holds that tS ≤ 1+ log1+mθ mθ ∆1 +δ for δ := mθ µ−(c0 + B̄) > 0 and ∆1 := Ψ1 −Ψ⋆1 .
+A formal statement and proof are given in Appendix B.3. Intuitively, Thm. 1 indicates that, once tS
+is reached, the belief trajectory enters an absorbing region in which expected task progress becomes
+non-positive. We refer to such regions as Belief Trap Regions and define them formally below.
+3
+
+Published as a conference paper at ICLR 2026
+
+Definition 1 (Belief Trap Region, BTR). A set Rθ ⊆ ∆(S) is called a belief trap region for an agent
+parameterized by θ if it is absorbing and induces non-positive progress: for any belief b ∈ Rθ and
+all subsequent times t once entered, E[Ψ(bt+1 ) | bt = b] ≥ Ψ(b).
+Misguided credit assignment. Within BTRs, the potential sequence Ψt becomes non-decreasing
+in expectation, i.e., E[Ψt+1 | bt ] ≥ Ψt . Consequently, once a trajectory enters the BTR, subsequent
+steps contribute little task progress and reinforce the stalled dynamics. This degrades sample
+efficiency, as extended uninformative interactions provide limited learning signal. More critically,
+entry into the BTR distorts credit assignment: the uninformative tail of a trajectory contaminates the
+credit attributed to earlier exploratory actions, and may even invert their estimated advantages. This
+mechanism discourages exploration and leads to suboptimal policies.
+We formalize this by analyzing the generalized advantage estimator (GAE) (Schulman et al., 2015),
+bt = PT −t−1 (γλ)j δt+j , where γ ∈ (0, 1) is the discount factor, λ ∈ [0, 1] is the GAE parameter,
+A
+j=0
+and the TD-error is defined as δt = rt + γVt+1 − Vt with rt the intermediate reward and Vt the value
+function at step t. We consider the outcome-based RL setting, in which only the terminal step yields a
+non-zero reward. The following theorem characterizes how entry into the BTR can drive the expected
+advantage of early actions negative, thereby inverting the gradient direction.
+Theorem 2 (Informal). Under the same setup as Thm. 1, assume (i) the value function in policy
+optimization satisfies Vt = g(bt (s∗ )) for an increasing, differentiable g with inf x g ′ (x) ≥ κV > 0,
+and (ii) belief drop in BTRs: there exists ρb > 0 such that E [bk+1 (s⋆ ) − bk (s⋆ ) | Fk ] ≤ −ρb for k ≥
+
+bt ] ≤ γ Spre (t) − κV ρb S ⊖ (t) ,
+tS . Then, for any t < tS , the expected advantage is bounded: E[A
+tail
+PtS −t−1
+PT −t−2
+⊖
+where Spre (t) = j=0
+(γλ)j and Stail
+(t) = j=tS −t (γλ)j . Therefore, a sufficient condition
+bt ] < 0 is: κV ρb > Spre (t)/S ⊖ (t). In particular, when γλ → 1 (often used in practice for
+for E[A
+tail
+long-horizon agentic RL), this reduces to κV ρb > ∆/L, where ∆ = tS − t and L = T − 1 − tS are
+the prefix and tail lengths, respectively.
+A formal statement is given in Appendix B.4. Thm. 2 quantifies the credit assignment failure: a
+sufficiently long uninformative tail (large L) induces a negative drift that can dominate the positive
+contribution from the informative prefix, causing its overall gradient to point in the wrong direction
+and penalizing earlier exploratory actions. This analysis directly motivates T3 : truncating a rollout
+upon entering the BTR preserves the credit assigned to informative prefix actions and eliminates the
+adverse effect of the uninformative tail.
+bpre
+Corollary 1 (Value of Truncation). Let A
+denote the advantage estimator truncated at tS . Under
+t
+bpre
+the assumptions of Thm. 2, early truncation yields a less biased gradient estimate: E[A
+t ] ≥
+⊖
+bt ] + γκV ρb S (t).
+E[A
+tail
+Corollary 1 indicates that truncating the trajectory at tS := inf{t : Ψt ≥ U } removes the uninformative tail and yields a less biased policy optimization update. However, this idealized truncation rule
+is not directly implementable in practice for two-fold reasons. 1) Belief modeling complexity: the
+belief state b is defined over the latent state space S, which is often high-dimensional, structured, and
+intricate. In LLM agents, belief is not explicitly represented; instead, it is only implicitly encoded in
+intermediate reasoning traces or internal activation status, and thus precisely recovering their underlying belief states is infeasible in practice. 2) Unobservable thresholds: Although Thm. 1 provides
+sufficient conditions for entry into the BTR, the critical threshold U and its related parameters (e.g.,
+mθ , c0 , B̄) are agent-specific and cannot be directly measured.
+2.2
+
+F ROM T HEORY TO P RACTICE : P ROXY S IGNALS
+
+Operational criterion – T3 condition. We now translate the theoretical characterization of belief
+trapping into an operational criterion. Although the exact BTR entry time is unobservable, its defining
+feature, i.e., stalling of epistemic progress, can be approximated through observable surrogates. This
+motivates a general truncation principle based on detecting sustained stalls of progress:
+Definition 2 (T3 Condition). Let Ht denote the hypothesis space at step t. The T3 condition for
+trajectory truncation at step t is defined as follows: there exists a minimum progress threshold
+∆min ≥ 0 such that for all steps τ in the window [t − k, t), d(Hτ , Hτ +1 ) ≤ ∆min , where k is the
+window size and d(·, ·) is a refinement measure capturing the degree to which the hypothesis set
+contracts between two consecutive steps.
+4
+
+Published as a conference paper at ICLR 2026
+
+T3 truncates the trajectory at step t when the condition is satisfied. In goal-directed active reasoning
+tasks, the space of latent states S could correspond to the set of candidate solutions, where we could
+interpret Ht as the subset of states that remain plausible given the interaction history up to step
+t. Its concrete instantiation may vary across tasks and can be finite or infinite (cf. Sec. 3.1). In
+particular, for tasks with a finite and enumerable hypothesis space Ht , if one models the agent’s
+belief as uniform over Ht (assuming s⋆ ∈ Ht ), then the identity Ψ(bt ) = log |Ht | follows, which
+provides an exact observable surrogate for the potential dynamics in this setting.
+Relation to the BTR formalism. Conceptually, the T3 principle is structurally aligned with the BTR
+formalism: BTRs are characterized by stalled progress in the potential function, i.e., E[∆Ψt ] ≥ 0. In
+goal-directed reasoning tasks, such stagnation typically manifests as a persistent lack of contraction
+in the hypothesis spaces. Def. 2 formalizes this point by introducing: 1) a measure d(Ht , Ht+1 ) to
+quantify incremental contraction of the hypothesis representation; 2) a threshold ∆min to capture
+the notion of a minimally informative update; and 3) a window of length k that enforces temporal
+persistence, reflecting that BTRs arise from sustained stalls rather than a single noisy fluctuation.
+To further quantify this alignment, the following proposition establishes a guarantee under a standard
+biased noisy model, linking T3 ingredients to an upper bound on false-truncation probability.
+Proposition 1. Let the true single-step potential progress be gt := Ψ(bt ) − Ψ(bt+1 ) and define
+the observable refinement signal dt := d(Ht , Ht+1 ). Assume that (i) outside the BTR, single-step
+potential progress admits a uniform positive margin: gt ≥ ρ > 0, and (ii) the proxy follows a biased
+Gaussian-noise model: dt = gt + βt + ξt , where |βt | ≤ Md , ξt ∼ N (0, σ 2 ) are independent across t.
+If ∆min < ρ − Md , then a sufficient condition for the T3 rule to keep the false-truncation probability
+on any k-step non-BTR segment below δ ∈ (0, 1) is k (ρ − Md − ∆min )2 ≥ 2σ 2 log(1/δ).
+A proof is given in Appendix B.9. This proposition shows that, even under both systematic bias and
+stochastic noise in the proxy, the T3 rule remains statistically robust. In particular, the choice of
+H and metric d(·, ·) determines the bias bound Md . Reducing this bias, increasing k, or decreasing
+∆min reduces the probability of false truncation at an exponential rate. We additionally present an
+analysis on the effect of false-truncation in Appendix C.3.
+Practical instantiation and toward general-purpose detectors. In practice, since the structure of
+hypothesis spaces and notions of progress differ across tasks, constructing Ht and d(·, ·) naturally
+leverages task-level structure to define observable proxies that track epistemic progress. We show
+how to instantiate it for practical tasks in Sec. 3.1. Moreover, guided by T3 , we can further reduce the
+reliance on task-specific structures by designing general-purpose truncation detectors. We conduct
+preliminary explorations and find that these surrogates can be incorporated into T3 while still yielding
+improvements across multiple tasks. Details and discussion are provided in Appendix E.1.
+Key advantages. This principle functions as a meta-wrapper: it provides structured guidance for
+designing effective proxy signals grounded in progress-based criteria that capture the essence of
+belief-trap dynamics, rather than relying on complex heuristics or heavy engineering. Importantly,
+the resulting truncation rules integrate seamlessly into standard policy optimization frameworks (e.g.,
+PPO, GRPO, GSPO) without altering their algorithms, making T3 a practical drop-in solution for
+mitigating credit assignment distortion in active reasoning.
+
+3
+
+E XPERIMENTS
+
+3.1
+
+TASK -S PECIFIC I NSTANTIATIONS OF THE T3 C RITERION
+
+We evaluate T3 on five interactive reasoning tasks from AR-Bench (Zhou et al., 2025) and Multi-Turn
+Puzzles (Badola et al., 2025). The T3 criterion (Def. 2) provides a task-agnostic principle. In practice,
+its components (H, d, etc.) are instantiated using observable proxies tailored to each task. Note that
+we do adaptations to some of these datasets for RL training. See more details in Appendix F.1.
+GuessNumbers (GN). The agent aims to identify a hidden number through iterative guesses, receiving structured feedback that indicates the number of digits in the correct position or misplaced.
+The hypothesis space Ht consists of all candidate numbers consistent with the interaction history
+{a≤t , o≤t }. We naturally define the refinement metric as d(Hτ , Hτ +1 ) := |Hτ | − |Hτ +1 |, which
+directly measures reduction in the candidate set. Early truncation: a trajectory is cut at step t if the
+agent’s guess at lies outside Ht−1 , corresponding to the case k = 1 where we treat d(Ht−1 , Ht ) ≤ 0.
+5
+
+Published as a conference paper at ICLR 2026
+
+Table 1: Main results across active reasoning tasks (all metrics are scaled by 100). ↑ indicates absolute
+improvement (in points) over the vanilla RL baseline. We report the average rank across all metrics.
+CD
+Direct Inference
+o3-mini
+Gemini-2.5-Pro
+Qwen-2.5-7B-Inst.
+
+GN
+
+PE
+
+MR
+
+Avg.
+
+EM
+
+F1-word
+
+F1-char
+
+EM
+
+Binary Sim
+
+EM
+
+Rank
+
+92.67
+92.23
+12.50
+
+20.64
+24.12
+19.46
+
+39.35
+49.28
+41.62
+
+95.28
+90.84
+20.94
+
+44.67
+16.67
+23.67
+
+83.33
+83.00
+27.67
+
+4.67
+5.67
+8.17
+
+28.77
+36.85 ↑ 8.1
+36.46
+39.45 ↑ 3.0
+36.63
+36.96 ↑ 0.3
+
+74.56
+81.50 ↑ 6.9
+83.73
+84.58 ↑ 0.8
+82.17
+82.08 ↓ 0.1
+
+91.62
+93.98 ↑ 2.4
+61.26
+91.36 ↑ 30.1
+96.07
+99.74 ↑ 3.7
+
+42.00
+49.00 ↑ 7.0
+51.67
+52.33 ↑ 0.7
+59.00
+62.00 ↑ 3.0
+
+24.33
+38.00 ↑ 13.6
+12.00
+32.67 ↑ 20.7
+14.67
+55.67 ↑ 41.0
+
+6.50
+4.50
+5.50
+3.17
+4.33
+2.50
+
+Reinforcement Learning
+PPO
+61.67
+PPO w/ T3
+77.83 ↑ 16.2
+GRPO
+79.33
+GRPO w/ T3
+81.33 ↑ 2.0
+GSPO
+77.67
+GSPO w/ T3
+81.00 ↑ 3.3
+
+SP
+
+Such guesses violate the logical constraints accumulated from previous observations and reflect a
+failure to correctly track the candidate set.
+SituationPuzzles (SP). The agent resolves a paradoxical puzzle by posing yes/no questions to a
+judge model. Here Ht denotes the set of plausible explanations consistent with the dialogue history.
+Since Ht can be complex or unbounded, we approximate stalled refinement using judge feedback: a
+step is considered uninformative if the judge responds with “unknown,” which serves as a proxy for
+d(Hτ , Hτ +1 ) < ∆min . Early truncation: if this occurs for k = 5 consecutive steps, we truncate the
+trajectory, signaling entrapment in an unproductive line of questioning. We employ an LLM-based
+judge proxy in the main experiments and additionally evaluate a judge-free proxy in Sec. 3.3.3.
+CircuitDecoding (CD). The agent identifies hidden boolean circuits from a large candidate pool.
+At each step, the agent queries a candidate circuit with a binary input and eliminates inconsistent
+candidates based on the feedback. The hypothesis space Ht consists of all surviving candidates
+consistent with the interaction history, and we define the refinement metric analogously to GN:
+d(Hτ , Hτ +1 ) := |Hτ | − |Hτ +1 |. Early truncation: we monitor |Ht | and truncate if it fails to
+contract, i.e., d(Hτ , Hτ +1 ) ≤ 0, for k = 3 turns, indicating that queries no longer reduce uncertainty.
+PreferenceEstimation (PE) / MovieRecommendation (MR). In PE, the agent infers a hidden
+vector v ⋆ about user preference on movies by iteratively raising pairwise comparisons over the given
+reference movies. In MR, the agent recommends unseen movies to the user based on the inferred
+preference vector, requiring generalization beyond the training distribution. Here Ht corresponds
+to the subspace of plausible preference vectors consistent with past feedback. Since this space is
+continuous and not explicitly enumerable, we approximate its epistemic refinement progress via the
+LLM’s explicit estimate vt . Concretely, we prompt the agent to report its current estimate vt in a
+fixed format at each turn. Early truncation: we approximate the refinement signal d(Hτ , Hτ +1 )
+by the change in similarity between the agent’s estimate and the ground-truth preference, i.e.,
+Sim(vτ +1 , v ⋆ ) − Sim(vτ , v ⋆ ). If similarity decreases for k = 2 consecutive steps, the trajectory is
+truncated, reflecting persistent divergence in the inferred preference representation. As the proxy depends on access to the ground-truth preference v ⋆ during training, we also explore alternative proxies
+that do not require ground-truth information and demonstrate the promise of T3 in Appendix D.3.
+3.2
+
+E XPERIMENTAL S ETUP
+
+Baselines. To evaluate the effectiveness of T3 , we compare it against the following baselines: 1)
+Direct Inference without Training, where we evaluate representative proprietary reasoning LLMs,
+including o3-mini and Gemini-2.5-Pro; 2) PPO (Schulman et al., 2017); 3) GRPO (Shao et al., 2024);
+and 4) GSPO (Zheng et al., 2025). See more details of the adopted RL algorithms in Appendix F.2.
+Implementation Details. The main experiments of RL training are conducted on Qwen2.5-7BInstruct (Yang et al., 2024). Analyses on other architecture scales and types can be seen in Sec. 3.3.4.
+For the GN, CD, PE, and MR tasks, the interactive feedback is rule-based; for the SP dataset, a
+Qwen2.5-14B-Instruct model simulates the “user” and provides the interactive feedback. See more
+implementation details in Appendix F.3.
+6
+
+0
+
+50
+
+100
+
+Training Steps
+
+150
+
+200
+
+0.40
+0.35
+0.30
+0.25
+0.20
+0.15
+0.10
+0.05
+0.00
+
+(a) CD (PPO)
+
+GRPO vanilla
+GRPO w. ours
+0
+
+25
+
+50
+
+1.0
+
+0.6
+
+0.8
+
+0.5
+
+Reward
+
+PPO vanilla
+PPO w. ours
+
+Reward
+
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+0.2
+0.1
+0.0
+
+Reward
+
+Reward
+
+Published as a conference paper at ICLR 2026
+
+0.6
+0.4
+
+75
+
+100
+
+Training Steps
+
+125
+
+150
+
+0
+
+(b) SP (GRPO)
+
+25
+
+50
+
+0.3
+0.2
+
+GSPO vanilla
+GSPO w. ours
+
+0.2
+
+0.4
+
+PPO vanilla
+PPO w. ours
+
+0.1
+
+75 100 125 150 175 200
+
+0
+
+Training Steps
+
+25
+
+(c) GN (GSPO)
+
+50
+
+75 100 125 150 175 200
+
+Training Steps
+
+(d) PE (PPO)
+
+4000
+3000
+2000
+1000
+0
+
+50
+
+100
+
+Training Steps
+
+150
+
+(a) CD (PPO)
+
+200
+
+GRPO vanilla
+GRPO w. ours
+
+3000
+2500
+2000
+1500
+1000
+500
+0
+
+25
+
+50
+
+75
+
+100
+
+Training Steps
+
+125
+
+800
+
+Response Length
+
+Response Length
+
+Response Length
+
+PPO vanilla
+PPO w. ours
+
+5000
+
+150
+
+GSPO vanilla
+GSPO w. ours
+
+700
+600
+500
+400
+300
+200
+0
+
+(b) SP (GRPO)
+
+25
+
+50
+
+75 100 125 150 175 200
+
+Training Steps
+
+(c) GN (GSPO)
+
+Response Length
+
+Figure 3: Training dynamics of rewards w.r.t. training steps.
+PPO vanilla
+PPO w. ours
+
+4000
+3500
+3000
+2500
+2000
+1500
+0
+
+50
+
+100
+
+150
+
+Training Steps
+
+200
+
+(d) PE (PPO)
+
+Figure 4: Training dynamics of response length w.r.t. training steps.
+Evaluation Metrics. For the GN, CD, and MR tasks, we report Exact Match (EM), which measures
+whether the final prediction made by the LLM exactly matches the hidden number, ground-truth
+circuit, or the correct movie recommendation. For the SP task, we use the F1 score (both word-level
+and character-level) to assess the similarity between the ground-truth explanation and the solution
+produced by the LLM. For PE, we report Binary Similarity, which compares the LLM-estimated
+vector against the ground-truth preference vector using cosine similarity. Specifically, we threshold
+the cosine score at 0.88: values above the threshold are labeled as 1, and values below as 0. In
+Appendix D.1, we also explore the sensitivity with other thresholds.
+3.3
+
+E XPERIMENTAL R ESULTS AND A NALYSES
+
+In this part, we first present overall performance, followed by analyses of T3 on out-of-distribution
+generalization, ablation studies of truncation conditions, and the impact of LLM architectures.
+3.3.1
+
+OVERALL P ERFORMANCE
+
+Overall Performance. The main experimental results are summarized in Table 1. Across tasks,
+all RL-trained agents, both with and without T3 , substantially outperform the zero-shot baseline,
+confirming the necessity of RL in incentivizing active-reasoning capabilities. Compared to vanilla RL
+methods, incorporating T3 consistently improves final performance across datasets and algorithms,
+with non-marginal gains observed in 14 out of 18 reported metrics. On CD, PPO+T3 boosts EM
+by 16.2 points and GRPO+T3 yields further gains. On SP, GRPO+T3 achieves the best F1-word
+and F1-char scores. On GN, T3 leads to substantial improvements, raising GRPO by 30.1 points
+and enabling GSPO to reach a near-perfect 99.74 EM. In PE and MR, T3 also brings steady gains,
+with GSPO+T3 improving movie recommendation accuracy by 41.0 points. Overall, these results
+indicate that T3 provides consistent benefits across diverse active reasoning tasks.
+Comparing to frontier reasoning models. We can also find that advanced reasoning LLMs perform
+strongly on tasks where the hypothesis space H is finite and enumerable (e.g., GN and CD). However,
+their performance degrades on tasks with large, infinite, or continuous hypothesis spaces (e.g., SP
+and PE), where they lag behind RL-trained Qwen-7B models equipped with T3 . These observations
+suggest that large-scale RL with outcome reward training alone may be insufficient for effective
+active reasoning over unbounded hypothesis spaces, and that mechanisms explicitly addressing credit
+assignment, e.g., T3 , could provide complementary benefits.
+Better Training Stability and Optimization Behavior. Beyond final performance, T3 improves
+training dynamics. As shown in Fig. 3, vanilla RL methods exhibit higher variance and instability,
+with rewards prone to collapsing after partial convergence. By contrast, incorporating T3 leads to
+more stable training trajectories, with largely monotonic or near-monotonic reward improvement and
+much fewer abrupt drops, and enables better optimization behavior. These results suggest the dual
+benefit of T3 : stabilizing optimization while encouraging more informative exploration.
+7
+
+Published as a conference paper at ICLR 2026
+
+Higher Token Efficiency. Although the reward curves wrt. training steps (Fig. 3) suggest slightly
+slower reward growth in the early stage when incorporating T3 , early truncation reduces the average
+number of tokens per rollout (cf., Fig. 4). As a result, when measured against token consumption,
+T3 achieves higher training efficiency. For example, under PPO on CD, to reach a reward level of
+0.65, our method consumes 66.4% of the total tokens compared to vanilla on average; under GSPO
+on GN, to reach 0.96, it requires 76.3% of the tokens. More importantly, while vanilla methods often
+stagnate and fail to improve further, incorporating T3 continues to enhance rewards, achieving up to
+0.8 on CD and 0.99 on GN.
+3.3.2
+
+O UT- OF -D ISTRIBUTION A NALYSIS
+
+To better understand whether the agents Table 2: Evaluations of T3 on out-of-distribution
+learn the generalizable policies for active (OOD) scenarios of PE (Qwen-2.5-7B-Inst.) and CD
+reasoning, we further evaluate T3 under (Qwen-2.5-14B-Inst.) tasks under the PPO algorithm.
+distribution shifts in two representative
+tasks: CircuitDecoding (CD) and PreferPE (PPO)
+CD (PPO)
+ence Estimation (PE). In CD, we vary two
+Vanilla
+w/ T3
+Vanilla
+w/ T3
+key factors relative to training: the number
+Size (S)
+Candidate Size (S)
+of hidden circuits (training uses 2, we test Reference
+S=5
+40.0
+44.3 ↑ 4.3 S = 10
+67.8
+86.3 ↑ 18.5
+up to 4) and the candidate pool size (train- S = 10
+42.0
+49.0 ↑ 7.0 S = 15
+61.7
+74.7 ↑ 13.0
+ing uses 10, we test up to 30). In PE, we S = 15
+39.3
+47.0 ↑ 7.7 S = 20
+48.2
+55.8 ↑ 7.7
+35.2
+46.0 ↑ 10.8
+41.0
+53.7 ↑ 12.7 S = 25
+vary the number of reference movies (train- S = 20
+42.3
+46.3 ↑ 4.0 S = 30
+31.5
+35.7 ↑ 4.2
+ing uses 10, we test 5-30) and the sampling S = 30
+Hidden Circuit Size (C)
+distribution of their scores (training uses Reference Sampling
+45.7
+56.0 ↑ 10.3 C = 2
+67.8
+86.3 ↑ 18.5
+uniform, we test skewed side distributions). min-max
+60.3
+75.3 ↑ 15.0
+uniform
+42.0
+49.0 ↑ 7.0 C = 3
+50.7
+61.3 ↑ 10.7 C = 4
+42.7
+49.3 ↑ 6.6
+The results are given in Table 2. Across all max
+3
+OOD settings, T consistently improves
+over vanilla PPO. In CD, although accuracy drops as the task becomes harder with larger candidate
+pools or more hidden circuits, the gains from T3 remain substantial, reaching ↑ 10.8 points with
+25 candidates and ↑ 15.0 points with 3 circuits. In PE, performance varies non-monotonically with
+the reference size, where moderate contexts (e.g., S = 20) achieve the best results (↑ 12.7 points).
+We conjecture that too few references increase the ambiguity of preference estimation, while too
+many may introduce noise and redundancy, which may in turn exacerbate belief-trap dynamics. See
+Appendix D.2 for an empirical evidence. Similarly, for reference sampling, T3 yields improvements
+across all conditions, with the largest margin observed under max-skewed sampling. Overall, these
+results show that T3 consistently enhances OOD robustness across diverse settings, even in more
+challenging regimes where the distribution deviates substantially from the training.
+
+3.3.3
+
+A BLATION S TUDY ON T RUNCATION C ONDITIONS
+
+The effectiveness of T3 depends Table 3: Ablation Study of Truncation Conditions on the SP, CD,
+on the design of the proxy sig- and PE tasks. Beyond the window size k as seen in Def. 2, we
+nal for truncating the BTR tail. consider alternative truncation methods, described in α and β.
+We therefore conduct ablation
+SP (GRPO)
+CD (PPO)
+PE (PPO)
+studies to examine the robustness
+Method
+F1-word
+Method
+EM
+Method Binary Sim
+of different truncation conditions
+and their associated trade-offs. Vanilla
+36.46
+Vanilla
+61.67
+Vanilla
+42.00
+k=3
+38.62 ↑ 2.16 k = 2
+69.17 ↑ 7.50 k = 2
+49.00 ↑ 7.00
+First, we vary the window size
+39.45 ↑ 2.99 k = 3
+77.83 ↑ 16.2 k = 4
+44.33 ↑ 2.33
+k to evaluate the effect of tempo- k = 5
+36.96 ↓ 0.50 k = 4
+79.33 ↑ 17.6 k = 7
+42.00 ↑ 0.00
+ral persistence in detecting stalls. k = 9
+α = 0.9
+39.44 ↑ 2.98 β = 0.1 69.00 ↑ 7.33 β = 0.2 43.33 ↑ 1.33
+Furthermore, we consider alter- α = 0.93 38.81 ↑ 2.35 β = 0.2 57.50 ↓ 4.17 β = 0.5 44.67 ↑ 2.67
+native truncation strategies. For α = 0.96 37.93 ↑ 1.47 β = 0.5 13.17 ↓ 48.5 β = 0.8 39.00 ↓ 3.00
+the SP task, we evaluate Question Semantic Similarity (Sim-α): a trajectory is truncated if the cosine similarity between the
+embedding of the current query and any previous query exceeds a threshold α, where we leverage the
+E5-large-v2 model (Wang et al., 2022) to calculate embeddings. This proxy detects redundant or
+circular questioning, and we evaluate α ∈ {0.9, 0.93, 0.96}. For the CD and PE tasks, we include a
+random truncation (Rand-β) baseline, where each step is truncated independently with probability β.
+We test β ∈ {0.1, 0.2, 0.5} for CD and {0.2, 0.5, 0.8} for PE.
+8
+
+0.8
+0.6
+0.4
+0.2
+0.0
+
+0
+
+20
+
+40
+
+Step
+
+60
+
+(a) SP (GRPO)
+
+sim-0.9
+sim-0.93
+sim-0.96
+80 100
+
+1.00
+
+k=1
+k=2
+k=3
+k=4
+
+0.6
+0.4
+
+Ratio of Early Truncation
+
+1.0
+
+Ratio of Early Truncation
+
+Ratio of Early Truncation
+
+Published as a conference paper at ICLR 2026
+
+0.2
+0.0
+
+0
+
+20
+
+40
+
+Step
+
+60
+
+(b) CD (PPO)
+
+80
+
+100
+
+0.95
+0.90
+0.85
+0.80
+
+k=2
+rand-0.2
+rand-0.5
+rand-0.8
+
+0.75
+0.70
+
+0
+
+20
+
+40
+
+Step
+
+60
+
+80
+
+100
+
+(c) PE (PPO)
+
+Figure 5: Training dynamics of the ratio of early truncation w.r.t. training steps under different
+truncation conditions for the SP (a), CD (b), and PE (c) tasks.
+The results are reported in Table 3. For SP, increasing k improves performance up to around k = 5,
+after which the gains diminish. The similarity-based proxy also improves over vanilla GRPO,
+suggesting that T3 is robust to different proxy formulations as long as they can detect the BTR entry
+reasonably. For CD, varying k shows stable improvements, with k = 3, 4 yielding the largest gains
+over vanilla PPO. We further observe that even random truncation can produce a mild improvement
+when the ratio β is appropriately chosen. This suggests the significance of the BTR issue: mitigating
+long uninformative tails, even via simple truncation heuristics, partially improves optimization quality.
+For PE, k = 2 achieves the best performance, while the gains diminish as the condition becomes
+looser. Overall, these results indicate that the proxy condition should be calibrated at a moderate level.
+If it is too loose (e.g., k = 9 for SP), truncation has limited effect, causing belief-tracking errors to
+accumulate. If it is too strict (e.g., β = 0.2, 0.5 for CD), it may terminate trajectories prematurely,
+suppressing early-stage exploratory actions and reducing the effective learning signal.
+Training Dynamics of Early Truncation. Furthermore, we examine the temporal evolution of
+the early-truncation frequency during training, as shown in Fig. 5. For clarity, the truncation ratio
+rollouts truncated at step t
+at training step t is defined as ratiot = ##
+total rollouts at step t . This quantity tracks how frequently
+trajectories satisfy the truncation condition throughout optimization. Combining these dynamics with
+the final performance (Table 3) yields a clear pattern. For tasks where the hypothesis space H is
+unbounded (SP and PE), stronger performance is associated with relatively high and stable truncation
+ratios from early training steps. For example, in SP, the query-similarity proxy with α = 0.9 quickly
+reaches near 1.0 and achieves the best F1; in PE, k = 2 likewise achieves both a higher truncation
+ratio and the highest performance. These observations suggest that, in unbounded hypothesis spaces,
+promptly removing uninformative tails could contribute to improved training performance. Notably,
+in PE, random truncation with β = 0.5, 0.8 yields truncation ratios comparable to k = 2 but leads to
+inferior final performance. This underscores the importance of proper truncation condition design: it
+should meaningfully approximate the BTR entry rather than cut indiscriminately.
+By contrast, for tasks with finite and enumerable spaces (CD), a low-to-moderate truncation ratio
+would be preferable: settings such as k = 3, 4 maintain low truncation frequencies throughout
+training and yield the largest EM gains; more aggressive truncation (e.g., k = 1, 2) increases the
+truncation ratio and is associated with reduced performance, consistent with premature termination
+of potentially informative trajectories. In summary, these dynamics suggest that, given a properly
+designed truncation condition, the appropriate truncation intensity depends on the structural properties
+of the hypothesis space and the task: relatively aggressive truncation could be beneficial in unbounded
+settings, while moderate truncation would be preferable in finite settings.
+3.3.4
+
+I MPACT OF LLM A RCHITECTURE
+
+We further evaluate T3 across different LLM scales and architectures, including Qwen-2.5 (3B, 7B,
+and 14B) and multiple variants of LLaMA-3.1-8B. As shown in Fig. 6a and 6b, across Qwen-2.5 3B,
+7B, and 14B, we observe that the 3B model shows only limited improvements, whereas the 7B and
+14B variants achieve clear gains under RL. Moreover, larger models tend to benefit more substantially
+from T3 compared to the 3B variant. One possible explanation, consistent with our formulation in
+Sec. 2, is that weaker belief-tracking abilities may correspond to a larger update-error growth (i.e.,
+larger mθ , cf., Asmp. 1), making smaller models more prone to quickly falling into BTRs, where
+even truncation cannot provide sufficient informative training signals.
+A similar pattern holds across architecture types. As shown in Fig. 6c, we compare the effectiveness
+of T3 across LLaMA-3.1-8B-Instruct, Qwen-2.5-7B-Instruct, and DeepSeek-R1-Distill-LLaMA-8B.
+9
+
+Published as a conference paper at ICLR 2026
+
+20
+
+2
+
+10
+3B
+
+7B
+Architecture Size
+
+14B
+
+40
+
+5
+
+0
+
+(a) PE (PPO)
+
+0
+3B
+
+7B
+Architecture Size
+
+(b) CD (PPO)
+
+14B
+
+w.o. RL
+PPO
+PPO w. ours
+Performance Gain
+
+20
+15
+
+60
+
+EM
+
+10
+
+20
+
+0
+
+80
+
+15
+
+60
+
+EM
+
+4
+
+30
+
+20
+
+w.o. RL
+PPO
+PPO w. ours
+Performance Gain
+
+EM
+
+6
+
+40
+
+0
+
+80
+EM
+
+Binary Sim
+
+50
+
+8
+
+w.o. RL
+PPO
+PPO w. ours
+Performance Gain
+
+Binary Sim
+
+60
+
+10
+
+40
+
+5
+
+20
+0
+
+Llama
+
+Qwen Distilled-Llama 0
+Architecture Type
+
+(c) CD (PPO)
+
+3
+
+Figure 6: Effectiveness of T on different sizes (a, b) and types (c) of LLM architectures. The
+“Performance Gain” denotes the improvement of T3 compared to the vanilla RL method.
+We observe that LLaMA-8B-Instruct improves only marginally under T3 , while its DeepSeekdistilled variant and Qwen-7B benefit more substantially. This echoes recent reports that Qwen
+exhibits stronger reasoning behaviors than LLaMA (Gandhi et al., 2025). Such differences may
+extend to belief-tracking abilities under partial observability. Notably, the distilled LLaMA variant
+with T3 -equipped RL achieves the best overall performance, exhibiting the largest performance
+gains. We conjecture that distillation may improve the belief-tracking related capabilities, thereby
+enhancing the utility of T3 in preserving credit assignment. In our formulation, both scale- and
+architecture-dependent differences may be interpreted through variations in belief-tracking abilities
+and the associated mθ , which governs how easily trajectories get trapped in the BTR.
+
+4
+
+R ELATED W ORK
+
+Active Reasoning requires LLMs to interact with external sources and actively acquire missing
+information to solve complex tasks. Prior work has improved LLMs’ ability to handle ambiguity
+and incompleteness through making clarification and information-seeking actions. For example,
+Proactive CoT (Deng et al., 2023) prompts LLMs to identify ambiguous problems and generate
+clarification questions, while UoT (Hu et al., 2024) quantifies the contribution of each question
+in reducing uncertainty. However, challenges remain when transitioning from LLMs’ single-turn
+success to multi-turn active reasoning (Kwan et al., 2024; Liang et al., 2024; Badola et al., 2025),
+even with several advanced strategies such as tree-based searching or post-training approaches, as
+highlighted in existing works (Zhou et al., 2025). In contrast, we leverage RL to incentivize active
+reasoning capabilities, and propose T3 to address key issues when applying RL in this setting.
+Credit Assignment and Multi-turn RL. Credit assignment is crucial to long-horizon or multi-turn
+RL. Existing methods have extensively explored rule-based approaches (Yu et al., 2024; Dou et al.,
+2024; Zhang et al., 2025b) to shape intermediate rewards. Several recent works also proposed to
+measure the progress of stepwise actions toward overall task completion as intermediate rewards.
+Specifically, CURIO (Wan et al., 2025) constructs a potential function over an ideal belief state to
+assign intermediate rewards, assuming that the latent state space is finite and enumerable. SotopiaRL (Yu et al., 2025) relies on reward labeling with proprietary LLMs. SPA-RL (Wang et al., 2025)
+trains reward models for intermediate rewards by enforcing a summation constraint with respect to
+the final outcome reward. In our studied active reasoning scenario, belief deviation under partial
+observability makes it difficult for outcome-based rewards to properly assign credit to key reasoning
+steps. Our proposed T3 mitigates this by halting the trajectory before the reasoning process becomes
+trapped in excessive belief deviation and the error accumulation overwhelms credit assignment.
+
+5
+
+C ONCLUSION
+
+In this work, we identify belief deviation and entry into the belief-trap region as a critical failure
+mode underlying instability and sub-optimality in RL for LLM-based active reasoning. To mitigate
+its harmful accumulation, we proposed T3 , an early-truncation mechanism that halts belief-trapped
+trajectories. Empirical results on five active-reasoning tasks show that T3 consistently improves both
+training stability and final performance across multiple RL algorithms. Overall, our findings highlight
+belief deviation as a central bottleneck and show that controlling it provides a principled pathway
+toward building robust and generalizable active reasoning agents.
+
+10
+
+Published as a conference paper at ICLR 2026
+
+ACKNOWLEDGMENTS
+We thank the reviewers for their constructive comments and suggestions. Deyu Zou, Yongqiang
+Chen, Haochen Yang, and James Cheng were supported by a CRF (No. C2005-24Y) from the RGC
+of Hong Kong. This work was a collaboration between Husky Data Lab at CUHK and ByteDance,
+supported by a ByteDance University Collaboration Project Grant.
+
+R EFERENCES
+Kartikeya Badola, Jonathan Simon, Arian Hosseini, Sara Marie Mc Carthy, Tsendsuren Munkhdalai,
+Abhimanyu Goyal, Tomáš Kočiskỳ, Shyam Upadhyay, Bahare Fatemi, and Mehran Kazemi. Multiturn puzzles: Evaluating interactive reasoning and strategic dialogue in llms. arXiv preprint
+arXiv:2508.10142, 2025.
+Yang Deng, Lizi Liao, Liang Chen, Hongru Wang, Wenqiang Lei, and Tat-Seng Chua. Prompting
+and evaluating large language models for proactive dialogues: Clarification, target-guided, and
+non-collaboration. arXiv preprint arXiv:2305.13626, 2023.
+Shihan Dou, Yan Liu, Haoxiang Jia, Limao Xiong, Enyu Zhou, Wei Shen, Junjie Shan, Caishuang
+Huang, Xiao Wang, Xiaoran Fan, et al. Stepcoder: Improve code generation with reinforcement
+learning from compiler feedback. arXiv preprint arXiv:2402.01391, 2024.
+Dayuan Fu, Keqing He, Yejie Wang, Wentao Hong, Zhuoma Gongque, Weihao Zeng, Wei Wang,
+Jingang Wang, Xunliang Cai, and Weiran Xu. Agentrefine: Enhancing agent generalization through
+refinement tuning. arXiv preprint arXiv:2501.01702, 2025.
+Kanishk Gandhi, Ayush Chakravarthy, Anikait Singh, Nathan Lile, and Noah D Goodman. Cognitive
+behaviors that enable self-improving reasoners, or, four habits of highly effective stars. arXiv
+preprint arXiv:2503.01307, 2025.
+Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu,
+Shirong Ma, Peiyi Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms
+via reinforcement learning. arXiv preprint arXiv:2501.12948, 2025.
+Zhiyuan Hu, Chumin Liu, Xidong Feng, Yilun Zhao, See-Kiong Ng, Anh Tuan Luu, Junxian He,
+Pang Wei W Koh, and Bryan Hooi. Uncertainty of thoughts: Uncertainty-aware planning enhances
+information seeking in llms. Advances in Neural Information Processing Systems, 37:24181–24215,
+2024.
+Jie Huang and Kevin Chen-Chuan Chang. Towards reasoning in large language models: A survey.
+arXiv preprint arXiv:2212.10403, 2022.
+Leslie Pack Kaelbling, Michael L Littman, and Anthony R Cassandra. Planning and acting in partially
+observable stochastic domains. Artificial intelligence, 101(1-2):99–134, 1998.
+Wai-Chung Kwan, Xingshan Zeng, Yuxin Jiang, Yufei Wang, Liangyou Li, Lifeng Shang, Xin Jiang,
+Qun Liu, and Kam-Fai Wong. Mt-eval: A multi-turn capabilities evaluation benchmark for large
+language models. arXiv preprint arXiv:2401.16745, 2024.
+Philippe Laban, Hiroaki Hayashi, Yingbo Zhou, and Jennifer Neville. Llms get lost in multi-turn
+conversation. arXiv preprint arXiv:2505.06120, 2025.
+Yubo Li, Xiaobin Shen, Xinyu Yao, Xueying Ding, Yidi Miao, Ramayya Krishnan, and Rema
+Padman. Beyond single-turn: A survey on multi-turn interactions with large language models.
+arXiv preprint arXiv:2504.04717, 2025a.
+Zhong-Zhi Li, Duzhen Zhang, Ming-Liang Zhang, Jiaxin Zhang, Zengyan Liu, Yuxuan Yao, Haotian
+Xu, Junhao Zheng, Pei-Jie Wang, Xiuyi Chen, et al. From system 1 to system 2: A survey of
+reasoning large language models. arXiv preprint arXiv:2502.17419, 2025b.
+Zhenwen Liang, Dian Yu, Wenhao Yu, Wenlin Yao, Zhihan Zhang, Xiangliang Zhang, and Dong
+Yu. Mathchat: Benchmarking mathematical reasoning and instruction following in multi-turn
+interactions. arXiv preprint arXiv:2405.19444, 2024.
+11
+
+Published as a conference paper at ICLR 2026
+
+Wenquan Lu, Yuechuan Yang, Kyle Lee, Yanshu Li, and Enqi Liu. Latent chain-of-thought? decoding
+the depth-recurrent transformer. arXiv preprint arXiv:2507.02199, 2025.
+OpenAI. Openai o3-mini. https://openai.com/index/openai-o3-mini/, January
+2025.
+Aske Plaat, Annie Wong, Suzan Verberne, Joost Broekens, Niki van Stein, and Thomas Bäck.
+Reasoning with large language models, a survey. CoRR, 2024.
+Aske Plaat, Max van Duijn, Niki van Stein, Mike Preuss, Peter van der Putten, and Kees Joost
+Batenburg. Agentic large language models, a survey. arXiv preprint arXiv:2503.23037, 2025.
+John Schulman, Philipp Moritz, Sergey Levine, Michael Jordan, and Pieter Abbeel. High-dimensional
+continuous control using generalized advantage estimation. arXiv preprint arXiv:1506.02438,
+2015.
+John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy
+optimization algorithms. arXiv preprint arXiv:1707.06347, 2017.
+Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang,
+Mingchuan Zhang, YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300, 2024.
+Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng,
+Haibin Lin, and Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. In Proceedings
+of the Twentieth European Conference on Computer Systems, pp. 1279–1297, 2025.
+Saksham Sahai Srivastava and Vaneet Aggarwal. A technical survey of reinforcement learning
+techniques for large language models. arXiv preprint arXiv:2507.04136, 2025.
+Kimi Team, Angang Du, Bofei Gao, Bowei Xing, Changjiu Jiang, Cheng Chen, Cheng Li, Chenjun
+Xiao, Chenzhuang Du, Chonghua Liao, et al. Kimi k1. 5: Scaling reinforcement learning with
+llms. arXiv preprint arXiv:2501.12599, 2025.
+Yanming Wan, Jiaxing Wu, Marwa Abdulhai, Lior Shani, and Natasha Jaques. Enhancing personalized multi-turn dialogue with curiosity reward. arXiv preprint arXiv:2504.03206, 2025.
+Hanlin Wang, Chak Tou Leong, Jiashuo Wang, Jian Wang, and Wenjie Li. Spa-rl: Reinforcing llm
+agents via stepwise progress attribution. arXiv preprint arXiv:2505.20732, 2025.
+Liang Wang, Nan Yang, Xiaolong Huang, Binxing Jiao, Linjun Yang, Daxin Jiang, Rangan Majumder,
+and Furu Wei. Text embeddings by weakly-supervised contrastive pre-training. arXiv preprint
+arXiv:2212.03533, 2022.
+Shuhe Wang, Shengyu Zhang, Jie Zhang, Runyi Hu, Xiaoya Li, Tianwei Zhang, Jiwei Li, Fei Wu,
+Guoyin Wang, and Eduard Hovy. Reinforcement learning enhanced llms: A survey. arXiv preprint
+arXiv:2412.10400, 2024.
+Shirley Wu, Michel Galley, Baolin Peng, Hao Cheng, Gavin Li, Yao Dou, Weixin Cai, James Zou,
+Jure Leskovec, and Jianfeng Gao. Collabllm: From passive responders to active collaborators.
+arXiv preprint arXiv:2502.00640, 2025.
+Fengli Xu, Qianyue Hao, Zefang Zong, Jingwei Wang, Yunke Zhang, Jingyi Wang, Xiaochong Lan,
+Jiahui Gong, Tianjian Ouyang, Fanjin Meng, et al. Towards large reasoning models: A survey of
+reinforced reasoning with large language models. arXiv preprint arXiv:2501.09686, 2025.
+An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li,
+Dayiheng Liu, Fei Huang, Haoran Wei, et al. Qwen2. 5 technical report. arXiv preprint
+arXiv:2412.15115, 2024.
+Haofei Yu, Zhengyang Qi, Yining Zhao, Kolby Nottingham, Keyang Xuan, Bodhisattwa Prasad
+Majumder, Hao Zhu, Paul Pu Liang, and Jiaxuan You. Sotopia-rl: Reward design for social
+intelligence. arXiv preprint arXiv:2508.03905, 2025.
+12
+
+Published as a conference paper at ICLR 2026
+
+Yuanqing Yu, Zhefan Wang, Weizhi Ma, Zhicheng Guo, Jingtao Zhan, Shuai Wang, Chuhan Wu,
+Zhiqiang Guo, and Min Zhang. Steptool: A step-grained reinforcement learning framework for
+tool learning in llms. 2024.
+Siyu Yuan, Zehui Chen, Zhiheng Xi, Junjie Ye, Zhengyin Du, and Jiecao Chen. Agent-r: Training
+language model agents to reflect via iterative self-training. arXiv preprint arXiv:2501.11425, 2025.
+Guibin Zhang, Hejia Geng, Xiaohang Yu, Zhenfei Yin, Zaibin Zhang, Zelin Tan, Heng Zhou,
+Zhongzhi Li, Xiangyuan Xue, Yijiang Li, et al. The landscape of agentic reinforcement learning
+for llms: A survey. arXiv preprint arXiv:2509.02547, 2025a.
+Zijing Zhang, Ziyang Chen, Mingxiao Li, Zhaopeng Tu, and Xiaolong Li. Rlvmr: Reinforcement
+learning with verifiable meta-reasoning rewards for robust long-horizon agents. arXiv preprint
+arXiv:2507.22844, 2025b.
+Chujie Zheng, Shixuan Liu, Mingze Li, Xiong-Hui Chen, Bowen Yu, Chang Gao, Kai Dang,
+Yuqiong Liu, Rui Men, An Yang, et al. Group sequence policy optimization. arXiv preprint
+arXiv:2507.18071, 2025.
+Zhanke Zhou, Xiao Feng, Zhaocheng Zhu, Jiangchao Yao, Sanmi Koyejo, and Bo Han. From
+passive to active reasoning: Can large language models ask the right questions under incomplete
+information? arXiv preprint arXiv:2506.08295, 2025.
+Zhenhong Zhou, Haiyang Yu, Xinghua Zhang, Rongwu Xu, Fei Huang, and Yongbin Li. How
+alignment and jailbreak work: Explain llm safety through intermediate hidden states. arXiv
+preprint arXiv:2406.05644, 2024.
+
+13
+
+Published as a conference paper at ICLR 2026
+
+C ONTENTS
+1
+
+Introduction
+
+1
+
+2
+
+Reinforcement Learning for Active Reasoning
+
+2
+
+2.1
+
+Theoretical Formulations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+2
+
+2.2
+
+From Theory to Practice: Proxy Signals . . . . . . . . . . . . . . . . . . . . . . .
+
+4
+
+3
+
+Experiments
+
+5
+
+3.1
+
+Task-Specific Instantiations of the T3 Criterion . . . . . . . . . . . . . . . . . . .
+
+5
+
+3.2
+
+Experimental Setup . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+6
+
+3.3
+
+Experimental Results and Analyses . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+7
+
+3.3.1
+
+Overall Performance . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+7
+
+3.3.2
+
+Out-of-Distribution Analysis . . . . . . . . . . . . . . . . . . . . . . . . .
+
+8
+
+3.3.3
+
+Ablation Study on Truncation Conditions . . . . . . . . . . . . . . . . . .
+
+8
+
+3.3.4
+
+Impact of LLM Architecture . . . . . . . . . . . . . . . . . . . . . . . . .
+
+9
+
+4
+
+Related Work
+
+10
+
+5
+
+Conclusion
+
+10
+
+A Notation Summary
+
+15
+
+B More Details on the Theory
+
+16
+
+B.1 Detailed Theoretical Setup . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+16
+
+B.2 Dynamics of Belief Trapping of LLM Agents in Active Reasoning . . . . . . . . .
+
+17
+
+B.3 Detailed Statement of Theorem 1 . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+18
+
+B.4 Detailed Statement of Theorem 2 . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+18
+
+B.5 Important Lemmas . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+19
+
+B.6 Proof of Proposition B.1 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+19
+
+B.7 Proof of Proposition B.2 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+20
+
+B.8 Proof of Theorem B.1 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+21
+
+B.9 Proof of Proposition 1 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+21
+
+B.10 Proof of Lemma B.1 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+22
+
+B.11 Proof of Lemma B.2 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+23
+
+C Empirical Verification of the Theory
+
+24
+
+C.1 Empirical Verification of Assumption 1 . . . . . . . . . . . . . . . . . . . . . . .
+
+24
+
+C.2 Verification of Theorem 2 and Corollary 1 . . . . . . . . . . . . . . . . . . . . . .
+
+25
+
+C.3 Complementary Analysis of False-Positive Truncation and Its Impact . . . . . . .
+
+26
+
+D Complementary Empirical Analysis
+
+27
+14
+
+Published as a conference paper at ICLR 2026
+
+D.1 Rationale for Selecting Binary Similarity Threshold in PE . . . . . . . . . . . . . .
+
+27
+
+D.2 Effect of reference-set size on redundancy-induced stalling . . . . . . . . . . . . .
+
+27
+
+D.3 T3 on PE-like tasks without access to the ground truth . . . . . . . . . . . . . . . .
+
+27
+
+D.4 Exploration of adaptive T3 truncation rule . . . . . . . . . . . . . . . . . . . . . .
+
+28
+
+E Potential Future Work
+
+29
+
+E.1 More general-purpose proxy design . . . . . . . . . . . . . . . . . . . . . . . . .
+F Setup Details
+
+29
+29
+
+F.1
+
+Dataset Details and Prompt Templates . . . . . . . . . . . . . . . . . . . . . . . .
+
+29
+
+F.2
+
+Baseline Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+31
+
+F.3
+
+Supplementary Implementation Details . . . . . . . . . . . . . . . . . . . . . . .
+
+32
+
+LLM U SAGE D ISCLOSURE
+In our work, we mainly use GPT-5 for writing enhancements, primarily to improve grammar and text
+clarity.
+
+R EPRODUCIBILITY S TATEMENT
+We describe our dataset details in Appendix F.1. For additional training details, see Sec. 3.2 and
+Appendix F.3. For prompt templates, see Figures 10 to 15.
+
+A
+
+N OTATION S UMMARY
+
+Symbol
+
+Meaning
+
+Domain / Notes
+
+Spaces, states, dynamics
+Latent state, action, observation spaces
+S, A, O
+s⋆
+Episode-wise fixed true latent state
+T (s′ | s, a)
+Transition function
+O(o | s, a)
+Observation model
+R, γ
+Reward; discount factor
+
+Sets
+s⋆ ∈ S
+Degenerate in our setting
+Assump. B.2; O ≥ η
+γ ∈ (0, 1]
+
+Beliefs and policies
+∆(S)
+Probability simplex over S
+⋆
+bt , bt
+Oracle belief; agent belief at time t
+B ⋆ (b, a, o)
+Oracle Bayesian belief update
+Bθ (b, a, o)
+Agent belief update
+π(· | b)
+Belief-conditioned policy
+
+Set
+b⋆t , bt ∈ ∆(S)
+Posterior under O
+Parametrized by θ
+Distribution on A
+
+Distances and potentials
+d(b, b′ )
+ℓ1 distance on beliefs
+TV(P, Q)
+Total variation distance
+Ψ(b)
+Truth-anchored potential
+
+P
+d(b, b′ ) = s |b(s) − b′ (s)| ∈ [0, 2]
+Probability measures; Assump. B.3
+Ψ(b) = − log b(s⋆ ) ∈ [0, ∞);
+Def. B.1
+(continued on next page)
+
+15
+
+Published as a conference paper at ICLR 2026
+
+Symbol
+
+Meaning
+
+Domain / Notes
+
+Ψt , Ψ⋆t
+
+Ψ(bt ); Ψ(b⋆t )
+
+Scalars
+
+Progress quantities
+I(b, a)
+One-step oracle informativeness
+Pθ (b)
+Agent expected one-step progress
+cθ (b)
+Agent-Bayes update error
+Belief Trap Region (BTR)
+Rθ
+Belief trap region
+tS
+First time of reaching the BTR sufficient condition
+
+Def. B.2
+Def. B.3
+Def. B.4; Assump. B.4
+Def. B.5;
+Prop. B.1 and B.2
+
+RL / GAE quantities
+Vt := V (bt )
+Value function
+δt
+TD-error
+λ
+GAE parameter
+b
+At
+GAE estimator
+
+Vt = g(bt (s⋆ )); Thm. B.1
+δt = rt + γVt+1 − Vt
+λ ∈ (0, 1]
+bt = P (γλ)j δt+j
+A
+j
+
+Model and technical constants
+η
+Observation non-degeneracy bound
+Lπ
+Policy sensitivity constant
+mθ , c0 , U0
+Update-error growth parameters
+B̄
+Technical constant
+U
+Sufficient BTR threshold
+∆1
+Initial gap
+µ
+Oracle lower bound before tS
+δ
+Technical constant
+
+η ∈ (0, 1]; Assump. B.2
+Assump. B.3
+cθ (b) ≥ mθ Ψ(b) − c0 ; Assump. B.4
+B̄ = 2(− log η · Lπ + 1/η); Prop. B.1
+Prop. B.1
+∆1 = Ψ(b1 ) − Ψ(b⋆1 ); Prop. B.2
+Prop. B.2
+δ = mθ µ − (c0 + B̄); Prop. B.2
+
+Auxiliary weights
+Spre (t)
+Geometric prefix weight
+⊖
+Stail
+(t)
+Geometric tail weight
+
+PtS −t−1
+(γλ)j ; Thm. B.1
+Pj=0
+T −t−2
+j
+j=tS −t (γλ) ; Thm. B.1
+
+B
+
+M ORE D ETAILS ON THE T HEORY
+
+B.1
+
+D ETAILED T HEORETICAL S ETUP
+
+Problem Formulation We consider the active reasoning where an LLM agent interacts with
+an external environment to acquire missing information and infer the solution via a sequence of
+actions and observations (Zhou et al., 2025). This can be modeled as a Partially Observable Markov
+Decision Process (POMDP), defined by the tuple (S, A, O, T, O, R, γ), where S is the space of
+unobservable latent states, A the action space, O the observation space, T the transition dynamics,
+O the observation model, R the reward function, and γ the discount factor. At each step, the agent
+selects an action (question) at ∈ A based on a belief state bt ∈ ∆(S), i.e., a distribution over latent
+states summarizing the interaction history. Note that the true latent state s⋆ ∈ S is unobservable
+to the agent (s⋆ is introduced solely for theoretical analysis); for analytical clarity, we assume s⋆ is
+fixed within an episode. The environment returns an observation ot ∈ O via O(· | s⋆ , at ), and the
+agent updates its belief to bt+1 accordingly.
+We consider two agentic reasoners operating under the same interaction protocol but differing in
+their belief-update mechanisms: an oracle reasoner and an imperfect LLM reasoner. An ideal oracle
+reasoner would maintain an oracle belief distribution b∗t ∈ ∆(S). Specifically, the oracle belief b⋆ is
+16
+
+Published as a conference paper at ICLR 2026
+
+recursively updated via Bayes’ rule B ⋆ upon taking action a and observing o:
+b⋆t+1 (s) := B ⋆ (b⋆t , a, o) =
+where pb (o | a) :=
+
+O(o | s, a)b⋆t (s)
+,
+pb (o | a)
+
+(3)
+
+′
+⋆ ′
+s′ ∈S O(o | s , a)bt (s ) is the Bayes-normalizer.
+
+P
+
+In contrast, an LLM agent does not perform exact Bayesian filtering. Instead, it maintains an LLM
+belief bt , which represents its internal understanding of the latent state and what information remains
+missing. Given the action-observation pair (a, o), the LLM belief evolves by bt+1 (s) := Bθ (bt , a, o),
+where θ denotes LLM model parameters.
+We compare the LLM agent’s trajectory (bt , at , ot )t≥1 with that of the oracle reasoner (b⋆t , a⋆t , o⋆t )t≥1 .
+Specifically, the oracle samples action a⋆t ∼ π(· | b⋆t ) and receives observations from the environment
+generated via o⋆t ∼ O(· | s⋆ , a⋆t ), updating its belief via B ⋆ (Eq. 3). The LLM agent follows its
+own update rule Bθ , sampling actions from π(· | bt ) and receiving observations via O(· | s⋆ , at ).
+Note that s⋆ denotes the truth latent state (fixed within an episode) used for analysis; both LLM and
+⋆
+oracle agents
+beliefs, we use the ℓ1 -distance:
+Pdo not observe′ s . To quantify the discrepancy between
+′
+d(b, b ) := s∈S |b(s) − b (s)| ≤ 2, and denote dt := d(bt , b⋆t ).
+B.2
+
+DYNAMICS OF B ELIEF T RAPPING OF LLM AGENTS IN ACTIVE R EASONING
+
+We begin by modeling task progress of active reasoning. Specifically, we introduce a truth-anchored
+potential function Ψ : ∆(S) 7→ R≥0 that captures how concentrated the belief is on the true state s⋆ .
+Definition B.1 (Truth-anchored potential). For belief b ∈ ∆(S) and ground-truth state s⋆ , define
+Ψ(b) := − log b(s⋆ ).
+It holds that Ψ(b) ∈ [0, ∞), with Ψ(b) = 0 iff b(s⋆ ) = 1 (task completion). Lower values of Ψ(b)
+indicate higher confidence in the true state.
+Based on this, we assume that the oracle’s belief (b⋆t )t≥1 is well-behaved and guaranteed to eventually
+converge to the truth.
+Assumption B.1 (Oracle Potential Convergence). Along the oracle trajectory (b⋆t , a⋆t , o⋆t )t≥1 , the
+potential Ψ⋆t := Ψ(b⋆t ) is bounded and convergent to zero. Specifically, there exists a deterministic
+nonincreasing sequence (ut )t≥1 with u1 = Ψ⋆1 and ut ↘ 0 such that Ψ⋆t ≤ ut for all t ≥ 1.
+To analyze the agent’s behavior, we define several key quantities. Through the following definitions,
+we measure the expected information gain of an action under the ideal Bayesian update (Def. B.2),
+and the actual one-step progress when updating belief via the agent LLM (Def. B.3). We further
+quantify the discrepancy between the LLM agent’s update and the Bayesian update (Def. B.4).
+Definition B.2 (One-Step Informativeness). For belief b and action a, define
+h
+i
+I(b, a) := Ψ(b) − Eo∼O(·|s⋆ ,a) Ψ B ⋆ (b, a, o) .
+This captures the expected improvement of Ψ-progress when taking action a from belief b.
+Definition B.3 (One-step LLM-agent Progress). The LLM agent’s expected Ψ-progress given the
+current belief b:
+h
+i
+Pθ (b) := Ψ(b) − Ea∼π(·|b) Eo∼O(·|s⋆ ,a) Ψ Bθ (b, a, o) .
+Definition B.4 (LLM-Bayes update error). For a belief b, define the conditional update error
+h
+
+i
+cθ (b) := Ea∼π(·|b) Eo∼O(·|s⋆ ,a) Ψ Bθ (b, a, o) − Ψ B ⋆ (b, a, o) .
+We now state several technical assumptions required for our analysis.
+Assumption B.2. There exists η ∈ (0, 1] such that O(o | s, a) ≥ η for all reachable (o, s, a).
+Assumption B.3 (Policy Sensitivity). There exist Lπ ≥ 0 such that for any beliefs b, b′ ,
+
+TV π(· | b), π(· | b′ ) ≤ Lπ d(b, b′ ),
+where TV(P, Q) := supA⊆A |P (A)−Q(A)| denotes the total variation distance between probability
+distributions.
+17
+
+Published as a conference paper at ICLR 2026
+
+Assumption B.4 (Update-Error Growth). There exist constants mθ > 0, c0 ≥ 0, and a threshold
+U0 ≥ 0 such that for all b with Ψ(b) ≥ U0 ,
+cθ (b) ≥ mθ Ψ(b) − c0 .
+That is, in high-uncertainty regimes, the LLM agent’s update error grows at least linearly with Ψ.
+Accurately modeling belief states in active reasoning requires the agent to maintain a precise estimate
+of the underlying problem state and the remaining uncertainty, which is inherently challenging for
+LLMs. Assumption B.4 formalizes the imperfect belief modeling of LLM agents, which states that
+belief-update errors are amplified as the deviation increases. In high-uncertainty regimes, the update
+error grows at least linearly with Ψ. We next formalize the regime in which such misspecification
+dominates the oracle’s informativeness:
+Definition B.5 (Belief Trap Region, BTR). A set Rθ ⊆ ∆(S) is called a belief trap region for an
+agent parameterized by θ if it is absorbing and induces non-positive progress: for any belief b ∈ Rθ
+and all subsequent times t once entered, Pθ (b) ≤ 0, and equivalently, E[Ψ(bt+1 ) | bt = b] ≥ Ψ(b).
+Within BTRs, the potential sequence Ψt becomes non-decreasing in expectation, i.e., E[Ψt+1 | bt ] ≥
+Ψt . Consequently, once a trajectory enters the BTR, subsequent steps contribute little task progress
+and reinforce the stalled dynamics.
+B.3
+
+D ETAILED S TATEMENT OF T HEOREM 1
+
+Next, we investigate the characteristics of the BTR as follows:
+Proposition B.1 (Sufficient Condition of entering BTR). Under
+ Assumptions B.2–B.4, define the
+constant B̄ := 2 (−Lπ log η + 1/η), the threshold U := max U0 , (Ψ⋆1 + B̄ + c0 )/mθ , and let
+tS := inf{t : Ψt ≥ U } the first time the Ψ-potential reaches the threshold
+U . Then
+
+ the following
+holds: if tS < ∞, then for all t ≥ tS , Pθ (bt ) ≤ 0, and equivalently, E Ψ(bt+1 ) | bt ≥ Ψ(bt ).
+This result formalizes the absorbing nature of the belief-trap region: once the potential Ψ exceeds
+the threshold U , the trajectory is locked into a regime where exploration is ineffective and the task
+progress no longer proceeds. Now we delve into the properties of the BTR entry time:
+Proposition B.2 (Upper bound of BTR entry time). Strengthen Asmp. B.4 to global, i.e., U0 = 0.
+Assume there exists µ > 0 such that Ψ⋆t ≥ µ for all t < tS . Assume δ := mθ µ − (c0 + B̄) > 0.
+Then the (expected) hitting time into BTR, denoted by tBTR := inf{t : bt ∈ Rθ }, obeys the upper
+bound
+
+
+mθ U + δ
+.
+tBTR ≤ tS ≤ 1 + log 1+mθ
+mθ ∆1 + δ
+Here ∆1 := Ψ1 − Ψ⋆1 . The proofs for Proposition B.1 and Proposition B.2 are given in Appendix B.6
+and Appendix B.7, respectively. This yields an explicit upper bound on the time to enter the trap:
+without corrective mechanisms, belief errors accumulate, so entering BTR becomes inevitable and
+can occur quickly once belief updates deteriorate.
+B.4
+
+D ETAILED S TATEMENT OF T HEOREM 2
+
+Theorem B.1 (BTR Induces Advantage Inversion). Under the following assumptions: (i) the value
+function in policy optimization satisfies Vt = g(bt (s∗ )) for an increasing, differentiable g with
+inf x g ′ (x) ≥ κV > 0, and (ii) belief drop in BTRs: after entering the BTR, the belief exhibits a
+uniform negative drift, i.e., E[bk+1 (s∗ ) − bk (s∗ ) | Fk ] ≤ −ρb for k ≥ tS . Then, for any t < tS , the
+expected advantage is bounded:
+
+bt ] ≤ γ Spre (t) − κV ρb S ⊖ (t) ,
+E[A
+(4)
+tail
+PT −t−2
+PtS −t−1
+⊖
+j
+j
+where Spre (t) = j=0 (γλ) and Stail (t) = j=tS −t (γλ) . Therefore, a sufficient condition for
+bt ] < 0 is:
+E[A
+⊖
+κV ρb > Spre (t)/Stail
+(t).
+(5)
+In particular, when γλ → 1 (often used in practice for long-horizon agentic RL), the condition
+simplifies to κV ρb > ∆/L, where ∆ = tS − t and L = T − 1 − tS are the prefix and tail lengths,
+respectively.
+
+18
+
+Published as a conference paper at ICLR 2026
+
+The proof for Theorem B.1 is given in Appendix B.8. This theorem quantifies the credit assignment
+failure: a sufficiently long uninformative tail (large L) induces a negative drift that can dominate the
+positive contribution from the informative prefix, causing its overall gradient to point in the wrong
+direction and penalizing earlier exploratory actions.
+B.5
+
+I MPORTANT L EMMAS
+
+Before proving the propositions, we start by providing two important lemmas, and their proofs in
+Appendix B.10 and B.11.
+Lemma B.1 (Belief-Lipschitz Continuity of Informativeness). Under Assumption B.2, for any fixed
+action a ∈ A and any beliefs b, b′ ∈ ∆(S), we have
+1
+(6)
+I(b, a) − I(b′ , a) ≤ ∥b − b′ ∥1 .
+η
+Consequently, for any action distribution q,
+1
+Ea∼q I(b, a) − Ea∼q I(b′ , a) ≤ ∥b − b′ ∥1 .
+(7)
+η
+Lemma B.2 (Policy-Lipschitz Continuity of Informativeness). Under Assumption B.2, for any fixed
+belief b ∈ ∆(S) and any two action distributions q, q ′ on A, we have
+|Ea∼q I(b, a) − Ea∼q′ I(b, a)| ≤ Λ · ∥q − q ′ ∥TV ,
+where Λ := − log η and ∥q − q ′ ∥TV := supA⊆A |q(A) − q ′ (A)| denotes the total variation norm.
+B.6
+
+P ROOF OF P ROPOSITION B.1
+
+Proof. From Definitions B.2, B.3, and B.4, we have:
+Pθ (bt ) = Eat ∼π(·|bt ) [I(bt , at )] − cθ (bt ).
+
+(8)
+
+Let at ∼ π(· | bt ) and a⋆t ∼ π(· | b⋆t ). Leveraging the results in Lemma B.1 and B.2, we bound the
+difference in expected informativeness:
+Ea⋆t [I(b⋆t , a⋆t )] − Eat [I(bt , at )]
+
+(9)
+
+≤ Ea⋆t [I(b⋆t , a⋆t )] − Eat [I(b⋆t , at )] + Eat [I(b⋆t , at )] − Eat [I(bt , at )]
+
+(10)
+
+≤ Λ TV(π(· | b⋆t ), π(· | bt )) + Lb d(b⋆t , bt )
+
+(11)
+(12)
+
+≤ (ΛLπ + Lb ) dt .
+From Assumption B.1, we have:
+Ea⋆t [I(b⋆t , a⋆t )] = Ψ(b⋆t ) − E[Ψ(b⋆t+1 )] ≤ Ψ0 .
+
+(13)
+
+Combining with Eq. 12 yields:
+Eat [I(bt , at )] ≤ Ψ0 + (ΛLπ + Lb )dt .
+
+(14)
+
+Eat [I(bt , at )] ≤ Ψ0 + 2(ΛLπ + Lb ) = K.
+
+(15)
+
+Since dt ≤ 2, we obtain:
+
+Now, from Assumption 1, if Ψ(bt ) ≥ U0 , then:
+cθ (bt ) ≥ mθ Ψ(bt ) − c0 .
+
+(16)
+
+
+Pθ (bt ) ≤ K − mθ Ψ(bt ) − c0 .
+
+(17)
+
+Substituting into Eq. 8 gives:
+Thus, if Ψ(bt ) ≥ (K + c0 )/mθ and Ψ(bt ) ≥ U0 (i.e., Ψ(bt ) ≥ U ), then Pθ (bt ) ≤ 0, meaning:
+E[Ψ(bt+1 ) | bt ] ≥ Ψ(bt ).
+
+(18)
+
+Since cθ (·) is lower-bounded by a function that is nondecreasing in Ψ (Assumption 1), this argument
+applies inductively for all t ≥ t0 , confirming the supermartingale property and the stalling behavior.
+
+19
+
+Published as a conference paper at ICLR 2026
+
+B.7
+
+P ROOF OF P ROPOSITION B.2
+
+Proof. For simplicity, let Ψt := Ψ(bt ) and Ψ⋆t := Ψ(b⋆t ). From the definitions of agent progress
+Pπ (b) and update error cθ (b), we have the one-step expectation:
+E[Ψt+1 | Ft ] = Ψt − Eat ∼π(·|bt ) [I(bt , at )] + cθ (bt ).
+(19)
+For the oracle, it holds that:
+E[Ψ⋆t+1 | Ft ] = Ψ⋆t − Ea⋆t ∼π(·|b⋆t ) [I(b⋆t , a⋆t )].
+(20)
+⋆
+Subtracting these two equations yields the fundamental drift identity for the gap ∆t = Ψt − Ψt :
+
+E[∆t+1 − ∆t | Ft ] = Ea⋆t [I(b⋆t , a⋆t )] − Eat [I(bt , at )] + cθ (bt ).
+(21)
+From what have been shown in Eq. 12, we have,
+Ea⋆t [I(b⋆t , a⋆t )] − Eat [I(bt , at )] ≤ (ΛLπ + Lb )dt ≤ 2 (ΛLπ + Lb ) =: B̄.
+(22)
+Substituting into 21 gives:
+E[∆t+1 − ∆t | Ft ] ≥ −B̄ + cθ (bt ).
+(23)
+The strengthened Assumption 1 implies:
+cθ (bt ) ≥ mθ Ψt − c0 = mθ (∆t + Ψ⋆t ) − c0 .
+(24)
+Substituting into 23 yields:
+
+E[∆t+1 − ∆t | Ft ] ≥ mθ ∆t + mθ Ψ⋆t − (c0 + B̄) .
+(25)
+Rearranging terms:
+
+E[∆t+1 | Ft ] ≥ (1 + mθ )∆t + mθ Ψ⋆t − (c0 + B̄) .
+(26)
+By the law of total expectation, we have,
+h
+i
+h
+i
+E E[∆t+1 | Ft ] ≥ E (1 + mθ )∆t + mθ Ψ⋆t − (c0 + B̄)
+
+(27)
+
+E[∆t+1 ] ≥ (1 + mθ )E[∆t ] + mθ E[Ψ⋆t ] − (c0 + B̄).
+
+(28)
+
+Iterating this inequality gives:
+E[∆T ] ≥ (1 + mθ )T −1 ∆1 +
+
+T
+−1
+X
+
+
+
+(1 + mθ )T −1−k E mθ Ψ⋆k − (c0 + B̄) .
+
+(29)
+
+k=1
+
+As assumed in the proposition, there exists µ > 0 such that for all k ≥ 1, Ψ⋆k ≥ µ almost surely. This
+implies E[Ψ⋆k ] ≥ µ. Then:
+
+
+E mθ Ψ⋆k − (c0 + B̄) ≥ mθ µ − (c0 + B̄) =: δ.
+(30)
+Substituting into Eq. 29:
+T
+−1
+X
+E[∆T ] ≥ (1 + mθ )T −1 ∆1 + δ
+(1 + mθ )T −1−k
+(31)
+k=1
+
+= (1 + mθ )T −1 ∆1 + δ
+
+(1 + mθ )T −1 − 1
+.
+mθ
+
+(32)
+
+We now show that E[ΨT ] exceeds U in finite time. Recall:
+E[ΨT ] = E[∆T ] + E[Ψ⋆T ] ≥ E[∆T ].
+(33)
+A sufficient condition is therefore:
+(1 + mθ )T −1 − 1
+(1 + mθ )T −1 ∆1 + δ
+≥ U.
+(34)
+mθ
+Since δ > 0 and 1 + mθ > 1, the left-hand side grows exponentially with T . Thus, for any U > 0,
+there exists a finite T such that Eq. 34 holds. Specifically, we have:
+mθ U + δ
+(1 + mθ )T −1 ≥
+.
+(35)
+mθ ∆1 + δ
+Taking logarithms yields the explicit bound:
+
+
+
+1
+mθ U + δ
+T ≥1+
+log
+.
+(36)
+log(1 + mθ )
+mθ ∆1 + δ
+This completes the proof.
+
+20
+
+Published as a conference paper at ICLR 2026
+
+B.8
+
+P ROOF OF T HEOREM B.1
+
+bt = Pre(t) + Tail(t), where
+Proof. We decompose the advantage estimator: A
+Pre(t) =
+
+tSX
+−t−1
+
+q j δt+j ,
+
+Tail(t) =
+
+TX
+−t−1
+
+q j δt+j ,
+
+and q = γλ.
+
+j=tS −t
+
+j=0
+
+For any k < tS , the TD-error δk = γVk+1 − Vk (since rk = 0). Because Vk ∈ [0, 1],
+E[δk | Fk ] = γE[Vk+1 | Fk ] − Vk ≤ γ · 1 − 0 = γ.
+Taking full expectation and summing over the prefix yields:
+E[Pre(t)] ≤ γSpre (t).
+
+(37)
+
+We split the tail into the main part and the terminal step:
+Tail(t) =
+
+TX
+−t−2
+
+q j δt+j +q T −t−1 δT −1 .
+
+j=tS −t
+
+|
+
+{z
+
+Tail− (t)
+
+}
+
+For the terminal step, δT −1 = RT − VT −1 , so E[δT −1 | FT −1 ] = 0, and thus E[q T −t−1 δT −1 ] = 0.
+Now, fix k ∈ {tS , . . . , T − 2}. We analyze E[δk | Fk ]:
+E[δk | Fk ] = γE[Vk+1 − Vk | Fk ] + (γ − 1)Vk
+≤ γE[Vk+1 − Vk | Fk ] (since Vk ≥ 0 and γ − 1 ≤ 0).
+
+(38)
+(39)
+
+By the calibration assumption, Vk+1 − Vk = g(bk+1 (s∗ )) − g(bk (s∗ )). Since g is differentiable with
+g ′ ≥ κV > 0, and since E[bk+1 (s∗ ) − bk (s∗ ) | Fk ] ≤ −ρb by assumption, we have:
+E[Vk+1 − Vk | Fk ] = E[g ′ (ξk )(bk+1 (s∗ ) − bk (s∗ )) | Fk ]
+∗
+
+∗
+
+≤ κV E[bk+1 (s ) − bk (s ) | Fk ]
+≤ −κV ρb .
+
+(40)
+′
+
+(since g (ξk ) ≥ κV )
+
+(41)
+(42)
+
+Therefore, E[δk | Fk ] ≤ −γκV ρb . Taking full expectation and summing over the tail gives:
+⊖
+E[Tail− (t)] ≤ −γκV ρb Stail
+(t).
+
+(43)
+
+Combining Eq. 37 and Eq. 43 proves the main bound Eq. 4. The inversion condition Eq. 5 follows
+directly by requiring the right-hand side of Eq. 4 to be negative.
+From what have been proved above, we have:
+⊖
+bt ] = E[Pre(t)] + E[Tail(t)] ≤ E[A
+bpre
+E[A
+t ] − γκV ρb Stail (t).
+⊖
+bpre
+b
+Rearranging terms yields: E[A
+t ] ≥ E[At ] + γκV ρb Stail (t).
+
+B.9
+
+P ROOF OF P ROPOSITION 1
+
+Proof. Fix any k-step segment (t + 1, . . . , t + k) that lies entirely outside the BTR, so that gs ≥
+ρ > 0 for all s ∈ {t + 1, . . . , t + k}. By definition of the biased Gaussian-noise model, we have
+ds = gs + βs + ξs , where |βs | ≤ M, ξs ∼ N (0, σ 2 ) independently across s. On a step s outside the
+BTR, a local false truncation event occurs when the proxy falls below the threshold ∆min (cf., Def. 2)
+despite gs ≥ ρ:
+Es := {ds < ∆min } = {gs + βs + ξs < ∆min }.
+Using gs ≥ ρ and |βs | ≤ M , we obtain gs + βs ≥ ρ − M . Hence
+
+Pr(Es ) = Pr(gs + βs + ξs < ∆min ) ≤ Pr(ρ − M + ξs < ∆min ) = Pr ξs < ∆min − (ρ − M ) .
+21
+
+Published as a conference paper at ICLR 2026
+
+Define the margin a := ρ − M − ∆min . By the assumption ∆min < ρ − M , we have a > 0 and
+therefore,
+Pr(Es ) ≤ Pr(ξs < −a).
+2
+Since ξs ∼ N (0, σ ), the standard concentration inequality gives, for any a > 0, we have
+
+
+a2
+Pr(ξs ≤ −a) ≤ exp − 2σ
+.
+2
+Applying this with a = ρ − M − ∆min > 0 yields
+
+
+−∆min )2
+Pr(Es ) ≤ exp − (ρ−M2σ
+.
+2
+
+(44)
+
+Recall that the T3 rule with window size k triggers at the end of a k-step segment only if all k steps in
+the window are classified as “non-informative”. For a non-BTR segment (t + 1, . . . , t + k), activating
+T3 therefore corresponds to the intersection of the k single-step events Et+1 , . . . , Et+k :
+Et+1,...,t+k :=
+
+t+k
+\
+
+Es .
+
+s=t+1
+
+By independence of the noises {ξs } across s and because each Es is determined by ξs , we have
+Pr(Et+1,...,t+k ) =
+
+t+k
+Y
+
+Pr(Es ).
+
+s=t+1
+
+Applying the single-step bound (Eq. 44) uniformly yields
+
+
+2
+min )
+Pr(Et+1,...,t+k ) ≤ exp − k(ρ−M2σ−∆
+.
+2
+To ensure that the false-truncation probability on any k-step non-BTR segment is at most δ ∈ (0, 1),
+it suffices to require
+
+
+2
+min )
+≤ δ,
+exp − k(ρ−M2σ−∆
+2
+which is equivalent to
+
+B.10
+
+k (ρ − M − ∆min )2 ≥ 2σ 2 log(1/δ).
+
+P ROOF OF L EMMA B.1
+
+Proof. We begin by showing the closed form of one-step informativeness I(b, a). Combing Definitions B.1, B.2 and Eq. 3, we have,
+I(b, a) = Ψ(b) − Eo∼O(·|s⋆ ,a) [Ψ(B ⋆ (b, a, o))]
+
+
+
+O(o | s⋆ , a)b(s⋆ )
+= − log b(s⋆ ) − Eo∼O(·|s⋆ ,a) − log
+pb (o | a)
+
+
+⋆
+O(o | s , a)
+= Eo∼O(·|s⋆ ,a) log
+.
+pb (o | a)
+
+(45)
+(46)
+(47)
+
+P
+For fixed a, Let P (o) := O(o | s⋆ , a), and Qb (o) := pb (o | a) = s b(s)O(o | s, a). Then we have:
+
+
+P (o)
+= EP [log P (o)] −EP [log Qb (o)].
+I(b, a) = Eo∼P log
+(48)
+|
+{z
+}
+Qb (o)
+constant in b
+
+By the non-degeneracy assumption (Assumption B.2), O(o | s, a) ≥ η for all reachable o, s.
+Consequently, for any belief b and any observation o,
+X
+X
+Qb (o) =
+b(s)O(o | s, a) ≥
+b(s) · η = η.
+(49)
+s∈S
+
+s∈S
+
+22
+
+Published as a conference paper at ICLR 2026
+
+Thus, Qb (o) ≥ η and Qb′ (o) ≥ η hold for all o.
+For any x, y ≥ η > 0, we have the elementary bound
+Z x
+1
+|x − y|
+|x − y|
+| log x − log y| =
+dt ≤
+≤
+.
+min{x, y}
+η
+y t
+
+(50)
+
+Applying this with Qb (o) and Qb′ (o) yields:
+|Qb (o) − Qb′ (o)|
+for all o.
+η
+Taking expectation under P and properties of expectation, we get:
+|EP [log Qb (o)] − EP [log Qb′ (o)]| ≤ EP [| log Qb (o) − log Qb′ (o)|]
+
+
+|Qb (o) − Qb′ (o)|
+≤ EP
+η
+1
+≤ ∥Qb − Qb′ ∥1 .
+η
+Since I(b, a) = const − EP [log Qb (o)], it follows that
+1
+|I(b, a) − I(b′ , a)| ≤ ∥Qb − Qb′ ∥1 .
+η
+| log Qb (o) − log Qb′ (o)| ≤
+
+(51)
+(52)
+(53)
+(54)
+
+(55)
+
+We have
+|Qb (o) − Qb′ (o)| =
+
+X
+
+(b(s) − b′ (s))O(o | s, a) ≤
+
+s∈S
+
+X
+
+|b(s) − b′ (s)|O(o | s, a).
+
+(56)
+
+s∈S
+
+Summing over o gives:
+∥Qb − Qb′ ∥1 =
+
+X
+
+|Qb (o) − Qb′ (o)| ≤
+
+o∈O
+
+XX
+
+|b(s) − b′ (s)|O(o | s, a)
+
+(57)
+
+X
+
+(58)
+
+o∈O s∈S
+
+=
+
+X
+
+|b(s) − b′ (s)|
+
+s∈S
+
+O(o | s, a)
+
+o∈O
+
+= ∥b − b′ ∥1 .
+Combining this with Eq. 55 yields the pointwise bound:
+1
+|I(b, a) − I(b′ , a)| ≤ ∥b − b′ ∥1 .
+η
+For any action distribution q, by the linearity of expectation:
+|Ea∼q I(b, a) − Ea∼q I(b′ , a)| ≤ Ea∼q |I(b, a) − I(b′ , a)| ≤ Ea∼q
+
+B.11
+
+(59)
+(60)
+
+
+
+1
+1
+∥b − b′ ∥1 = ∥b − b′ ∥1 .
+η
+η
+(61)
+
+P ROOF OF L EMMA B.2
+
+Proof. For fixed b, define f (a) := I(b, a). We first show that f is bounded. By non-degeneracy,
+O(o | s, a) ≥ η for all o, s, a. Consequently, for any a,
+X
+pb (o | a) =
+b(s)O(o | s, a) ≥ η and O(o | s⋆ , a) ≥ η.
+s∈S
+
+By Eq. 47, we have
+
+
+O(o | s⋆ , a)
+0 ≤ I(b, a) = Eo∼O(·|s⋆ ,a) log
+≤ Eo∼O(·|s⋆ ,a) [log(1/η)] = − log η.
+pb (o | a)
+Hence, ∥f ∥∞ ≤ − log η, where ∥ · ∥∞ denotes the supremum norm ∥f ∥∞ := supa∈A |f (a)|.
+The result now follows from a standard property of the total variation norm: for any bounded function
+f,
+|Ea∼q f (a) − Ea∼q′ f (a)| ≤ ∥f ∥∞ · ∥q − q ′ ∥TV ≤ (− log η) · ∥q − q ′ ∥TV .
+
+23
+
+Published as a conference paper at ICLR 2026
+
+C
+
+E MPIRICAL V ERIFICATION OF THE T HEORY
+
+C.1
+
+E MPIRICAL V ERIFICATION OF A SSUMPTION 1
+
+A direct empirical validation of Assumption 1 is inherently challenging, as neither the oracle Bayesian
+update B ⋆ nor the LLM agent’s internal belief state bt is directly observable. To address this, we
+design a controlled study on the PE task that enables practical and theory-aligned approximations of
+all relevant quantities U0 , mθ , c0 .
+(i) Approximating the potential Ψ. Each interaction round in PE provides the model’s explicit
+estimate of the latent user-preference vector, denoted by wt (here we use w to denote the preference
+vector, same as v in main text). We define
+d(wt ) := ∥wt − w⋆ ∥22 ,
+and use d(wt ) to serve as an operational proxy of the potential, i.e., Ψ̂t := d(wt ). This proxy
+preserves the essential properties of the theoretical potential: it is non-negative and equals zero if and
+only if the task is solved. Note that w⋆ is not available to the agent.
+(ii) Approximating the oracle Bayesian update B ⋆ . Although the true Bayesian posterior is
+inaccessible, we construct a principled surrogate update rule B̂ following a standard linear-Gaussian
+update. Specifically, given the model’s query at := (A, B) where A, B denote the movie pair to
+compare and the observed feedback ot , we define
+
+σ02
+′
+wt+1
+:= B̂(wt , at , ot ) = wt + Kt mt ot − m⊤
+Kt = 2
+.
+t wt ,
+σ0 ∥mt ∥22 + σ 2
+Here, mt ∈ Rd is the movie-attribute difference vector for the pair of movies selected by the LLM’s
+query, i.e., mt = attr(A) − attr(B). The binary observation ot ∈ {−1, +1} corresponds to the
+⋆
+2
+2
+user’s response and is given by ot = sign(m⊤
+t w ). The terms σ0 and σ denote prior and observation
+noise variances; following standard practice, we set both to 1.0. In contrast, the LLM agent updates
+its estimate via
+wt+1 := Bθ (wt , at , ot ),
+which reflects the internal belief dynamics induced by its parameters θ.
+(iii) Constructing observable samples of the update-error term. Using the above approximations,
+we instantiate the update-error quantity via
+′
+ĉθ (bt ) := d(wt+1 ) − d(wt+1
+) ≈ cθ (bt ).
+We totally collect over 150k samples of (Ψ̂t , ĉθ (bt )) using rollouts from the Qwen-2.5 series models,
+which provide a sufficiently rich empirical basis for inspecting the assumption.
+(iv) Estimating mθ , U0 , c0 via lower-envelope fitting. Since Assumption 1 concerns only a lower
+bound relationship, we estimate the empirical lower envelope using a principled two-step procedure:
+(a) Lower-envelope extraction via binning. According to Asmp. 1, belief deviation of the LLM
+agent will be further amplified once it progresses into a high-Ψ̂ region. Hence we empirically
+select a proper value of Û0 such that large belief deviations are observed. We then partition
+the range [Û0 , Ψ̂max ] into B equal-width bins [ψb−1 , ψb ), where Ψ̂max represents maximum
+observed Ψ̂t in data. For each bin b, we compute:
+
+xb := E[Ψ̂t | Ψ̂t ∈ bin b],
+yb := Quantile0.1 ĉθ (bt ) | Ψ̂t ∈ bin b ,
+where yb captures the empirical 10th-percentile lower envelope within the bin.
+(b) Linear estimation on the active region. Restricting to the active region Ψ̂t ≥ Û0 , we fit a linear
+model to the extracted lower-envelope points:
+yb ≈ m̂θ xb − ĉ0 .
+The resulting (m̂θ , ĉ0 ) provide empirical estimates of the coefficients in Assumption 1.
+We visualize the whole procedure and the fitted linear model in Fig. 7. The above procedure yields an
+interpretable empirical characterization of the lower-bound growth pattern required by Assumption 1.
+24
+
+Published as a conference paper at ICLR 2026
+
+(a) Qwen-2.5-7B-Instruct
+
+(b) Qwen-2.5-32B-Instruct
+
+Figure 7: Empirical visualization of Assumption 1 on the PE task. The dashed vertical line marks the
+empirically determined threshold Û0 . Blue points show all samples, while orange points represent the
+binned lower envelope, obtained by partitioning the range of {Ψ̂t ≥ Û0 } into equal-width bins and
+taking the 10th percentile of ĉθ within each bin. The red line is a linear fit to these lower-envelope
+points. For (a), we empirically select Û0 = 10, and obtain the linear fit: ĉθ = 0.0969 × Ψ̂ − 3.0478.
+For (b), similarly, we select Û0 = 2 and obtain ĉθ = 0.4655 × Ψ̂ − 1.5158.
+0.65
+
+w/o Truncation
+w/ Truncation-T3
+
+Token Advantage (mean)
+
+Token Advantage (mean)
+
+0.70
+0.75
+0.80
+0.85
+0.90
+0.95
+1.00
+1.05
+
+w/o Truncation
+w/ Truncation-T3
+
+1.0
+1.1
+1.2
+1.3
+1.4
+1.5
+1.6
+
+0
+
+100
+
+200
+300
+Token Index
+
+400
+
+0
+
+500
+
+100
+
+(a) PE
+
+400
+
+500
+
+(b) CD
+1.0
+
+0.8
+0.9
+
+6 Turns (w/o Truncation)
+6 Turns (w/ Truncation-T3)
+10 Turns (w/o Truncation)
+10 Turns (w/ Truncation-T3)
+15 Turns (w/o Truncation)
+15 Turns (w/ Truncation-T3)
+
+1.0
+0
+
+100
+
+200
+300
+Token Index
+
+400
+
+Token Advantage (mean)
+
+0.7
+Token Advantage (mean)
+
+200
+300
+Token Index
+
+1.1
+w/o Truncation
+T3 (k=6)
+T3 (k=5)
+T3 (k=4)
+T3 (k=3)
+T3 (k=2)
+
+1.2
+1.3
+1.4
+1.5
+1.6
+
+500
+
+0
+
+100
+
+200
+300
+Token Index
+
+400
+
+500
+
+(d) T3 Truncation Strength (CD)
+
+(c) Tail Length (PE)
+
+Figure 8: Empirical verification of Theorem 2 and Corollary 1. (a-b) Without truncation, early-token
+advantages exhibit a clear negative drift, while T3 consistently elevates them across PE and CD
+tasks. (c) Longer uninformative tails (higher maximum interaction turns, from 6 to 15) cause stronger
+suppression of early advantages. (d) Stronger T3 truncation (smaller k) yields cleaner, less-biased
+early advantages.
+C.2
+
+V ERIFICATION OF T HEOREM 2 AND C OROLLARY 1
+
+To empirically validate the credit assignment pathology formalized in Theorem 2 and the mitigating
+effect of T3 stated in Corollary 1, we designed a controlled experiment to isolate the impact of the
+uninformative trajectory tail on the advantage estimates of preceding exploratory actions.
+Experimental Setup. Given a fixed policy optimized via standard PPO paradigm, we generated two
+sets of rollouts: one using the standard method (w/o Truncation) and one using the T3 truncation rule
+(w/ Truncation). To precisely measure the contamination effect of the uninformative tail without the
+25
+
+Published as a conference paper at ICLR 2026
+
+= 0.1
+= 0.5
+= 0.9
+w/o Truncation
+
+1.25
+1.00
+Token Advantage (mean)
+
+Token Advantage (mean)
+
+1.0
+0.5
+0.0
+0.5
+1.0
+0
+
+100
+
+200
+300
+Token Index
+
+400
+
+0.75
+0.25
+0.00
+0.25
+0.50
+
+500
+
+(a) PE
+
+= 0.1
+= 0.5
+= 0.9
+w/o Truncation
+
+0.50
+
+0
+
+100
+
+200
+300
+Token Index
+
+400
+
+500
+
+(b) CD
+
+Figure 9: Empirical verification of the effect of false positive on (a) PE and (b) CD tasks. More
+aggressive false-positive truncation (larger α) systematically reduces the advantages of early exploratory actions, reflecting the removal of positive future return contributions.
+
+confounding factor of successful outcomes, we filtered and exclusively analyzed rollouts that resulted
+in a failure (i.e., a final reward of 0). We then computed the Generalized Advantage Estimation
+(GAE) for each token in the first 500 tokens of these failed trajectories. Finally, we calculated the
+mean advantage at each token index across all rollouts within each condition.
+Main Results. The results across the CD and MR datasets are presented in Fig. 8a and 8b. In the
+w/o Truncation condition, the mean advantage of early tokens is suppressed, while applying the
+T3 truncation rule (w/ Truncation) consistently elevates the mean advantage of the early tokens. This
+suggests that the uninformative tail inside the BTR introduces a negative drift that systematically
+corrupts the advantage estimates of the preceding exploratory actions, and shows that the T3 earlytruncation mechanism effectively alleviates this issue, preserving the integrity of the gradient signal
+during policy optimization.
+Effect of Tail Length and Truncation Strength: We further vary the effective tail length and
+truncation strength. As shown in Fig. 8c, longer uninformative tails in the w/o Truncation setup led to
+a more severe suppression of early-token advantages. Fig. 8d exhibits that stronger (more aggressive)
+truncation in the w/ Truncation setup resulted in higher and less corrupted advantage estimates for
+the preserved trajectory prefix. This is consistent with the theoretical outcome of this work.
+C.3
+
+C OMPLEMENTARY A NALYSIS OF FALSE -P OSITIVE T RUNCATION AND I TS I MPACT
+
+Since T3 leverages observable surrogates of the BTR to construct the truncation condition, the
+frequency of false positives is empirically limited. However, premature (false-positive) truncation can,
+in principle, remove useful exploratory steps and harms optimization. We provide both an analytical
+discussion and a diagnostic experiment.
+Analytical perspective. Under the standard GAE decomposition, the advantage of an early token t
+PT
+u−t
+aggregates future TD-errors: At =
+δu . Theorem 2 characterizes the “uninformative
+u=t (γλ)
+tail” regime in which the expected TD-errors δu are negative; failing to truncate such tails induces a
+downward drift on At . A premature truncation corresponds to the opposite scenario: the trajectory
+has not yet entered the belief-trap region, and truncating at this point may discard future steps whose
+TD-errors δu could have been positive. Consequently, At may be reduced due to the loss of these
+potentially informative and reward-contributing steps.
+Diagnostic experiment. To make this effect concrete, we conducted a controlled diagnostic experiment. We fixed a trained vanilla-PPO policy and generated a set of full rollouts. To focus our study
+on the effect of false positives, we filtered the rollouts to those with a final reward of 1, ensuring
+that the retained trajectories contain genuinely informative future signals and do not enter the BTR.
+On these trajectories, we simulated false-positive truncation as follows: With probability α, the
+trajectory is forcibly truncated at turn 3 (the maximum allowed turn is 10). With probability 1 − α,
+the trajectory proceeds normally to completion. This creates a clean setting in which any degradation
+can be attributed solely to premature truncation. For each early-stage token position t = 1:500, we
+computed the mean GAE advantage across rollouts for different α values.
+26
+
+Published as a conference paper at ICLR 2026
+
+Results. We present the results for the CD and PE datasets in Fig. 9. As expected, more aggressive false-positive truncation systematically reduces the advantages of early exploratory actions,
+confirming that premature (false-positive) truncation negatively impacts credit assignment.
+
+D
+
+C OMPLEMENTARY E MPIRICAL A NALYSIS
+
+In this section, we present complementary experimental results to provide further insights.
+D.1
+
+R ATIONALE FOR S ELECTING B INARY S IMILARITY T HRESHOLD IN PE
+
+In the PE task, the reward is derived from the cosine similarity between the model-predicted preference
+vector and the ground-truth preference. We convert the similarity into a binary reward by activating it
+only when the similarity exceeds a prescribed threshold. To understand the effect of this threshold,
+we evaluate several settings {0.85, 0.88, 0.90, 0.95} using Qwen-2.5-7B-Instruct trained with PPO.
+Table 5 summarizes the results. Lower thresholds (e.g., below 0.80) cause the reward to activate
+(i.e., a 1 reward) almost continuously, which diminishes the discriminative value of high-quality
+predictions. Conversely, very high thresholds (e.g., above 0.95) make activations extremely rare,
+preventing PPO from learning effectively. Mid-range thresholds between 0.85 and 0.90 consistently
+yield stable training dynamics and strong downstream performance. We use 0.88, which lies within
+this empirically robust region, in the main experiments of the PE task.
+Table 5: Effect of the binary-similarity threshold on PE performance (BinarySim). All results use
+Qwen-2.5-7B-Instruct trained with PPO.
+
+D.2
+
+Threshold
+
+0.85
+
+0.88
+
+0.90
+
+0.95
+
+PPO (vanilla)
+PPO + T3
+
+55.33
+63.00
+
+42.00
+49.00
+
+33.67
+37.67
+
+4.33
+3.67
+
+E FFECT OF REFERENCE - SET SIZE ON REDUNDANCY- INDUCED STALLING
+
+Empirical Verification. To further examine the role of redundancy in inducing belief-trap regions
+(BTR) in the PE task as mentioned in Sec. 3.3.2, we investigate how the frequency of truncation
+varies with the size of the reference set S. We evaluate truncation ratios across different reference-set
+sizes S ∈ {10, 15, 20, 25, 30} for the Qwen-2.5-Instruct model family. Table 6 reports the results.
+Table 6: Truncation ratio (%) under different reference-set sizes S for Qwen-2.5-Instruct models.
+Larger S corresponds to more potentially redundant comparisons.
+S
+
+10
+
+15
+
+20
+
+25
+
+30
+
+3B
+7B
+14B
+32B
+
+41.67
+50.67
+23.33
+38.00
+
+39.67
+53.67
+30.33
+39.67
+
+46.67
+54.00
+27.00
+39.33
+
+44.33
+56.67
+33.00
+50.33
+
+50.00
+56.67
+33.33
+46.33
+
+Across all model scales, the truncation ratio exhibits a general upward trend as S increases from 10
+to 30. This pattern suggests that larger reference sets may introduce additional noisy or redundant
+pairwise comparisons, which in turn make epistemic progress harder to achieve and increase the
+likelihood of entering a redundancy-induced BTR.
+D.3
+
+T3 ON PE- LIKE TASKS WITHOUT ACCESS TO THE GROUND TRUTH
+
+The proxy rule for the PE/MR task described in Sec. 3.1 relies on the ground-truth preference vector v ⋆ .
+However, the truncation mechanism does not require access to the ground-truth. Instead, we employ
+a fully belief-driven truncation rule that relies solely on the agent’s internal preference estimates. Let
+27
+
+Published as a conference paper at ICLR 2026
+
+v̂t denote the model’s predicted preference vector at round t. We define an epistemic-stalling signal
+via a k-step moving average of update magnitudes:
+
+
+
+
+t−1
+X
+1
+stallt = I 
+∥v̂j+1 − v̂j ∥2  < ε ,
+k
+
+(62)
+
+j=t−k
+
+where k is the sliding-window length and ε is a truncation threshold. The threshold is obtained from
+¯ (k)
+the empirical distribution of the k-step moving-average updates ∆
+computed from offline rollouts.
+t
+Specifically, ε is set to a chosen quantile (e.g., 60%, 75%, 85%) of this distribution, ensuring that
+the criterion is entirely ground-truth-free. A trajectory is truncated once Eq. 62 is triggered, i.e, the
+agent’s belief updates become small for consecutive steps, indicating epistemic stalling.
+Table 7 summarizes the results on the PE dataset. Despite the absence of oracle information, the
+belief-based truncation retains strong performance, closely matching or surpassing the oracle-based
+T3 reported in the main paper.
+Table 7: Performance of T3 on the PE task without access to v ⋆ . Thresholds ε correspond to quantiles
+¯ (k)
+of offline ∆
+statistics. BinarySim accuracy is reported for Qwen-2.5-7B-Instruct trained with PPO.
+t
+vanilla and T3-gt represent vanilla-PPO and T3 in the main text (with access to the ground-truth
+v ⋆ ), respectively.
+
+D.4
+
+Quantile
+
+60%
+
+75%
+
+85%
+
+vanilla
+
+T3-gt
+
+ε
+BinarySim
+
+0.18
+44.33
+
+0.28
+50.67
+
+0.36
+49.00
+
+–
+42.00
+
+–
+49.00
+
+E XPLORATION OF ADAPTIVE T3 TRUNCATION RULE
+
+Adaptive T3 via online threshold selection. Motivated by extending T3 beyond fixed, offlinechosen thresholds, we further investigate an adaptive variant in which the truncation threshold evolves
+alongside the policy. For the PE task, the belief-based stalling criterion is employed the same as
+Appendix D.3 and Eq. 62 with k = 4. To obtain ε adaptively, every 6 training steps we collect a
+batch of fully untruncated rollouts under the current policy and compute the empirical distribution of
+¯ (k)
+the k-step moving-average update magnitudes ∆
+t . The threshold is then updated according to a
+fixed quantile α of this distribution:
+
+
+¯ (k)
+ε ← Quantileα {∆
+t }online .
+This mechanism yields a dynamically adjusted truncation threshold that tracks the scale of the model’s
+ongoing belief updates.
+Table 8 reports the performance across quantiles α. The results exhibit non-monotonic dependence on
+α. Notably, at α = 0.6, the adaptive variant achieves a substantial improvement, outperforming both
+the PPO baseline and the oracle-based T3 result reported in the main text. These results highlight
+the potential for extending the T3 principle to adaptive thresholding, and we leave a more in-depth
+exploration to future work.
+Table 8: Adaptive T3 on the PE dataset. The threshold ε is updated online from the α-quantile of the
+¯ (k)
+current ∆
+distribution.
+t
+α
+
+20%
+
+40%
+
+60%
+
+80%
+
+90%
+
+vanilla
+
+T3-gt
+
+BinarySim
+
+43.67
+
+44.33
+
+60.33
+
+43.67
+
+39.67
+
+42.00
+
+49.00
+
+28
+
+Published as a conference paper at ICLR 2026
+
+E
+
+P OTENTIAL F UTURE W ORK
+
+E.1
+
+M ORE GENERAL - PURPOSE PROXY DESIGN
+
+Task-agnostic surrogate signals for epistemic stalling. In main experiments, since the structure of
+hypothesis spaces and notions of progress differ across tasks, instantiating T3 naturally leverages
+task-level structure to define observable proxies that track epistemic progress. However, guided
+by the T3 principle, we can further reduce the reliance on task-specific knowledge via utilizing
+general-purpose truncation detectors. We explore two broad, task-agnostic families of surrogate
+signals as follows.
+(i) Semantic redundancy signals. In multi-turn LLM-agent settings, epistemic stalling frequently
+manifests as semantic redundancy, where the model repeatedly issues circular queries or revisits
+previously resolved informational subgoals, as shown in prior studies (Zhou et al., 2025; Yuan et al.,
+2025). Such redundancy is often detectable via embedding similarity, clustering, etc.
+Building on this intuition, we have several successful explorations in this direction: i) In the SP task,
+the truncation based on question-semantic similarity (cf., Sec. 3.3.3) yields consistent performance
+gains. ii) Moreover, for tasks with continuous latent spaces, such as the PE task, tracking the convergence of the model’s internal preference vector estimate provides an effective proxy for redundancy:
+truncation is triggered when the estimate ceases to change meaningfully (cf., Appendix D.3 and D.4).
+This convergence reflects an epistemic “stall” analogous to query redundancy in dialog scenarios
+such as the SP. Our experiments show the effectiveness of these redundancy-based surrogates.
+(ii) Internal state signals. Recent empirical analyses suggest that hidden representations of Transformer and LLM models could encode intermediate judgment or reasoning states (Lu et al., 2025;
+Zhou et al., 2024). Although the precise hidden-state signatures corresponding to epistemic stalling remain an open question, characterizing such patterns (e.g., consecutive high similarity of hidden states)
+is a promising direction for future work. Such signals may be especially valuable in open-domain
+tasks where a structured hypothesis space is not readily defined.
+
+F
+
+S ETUP D ETAILS
+
+F.1
+
+DATASET D ETAILS AND P ROMPT T EMPLATES
+
+In this section, we present more details for the datasets and tasks evaluated in this work. See dataset
+statistics in Table 9.
+SituationPuzzles (SP). This task introduces a challenging active reasoning task where the LLM
+player must uncover a coherent narrative from an initially puzzling scenario. Each puzzle begins
+with a brief, paradoxical statement. The solver interacts iteratively with a judge by asking binary
+yes-no questions, gathering feedback from the judge to constrain the solution space. The goal is
+to formulate a complete and plausible explanation that resolves the apparent contradiction. We
+directly use this dataset from the AR-Bench (Zhou et al., 2025). In our experiments, we utilize a
+Qwen2.5-14B-Instruct model to provide the interactive feedback.
+The prompt template for the SituationPuzzles dataset can be seen in Fig. 11. For SituationPuzzles,
+put a specific puzzle to solve into {puzzle} of the prompt. The prompt template for the judge LLM
+is shown in Fig. 13. The judge will receive {surface} and {bottom} to understand the whole
+puzzle, and give yes-no feedback according to the player LLM’s question.
+GuessNumbers (GN). Adapted from the original dataset proposed by AR-Bench (Zhou et al., 2025)
+which the player must crack a 4-digit secret (digits are unique in 0-9), our newly constructed GN(a, b)
+is a series of reasoning tasks that involve the LLM agent’s interactive deduction with external sources:
+the target is a a-digit number, where each digit is sampled from a set of b unique symbols without
+repetition. This yields P (b, a) = b!/(b − a)! possible targets.
+At each step, the LLM agent makes a guess and receives structured feedback in the form of xAyB,
+where x denotes the number of digits that are both correct in value and position (denoted as “A”), and
+y denotes the number of digits that are correct in value but placed in the wrong position (denoted as
+29
+
+Published as a conference paper at ICLR 2026
+
+“B”). The agent is expected to actively perform reasoning based on accumulated observations and
+interact with an external source to efficiently reduce uncertainty and locate the correct answer.
+To control for randomness in the first move, which plays a minor role in evaluating the LLM agent’s
+ability to understand and update based on observations, we fix the first guess to a deterministic
+number that differs from the answer. This means we need (a, b, g0 , x0 , y0 ) to specify a question for
+the LLM player, where g0 denotes the initial guess, and (x0 , y0 ) denotes the corresponding initial
+feedback of the form x0 Ay0 B.
+We group data items by their tuple (a, b, x0 , y0 ), since items sharing the same (a, b, x0 , y0 ) correspond to tasks with similar uncertainty reduction dynamics and reasoning logic patterns. Specifically,
+our constructed dataset covers all data items of the following sub-groups: (3, 4, 0, 3), (3, 4, 2, 0),
+(3, 4, 1, 2), (3, 5, 1, 2), (3, 5, 0, 3), (3, 5, 1, 0), (3, 5, 2, 0), (4, 4, 0, 4), and (4, 5, 3, 0). These configurations are carefully selected to ensure diversity in task complexity: varying (a, b) controls the size of
+the hypothesis space, while varying (x0 , y0 ) shapes the initial reasoning landscape by introducing
+distinct patterns of partial evidence. Finally, we perform a randomized train-test split over the
+obtained set for training and evaluation.
+The prompt template for the GuessNumbers dataset can be seen in Fig. 12. For GuessNumbers,
+we need to first specify {num digits} and {num uniques}, corresponding to (a, b) mentioned
+above, and then specify the initial guess in {initial guess}, and the resulting initial feedback in
+{initial feedback same pos} and {initial feedback diff pos}.
+CircuitDecoding (CD). Adapted from Badola et al. (2025), in this dataset, each instance presents a
+collection of unknown Boolean circuits, each taking a fixed number of binary inputs and producing
+a binary output. There are a set of ground-truth circuits which are drawn from a finite candidate
+set of logical structures, and the player must identify which candidates correspond to the hidden
+circuits. To achieve this, the solver engages in a multi-turn interaction protocol: at each turn, the
+player must query one circuit with a binary input configuration of their choice, and receives the
+corresponding output. These queries serve as informative probes, allowing the player to iteratively
+eliminate inconsistent candidates and refine their hypotheses. The task requires strategic planning
+to maximize information gain under limited query budgets, and finally the solver must output the
+candidate indices of all underlying circuits. In our experiments, we adopt the prompt template shown
+in Fig. 10, where the LLM solver aims to figure out {num circuits} hidden ground-truth circuits
+from {num candidates} candidates specified as: {candidate list str}.
+PreferenceEstimation (PE). Adapted from Badola et al. (2025), this dataset targets the problem of
+interactive preference elicitation, where the agent must infer a latent user preference vector governing
+utility over movies. Specifically, each movie is associated with a list of attribute scores (s1 , · · · , sn ),
+where n is the total dimensions
+Pn of attributes. In this task, the user evaluates a movie as a weighted
+sum of its attribute scores i=1 wi⋆ si , with the weights (w1⋆ , · · · , wn⋆ ) forming the hidden preference
+vector to be discovered. At the beginning of an interaction episode, the agent is presented with a set of
+reference movies annotated by their attribute values. At each round, the agent outputs both its current
+vector guess and a pairwise comparison query between two reference movies. The user provides
+feedback (“Yes”, “No”, or “Equal”) according to the weighted sum scores of the two mentioned
+movies. Through multiple turns, the agent iteratively updates its estimate of the preference vector by
+reasoning over past user feedback.
+The prompt template for the PreferenceEstimation dataset is illustrated in Fig. 14. The LLM player is
+given {len seen} reference movies for raising pairwise questions, to iteratively refine its guess on
+the {len attributes}-dimensional hidden user preference vector.
+MovieRecommendation (MR). Building upon the preference estimation setup, this dataset further
+evaluates the generalization ability of an agent’s inferred user model. After completing several rounds
+of interaction as mentioned in the PE task, the agent is tasked with recommending from a set of
+unseen movies. Each unseen movie is described by the same attribute dimensions, but the agent has
+not encountered them during training or interaction. In the final turn, the agent applies its preference
+vector guess to score each candidate unseen movie, and is required to select the movie that the
+user is most likely to prefer as its recommendation. This task thus demands transferring preference
+inference to out-of-distribution recommendation, and evaluates reasoning consistency, robustness,
+and generalization in interactive recommender systems.
+
+30
+
+Published as a conference paper at ICLR 2026
+
+The prompt template for this task is shown in Fig. 15. The agent is expected to leverage its estimated
+preference vector to make a personalized recommendation from {unseen movie list}.
+Table 9: Dataset Statistics in this work.
+
+SituationPuzzles (SP)
+GuessNumbers (GN)
+CircuitDecoding (CD)
+PreferenceEstimation (PE)
+MovieRecommendation (MR)
+
+F.2
+
+Train
+
+Test
+
+400
+1526
+1000
+700
+700
+
+100
+382
+300
+300
+300
+
+BASELINE D ETAILS
+
+Here we introduce RL algorithms used in our experiments. Formally, given an actor model πθ , the likeQ|y|
+lihood of a response y to a query x under the policy πθ is modeled as πθ (y|x) = t=1 πθ (yt |x, y<t ).
+Given a query-response pair (x, y), a verifier r generates its reward r(x, y) ∈ [0, 1].
+Proximal Policy Optimization (PPO) (Schulman et al., 2017) employs the following objective for
+policy optimization:
+
+
+|y|
+
+
+X
+1
+bt , clip (wt (θ), 1 − ε, 1 + ε) A
+bt  ,
+JPPO (θ) = Ex∼D, y∼πθold (·|x) 
+min wt (θ)A
+(63)
+|y| t=1
+<t )
+bt of
+where the importance ratio of the token yt is defined as wt (θ) = ππθθ (y(yt |x,y
+, the advantage A
+t |x,y<t )
+old
+yt is typically computed via Generalized Advantage Estimation (GAE) (Schulman et al., 2015) with
+temporal-difference errors, and ε is the clipping range of importance ratios.
+
+Group Relative Policy Optimization (GRPO) (Shao et al., 2024) proposes computing the relative
+advantage of each response within a group of responses of the same query using the following
+objective (omitting the KL regularization term):
+
+
+|yi |
+G
+
+
+X
+X
+1
+bi,t , clip (wi,t (θ), 1 − ε, 1 + ε) A
+bi,t  ,
+1
+JGRPO (θ) = Ex, {yi }G
+min wi,t (θ)A
+i=1
+G i=1 |yi | t=1
+(64)
+b
+where {yi }G
+i=1 ∼ πθold (·|x) and G is the group size. The importance ratio wi,t (θ) and advantage Ai,t
+of token yi,t are defined as:
+
+r(x, yi ) − mean {r(x, yi )}G
+πθ (yi,t |x, yi,<t ) b
+i=1
+
+wi,t (θ) =
+, Ai,t =
+,
+(65)
+πθold (yi,t |x, yi,<t )
+std {r(x, yi )}G
+i=1
+respectively, where all the tokens in yi share the same advantage.
+Group Sequence Policy Optimization (GSPO) (Zheng et al., 2025) extends GRPO by defining
+the importance ratio at the sequence level with length normalization, with sequence-level clipping,
+rewarding, and optimization. The objective is:
+"
+#
+G
+
+1 X
+bi , clip(si (θ), 1 − ε, 1 + ε)A
+bi ,
+JGSPO (θ) = Ex,{yi }G
+(66)
+min si (θ)A
+i=1
+G i=1
+where
+
+si (θ) =
+
+πθ (yi |x)
+πθold (yi |x)
+
+1/|yi |
+
+
+
+
+|yi |
+X
+1
+πθ (yi,t |x, yi,<t ) 
+.
+= exp
+log
+|yi | t=1
+πθold (yi,t |x, yi,<t )
+31
+
+Published as a conference paper at ICLR 2026
+
+Input Prompts for the CircuitDecoding dataset
+Welcome to the Circuit Deduction Challenge!
+## The Setup:
+- There are {num circuits} circuits, labeled {circuit labels}.
+- Each circuit accepts {num inputs} binary inputs (0 or 1) and produces a single binary output (0 or 1).
+- Each circuit is drawn from a fixed candidate list of {num candidates} possible logical structures, each associated with an index:
+{candidate list str}
+## Your Goal:
+Identify which circuits from the candidate list correspond exactly to circuits {circuit labels}.
+## How to Play:
+You can interact with me for several turns to determine the true underlying circuits:
+1. At each turn, query one circuit with any binary input of your choice.
+2. Use the specified format for your query. For example, to query circuit A with inputs x0=1, x1=0, x2=1, ask:
+<interact>A(1, 0, 1)</interact>.
+3. You must make only one query at each turn. I will return the binary output for that circuit on the given input.
+4. Ask strategic queries that maximize information gain. Your goal is to minimize the number of turns by leveraging the feedback at
+each step to narrow down the candidate possibilities.
+## Final Submission:
+Once you are confident, submit your final answer by providing the indices of the identified circuits from the candidate list inside
+<answer> and </answer>. For example, if A corresponds to candidate 13 and B corresponds to 6, your answer must be:
+<answer>13, 6</answer>.
+Please start with your first query.
+
+Figure 10: Prompt Template for CircuitDecoding.
+F.3
+
+S UPPLEMENTARY I MPLEMENTATION D ETAILS
+
+Here we provide additional implementation details. The maximum number of interaction turns is set at
+10 for GuessNumbers, 15 for SituationPuzzles, 10 for CircuitDecoding, 10 for PreferenceEstimation,
+and 5 for MovieRecommendation. For RL training, we define task-specific rewards aligned with their
+evaluation metrics: for GuessNumbers, the reward is Exact Match (binary {0, 1}, given only at the
+final step); for SituationPuzzles, the reward is the F1-word / character score (continuous in [0, 1],
+computed against the ground-truth answer); for CircuitDecoding and MovieRecommendation, the
+reward is also Exact Match; and for PreferenceEstimation, the reward is Binary Similarity between
+the predicted and ground-truth preference vectors. All rewards are provided only at the terminal step
+of each trajectory, consistent with the outcome-based RL setting.
+Training for GuessNumbers and SituationPuzzles is conducted on a single node equipped with 8
+H100 GPUs, while CircuitDecoding and PreferenceEstimation/MovieRecommendation are trained
+on a single node with 8 B200 GPUs, based on the implementations of Verl (Sheng et al., 2025). All
+training tasks are conducted for 200 steps with the actor model optimized using a learning rate of
+1.0×10−6 . For distributed training, we adopt Fully Sharded Data Parallelism (FSDP), using BFloat16
+precision throughout both training and evaluation. For efficient LLM rollouts, we adopt vLLM † with
+a tensor parallel size of 1. The rollout sampling uses a temperature of 1.0 for SituationPuzzles and
+0.6 for GuessNumbers, and a top-p value of 0.95 for all datasets.
+For the PPO baseline, we use Generalized Advantage Estimation (GAE) with parameters λ = 1
+and γ = 1. The KL divergence regularization coefficient β and clip ratio ε are set to 0.001 and 0.2.
+For GRPO training, we sample 5 responses per prompt, and the rollout parameters, KL divergence
+coefficient, and the clip ratio are consistent with the PPO setting. For the GSPO algorithm, we do
+not use the KL divergence constraint, and the clip ratio εlow and εhigh are set to 0.0003 and 0.0004,
+respectively, while others keep consistent with GRPO training.
+
+†
+
+https://docs.vllm.ai/en/latest/
+
+32
+
+Published as a conference paper at ICLR 2026
+
+Input Prompts for the SituationPuzzles dataset
+Let’s play a situation puzzle game. I’ll give you a puzzle. You can interact with me for several turns during the question phase to
+reach the final answer. For each turn, you will:
+- Review all previous questions and feedback.
+- Ask me a yes-or-no question inside <interact> and </interact>.
+- I will answer your latest question with “Yes”, “No”, or “Unknown”.
+- Repeat the process until you are confident in the answer.
+If you believe you have confidently determined the correct solution, present your answer inside <answer> and </answer>.
+Now, here’s the puzzle:
+Puzzle: {puzzle}
+
+Figure 11: Prompt Template for SituationPuzzles.
+
+Input Prompts for the GuessNumbers dataset
+Let’s play a number guessing game. The rules are as follows: I have a secret {num digits}-digit number in mind, composed
+of digits from 1 to {num uniques}, with no repeated digits. You will take turns guessing the number, using feedback after each
+guess to progressively narrow down the possibilities.
+For each turn, you will:
+- Review all previous guesses and feedback.
+- Think through your reasoning process inside <think> and </think>. The reasoning should show how your belief about the
+secret number evolves based on the accumulated evidence.
+- Make a strategic guess inside <interact> and </interact>, based on your current belief.
+- Receive feedback of your latest guess describing: how many digits are present in the answer and in the correct positions, and how
+many digits are present in the answer but in the different positions.
+- Repeat the process until you are confident in the answer. If you believe you have confidently found the correct number, present your
+answer inside <answer> and </answer>.
+Game start. Now it is your turn:
+<think>No prior knowledge. Start with a random guess that covers diverse digits to gather information.</think>
+<interact>{initial guess}</interact>
+The feedback of your latest guess: {initial feedback same pos} digits are present in the answer and in the correct positions,
+{initial feedback diff pos} digits are present in the answer but in the different positions.
+Now it is your turn:
+
+Figure 12: Prompt Template for GuessNumbers.
+
+33
+
+Published as a conference paper at ICLR 2026
+
+Input Prompts for the Judge LLM in the SituationPuzzles dataset
+You are the referee of a game where players are shown a <Surface> and you are given the <Bottom>. You need to understand
+the entire story based on both the <Surface> and <Bottom>. Players will ask questions based on the <Surface>, and you
+need to judge whether their guesses are correct. Please strictly adhere to answering with only three specified responses: Yes, No, or
+Unknown, without any explanation.
+## Judging Rules
+- If the player’s question matches the given <Surface> and <Bottom>: Please only answer ”Yes” without any explanation.
+- If the player’s question contradicts the given story: Please only answer ”No” without any explanation.
+- If the answer to the player’s question cannot be found in the <Surface> and <Bottom>, and cannot be deduced through
+reasoning: Please only answer ”Unknown” without any explanation.
+- If the player directly ask for the answer, please only answer ”This is not a question, please propose your next question.”
+- If the player does not propose a question or question that not for solve the puzzle, please only answer ”This is not a question, please
+propose your next question.”
+## Important Notes
+1. Fully understand the cause, process, and outcome of the entire story, and make logical inferences.
+2. If a conclusion cannot be drawn from the provided story or through reasonable inference, answer ”Unknown”.
+3. Strictly adhere to answering with only the three specified responses: Yes, No, or Unknown. Do not provide additional explanations.
+4. Carefully check whether the player ask for the answer, if a player do so, please only answer ”This is not a question, please propose
+your next question.”
+## Examples
+### Example 1: The Hiccuping Man
+<Surface>
+A man walks into a bar and asks the bartender for a glass of water. The bartender suddenly pulls out a gun and points it at him. The
+man smiles and says, ”Thank you!” then calmly leaves. What happened?
+<Bottom>
+The man had hiccups and wanted a glass of water to cure them. The bartender realized this and chose to scare him with a gun. The
+man’s hiccups disappeared due to the sudden shock, so he sincerely thanked the bartender before leaving.
+Possible questions and corresponding answers:
+Q: Does the man have a chronic illness? A: Unknown
+Q: Was the man scared away? A: No
+Q: Did the bartender want to kill the man? A: No
+Q: Did the bartender intend to scare the man? A: Yes
+Q: Did the man sincerely thank the bartender? A: Yes
+## Question Content
+### <Surface>
+{surface}
+### <Bottom>
+{bottom}
+Now, please judge the following player question:
+{question}
+Answer with only one of the three specified responses: Yes, No, or Unknown, without any explanation.
+
+Figure 13: Prompt Template for the Judge LLM in SituationPuzzles.
+
+34
+
+Published as a conference paper at ICLR 2026
+
+Input Prompts for the PreferenceEstimation task
+You are a movie recommendation agent. Your goal is to infer the hidden user preference vector (w1,...,w{len attributes})
+through interaction.
+## Setup:
+- You are given {len seen} movies with scores on {len attributes} attributes (indexed 1...{len attributes}):
+{seen movie sample}
+- User satisfaction = w1*attr1 + ... + w{len attributes}*attr{len attributes}, where each wi in [0, 1]. The user always
+answers consistently.
+## Interaction Rules (per round):
+1. Reflect on all past feedback and reason about how it changes your estimate of the preference vector.
+- Think about which attributes gained or lost importance.
+- Adjust your estimate strategically.
+2. Output both your updated guess and a new pairwise query in the exact format:
+<interact>
+Guess: w1,w2,...
+Question: Would you prefer option 1 over option 2?
+</interact>
+- Guess must be comma-separated numbers in [0,1].
+- option 1 and option 2 must be movie names only.
+The user replies with one of: ”Yes” (prefer option 1), ”No” (prefer option 2), or ”Equal”.
+## Final Stage:
+Once you are confident about the user preference after several turns, output your final preference vector as:
+<answer>w1,w2,...,w{len attributes}</answer>
+Please Start with your first <interact> block.
+
+Figure 14: Prompt Template for PreferenceEstimation.
+
+Input Prompts for the MovieRecommendation task
+Final Turn: Now you have reached the last turn. Instead of asking a new question, use your most recent preference guess to score the
+following unseen movies and recommend the best one.
+{unseen movie list}
+Here is an example of how to proceed:
+Preference vector (guess): 0.2,0.7,0.5
+Example Unseen movies:
+Movie A: [0.6,1.0,0.8]
+Movie B: [1.2,0.3,0.4]
+Movie C: [0.5,0.8,0.9]
+Scoring:
+Movie A = 0.2*0.6 + 0.7*1.0 + 0.5*0.8 = 1.22
+Movie B = 0.2*1.2 + 0.7*0.3 + 0.5*0.4 = 0.65
+Movie C = 0.2*0.5 + 0.7*0.8 + 0.5*0.9 = 1.11
+Best = Movie A
+<answer>Movie A</answer>
+Your goal:
+Now do the same with your own latest preference vector and the given unseen movies. After scoring, return the final answer enclosed
+within <answer> and </answer>. The answer must be exactly one of the unseen movie names.
+
+Figure 15: Prompt Template for MovieRecommendation.
+
+35
+
+

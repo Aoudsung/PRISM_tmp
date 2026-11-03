@@ -1,0 +1,1983 @@
+Ask the World Before Acting:
+Environment Probing for Calibrating Agent World Models
+
+1
+
+Xinyuan Song1 Zekun Cai2
+Emory University, Atlanta, GA, USA 2 The University of Tokyo, Tokyo, Japan
+xinyuan.song@emory.edu, caizekun@csis.u-tokyo.ac.jp
+
+arXiv:2606.31422v3 [cs.AI] 20 Oct 2026
+
+Abstract
+
+1
+
+Introduction
+
+Long-horizon language agents enable autonomous
+decision-making in complex environments by planning and executing sequences of interdependent
+actions. Building on reasoning-and-acting frameworks such as ReAct (Yao et al., 2023), reflectionbased agents such as Reflexion (Shinn et al.,
+2023), and search-based planning methods such
+as LATS (Zhou et al., 2024a), these agents increasingly support complex interactions with external
+environments. Their capabilities extend from tool
+use (Schick et al., 2023; Qin et al., 2024) to embodied decision-making (Huang et al., 2022; Ahn et al.,
+2022) and long-horizon tasks evaluated in ALFWorld (Shridhar et al., 2021), ScienceWorld (Wang
+et al., 2022), WebArena (Zhou et al., 2024b), and
+UltraHorizon (Luo et al., 2025). However, reliable
+long-horizon execution requires more than generating appropriate actions at individual steps, as effective planning depends on anticipating future environment states (Zhang et al., 2026). Agents must
+maintain an accurate world model that represents
+the evolving environment and supports subsequent
+planning decisions, as demonstrated by Reasoning via Planning (RAP) (Hao et al., 2023). Such a
+model allows agents to track relevant environmental states, reason about action preconditions, and
+coordinate dependencies across multiple stages of
+a task (Hill, 2025).
+A fixed world model becomes increasingly unreliable during long-horizon execution as environmental changes render stored beliefs outdated. In
+interactive environments such as ALFWorld (Shridhar et al., 2021) and WebArena (Zhou et al., 2024b),
+agents may continue relying on states that no longer
+reflect the environment, leading to discrepancies
+between their internal beliefs and actual conditions (Yin and Du, 2026). For example, an agent
+may assume that a tool remains available after its
+state has changed or attempt to traverse a route that
+
+Long-horizon language agents enable autonomous decision-making in complex environments by planning and executing sequences
+of interdependent actions. To act reliably, these
+agents must maintain an accurate world model
+that tracks the environment’s evolving state and
+supports subsequent decisions. However, as
+interactions accumulate, stored beliefs can become outdated or incorrect, causing agents to
+plan and act on assumptions that no longer reflect the environment. Such errors are difficult to resolve through additional reasoning or
+self-reflection alone, because the information
+needed for correction must be obtained from
+the environment. Actively probing the environment therefore offers a direct way to verify and
+correct these beliefs. To this end, we introduce
+E NV P ROBE, a framework that enables agents
+to actively explore their environments and correct inaccurate beliefs during long-horizon execution. Specifically, E NV P ROBE prioritizes
+belief fields for verification based on task relevance and potential errors. It then selectively
+probes the environment to retrieve the actual
+value of a chosen field and incorporates the observation into the agent’s world model. With
+the updated beliefs, the agent revises its plan
+and continues execution based on the newly
+acquired environmental information. Extensive
+experiments across three controlled environments demonstrate that E NV P ROBE substantially improves terminal world-state accuracy
+compared with agents operating without environment probing, leading to more reliable longhorizon decision-making. These results demonstrate the importance of actively verifying and
+correcting beliefs through environmental interactions for maintaining accurate world models
+in long-horizon language agents. Our code is
+available at https://github.com/Hik289/
+Environment-reduce-error.git.
+
+1
+
+Figure 1: Overview of E NV P ROBE. (a) Belief prioritization: The agent ranks belief fields based on task relevance,
+dependencies, staleness, and uncertainty. (b) Environment probing: The agent selects what to probe in the
+environment based on field priority and the available budget. (c) Environment belief correction: The agent
+retrieves the environment state, updates the corresponding belief, and replans using the corrected world model.
+
+is no longer accessible. Such belief errors can propagate through subsequent decisions, undermining
+long-horizon execution even when individual reasoning steps are logically consistent (Wang et al.,
+2026; Luo et al., 2025). Although reflection-based
+approaches such as Reflexion (Shinn et al., 2023)
+and Self-Refine (Madaan et al., 2023) improve decisions through feedback and iterative reasoning,
+they cannot reliably correct beliefs without access
+to the missing environmental evidence.
+
+mation to correct the world model and executing
+actions to advance the task, closely related to partially observable planning (Kaelbling et al., 1998),
+online information gathering (Ross et al., 2008),
+and Bayesian experimental design (Chaloner and
+Verdinelli, 1995).
+To address this challenge, we introduce E N V P ROBE, a framework that enables language agents
+to actively probe their environments and correct
+inaccurate beliefs during long-horizon execution.
+E NV P ROBE integrates environment probing into
+the planning process to obtain direct evidence about
+the current environment state. Specifically, E N V P ROBE evaluates belief fields based on their task
+relevance and potential for error, then selectively
+queries the environment to verify the most relevant field under a interaction budget. The acquired
+evidence is used to correct the corresponding belief in the agent’s world model, enabling the agent
+to replan and continue execution with updated environmental information. Figure 1 illustrates the
+overall workflow of E NV P ROBE.
+We provide a type-stratified theoretical analysis
+of how environment probing improves belief accuracy while consuming task-action opportunities,
+highlighting differences between procedural and
+spatial beliefs. We further evaluate E NV P ROBE
+across three controlled interactive environments
+covering procedural tool dependencies and spatial
+
+This limitation motivates actively acquiring information from the environment to verify and correct the agent’s beliefs. Rather than relying exclusively on previously observed states, an agent can
+interact with its environment to determine whether
+a relevant belief remains valid. For instance, it may
+inspect the current state of a tool before invoking
+a dependent operation or revisit a location before
+planning its next movement. Such interactions provide direct evidence for updating the world model
+and enable subsequent decisions to reflect the environment’s actual state. However, environmental
+verification introduces an additional decision problem: agents must determine which beliefs require
+verification and when such verification should occur. Because each probe consumes an interaction
+step, unnecessary verification can reduce the opportunities available for task execution. This creates
+a fundamental trade-off between acquiring infor2
+
+Active information gathering and partial observability. Partially observable Markov decision processes (POMDPs) (Kaelbling et al., 1998)
+and online planning (Ross et al., 2008) formalize
+decision-making under incomplete observations,
+while Bayesian experimental design (Chaloner
+and Verdinelli, 1995) and adaptive submodularity (Golovin and Krause, 2011) study information
+acquisition under limited resources. Unlike general information-gathering methods, E NV P ROBE
+focuses on selectively querying the environment to
+correct structured beliefs maintained by language
+agents, explicitly accounting for the interaction cost
+of verification.
+
+reasoning tasks. Extensive experiments demonstrate that E NV P ROBE substantially improves terminal world-state accuracy compared with agents
+operating without environment probing. Additional
+analyses examine the effects of probing frequency,
+belief selection, and verification signals, demonstrating the effectiveness of actively acquiring environmental evidence for reliable world-model maintenance during long-horizon execution.
+Our contributions are summarized as follows:
+• We identify the challenge of correcting outdated
+world models through environment probing, highlighting the trade-off between acquiring environmental evidence and advancing task execution in
+long-horizon agents.
+
+LLM uncertainty and information seeking.
+Confidence calibration has been studied in neural networks (Guo et al., 2017) and language
+models (Kadavath et al., 2022). UoT (Hu et al.,
+2024) uses uncertainty to guide question generation, InfoSeeker (Fang and Ke, 2025) explores information gathering under partial observability, and
+ReSpAct (Dongre et al., 2024) incorporates clarification actions. However, model-reported uncertainty may be unreliable when incorrect beliefs are
+held with high confidence. E NV P ROBE combines
+task structure with belief-level signals to guide environment probing and analyzes the limitations of
+uncertainty-only verification.
+
+• We propose E NV P ROBE, an environmentprobing framework that selectively interacts with
+the environment to verify beliefs, correct inaccurate world models, and support replanning during
+long-horizon execution.
+• We develop a theoretical analysis that characterizes the benefits of environment probing for belief correction and its interaction costs, revealing
+distinct effects on procedural and spatial beliefs.
+• We conduct extensive experiments across three
+controlled environments, demonstrating that E N V P ROBE improves terminal world-state accuracy
+and investigating the effects of different probing
+strategies and verification signals.
+
+2
+
+Long-horizon agent evaluation. Benchmarks
+such as ALFWorld (Shridhar et al., 2021), WebArena (Zhou et al., 2024b), VisualWebArena (Koh
+et al., 2024), Mind2Web (Deng et al., 2023), AgentBench (Liu et al., 2023), and UltraHorizon (Luo
+et al., 2025) primarily evaluate task completion,
+making it difficult to isolate failures caused by inaccurate world models. Our controlled environments provide ground-truth belief states, enabling
+direct evaluation of terminal world-state accuracy,
+useful-probe rates, and belief-error dynamics.
+
+Related Work
+
+Language agents and world models. Longhorizon language agents combine reasoning, planning, and environment interaction to accomplish
+complex tasks. ReAct (Yao et al., 2023) interleaves
+reasoning with actions, Reflexion (Shinn et al.,
+2023) incorporates feedback, and LATS (Zhou
+et al., 2024a) introduces search-based planning.
+Toolformer (Schick et al., 2023) and ToolLLM (Qin
+et al., 2024) enable external tool use, while embodied agents (Huang et al., 2022; Ahn et al., 2022)
+and Voyager (Wang et al., 2024) support environment interaction and persistent memory. Recent
+work on memory-environment realignment (Yin
+and Du, 2026) and rule-augmented memory (Yuan
+et al., 2026) further addresses belief consistency.
+However, these approaches do not explicitly study
+budgeted environment probing for correcting individual belief fields during long-horizon execution.
+
+Comparison to Prior work. Table 1 compares
+E NV P ROBE with representative approaches to belief estimation (Kumar et al., 2026), memory correction (Yin and Du, 2026; Yuan et al., 2026), active information gathering (Fang and Ke, 2025;
+Zhao et al., 2025), and clarification-based planning (Dongre et al., 2024; Hu et al., 2024). Unlike prior approaches, E NV P ROBE jointly considers environment probing, field-level belief correction, task-aware selection, and probing costs, with
+a type-stratified analysis of procedural and spatial
+3
+
+Table 1: Comparison with related work. We compare existing approaches in terms of environment probing, belief
+correction, task-aware selection, probing cost, and belief-type analysis. ✓ indicates support for a property, while ✗
+indicates its absence.
+Method
+
+Environment
+Probing
+
+Belief
+Correction
+
+Task-Aware
+Selection
+
+Probing Cost
+
+Belief-Type
+Analysis
+
+BB-WM (Kumar et al., 2026)
+GLOVE (Yin and Du, 2026)
+RPMS (Yuan et al., 2026)
+InfoSeeker (Fang and Ke, 2025)
+BKLVA (Zhao et al., 2025)
+ReSpAct (Dongre et al., 2024)
+UoT (Hu et al., 2024)
+
+✗
+✓
+✗
+✓
+✓
+✗
+✗
+
+✓
+✓
+✓
+✗
+✓
+✗
+✗
+
+✗
+✗
+✗
+✓
+✓
+✓
+✓
+
+✗
+✓
+✗
+✓
+✗
+✗
+✗
+
+✗
+✗
+✗
+✗
+✗
+✗
+✗
+
+E NV P ROBE (Ours)
+
+✓
+
+✓
+
+✓
+
+✓
+
+✓
+
+Belief types. We distinguish two types of belief
+fields based on how environmental changes affect
+them. The first type captures action-dependent
+states, such as tool availability, action dependencies, and subgoal completion, which may change
+as the agent executes tasks. The second type captures spatial configurations, such as object locations, door states, and graph connectivity, which
+may change independently of the agent’s actions.
+This distinction matters because action history can
+help identify the former changes but may provide
+limited evidence about the latter.
+
+beliefs.
+
+3
+
+Problem Setup
+
+We consider a long-horizon language agent that
+maintains a structured world model to support planning and interaction with a dynamic environment.
+The agent can either execute task actions or probe
+the environment to verify and correct its stored
+beliefs.
+Belief world model. Let F = {1, . . . , n} denote
+the set of belief fields. At step t, each field i ∈ F
+has a stored belief bit and a corresponding groundtruth environment value gti , both belonging to Vi .
+The agent’s world model is bt = (b1t , . . . , bnt ), and
+its terminal accuracy is measured by
+
+Probe policies. At each interaction step, the
+agent decides whether to execute a task action
+or probe the environment to verify a belief. We
+consider seven policies: No-Probe, which executes without explicit verification; Random-Probe
+and Periodic-Probe, which perform non-adaptive
+probing; Self-Uncertainty, which selects probes
+based on model-reported uncertainty, following
+uncertainty sampling (Lewis and Gale, 1994; Settles, 2009) and language-model confidence estimation (Kadavath et al., 2022); E NV P ROBE-Simple
+and E NV P ROBE-Judge, which use task-aware belief selection with different verification signals; and
+Oracle-Probe, which uses ground-truth belief errors as an upper-bound diagnostic. Figure 1 illustrates how environment probing supports belief
+correction and subsequent replanning.
+
+n
+
+AH =
+
+1X
+i
+1{biH = gH
+},
+n
+
+(1)
+
+i=1
+
+where H is the episode horizon. World-model accuracy is distinct from task success, as additional
+verification may reduce the number of available
+task actions.
+Environment probing. At step t, the agent may
+probe a belief field i to retrieve its current environment value and update the corresponding belief:
+P ROBEt (i) : bit+1 = gti ,
+
+bjt+1 = bjt
+
+(j ̸= i).
+(2)
+Each probe consumes one interaction step without
+executing a task action. Given a horizon H, the
+number of probes is constrained by a budget B:
+H−1
+X
+
+1{at ∈ {P ROBE(i) : i ∈ F}} ≤ B.
+
+4
+
+E NV P ROBE: Environment Evidence
+During Planning
+
+E NV P ROBE enables language agents to correct outdated world models through selective environment
+probing during long-horizon execution. Before executing a planned action, the agent evaluates belief
+
+(3)
+
+t=0
+
+4
+
+fields using task relevance and reliability signals to
+determine whether verification is needed. If probing is selected, the observed environment value
+corrects the corresponding belief, and the agent
+replans accordingly. Otherwise, it executes the
+planned action. This process balances belief accuracy against probing costs without modifying the
+underlying planner, as illustrated in Figure 1.
+
+As shown in Eq. (9), the structural component
+captures task criticality and action dependencies,
+while the self-reported component captures estimated staleness and uncertainty. This distinction
+allows us to evaluate whether self-reported signals
+improve probe selection beyond structural information alone.
+4.2
+
+4.1
+
+Belief Field Scoring
+
+Probe selection. Given the verification scores
+in Eq. (8), E NV P ROBE selects the highest-priority
+belief field:
+
+At each step t, E NV P ROBE evaluates each belief
+field i ∈ F using four signals that capture its task
+relevance and potential for error:
+
+i⋆t = arg max ρi (t).
+i∈F
+
+• Task criticality. Measures the importance
+of field i to task completion using its taskimportance weight wi :
+ci =
+
+wi
+.
+maxj∈F wj
+
+(4)
+
+zt = 1{ρi⋆t (t) ≥ θ ∧ Bt > 0}.
+
+(5)
+
+Belief correction and replanning. When zt = 1,
+i⋆
+the agent observes the environment value gtt and
+corrects the selected belief according to Eq. (2),
+leaving other fields unchanged. It then resets the
+field’s estimated staleness, decreases the remaining probe budget, and replans using the corrected
+world model. When zt = 0, the agent executes its
+proposed task action and updates its beliefs using
+execution feedback. Each probe consumes one interaction step without advancing the task directly,
+creating a trade-off between improving belief accuracy and preserving task-action opportunities.
+
+• Belief staleness. Measures the estimated time
+τ̂i (t) since field i was last verified:
+(6)
+
+where S is a nondecreasing normalization function.
+• Belief uncertainty. Measures uncertainty using
+the agent’s reported confidence in field i:
+ui (t) = 1 − conf i (t).
+
+(7)
+
+4.3
+
+Unified scoring. Using the four signals defined
+in Eqs. (4)–(7), E NV P ROBE assigns each field a
+verification priority:
+ρi (t) = ci + di (t) + si (t) + ui (t).
+
+ρstr
+i (t)
+
+Algorithm and Variants
+
+E NV P ROBE-Simple. Algorithm 1 implements
+the threshold-based policy in Eq. (11). The agent
+selects the highest-scoring field using Eq. (10) and
+probes it when the threshold and budget constraints
+are satisfied. The observed value corrects the corresponding belief according to Eq. (2), followed
+by replanning; otherwise, the agent executes the
+proposed action.
+
+(8)
+
+The score separates task-related structural information from the agent’s self-reported belief reliability:
+ρi (t) = ci + di (t) + si (t) + ui (t) .
+| {z } |
+{z
+}
+
+(11)
+
+Here, zt = 1 indicates probing, while zt = 0 indicates execution of the proposed task action. This
+decision balances the priority of belief verification
+against the limited interaction budget defined in
+Eq. (3).
+
+Direct dependencies receive higher scores than
+indirect or unrelated fields.
+
+si (t) = S(τ̂i (t)) ∈ [0, 1],
+
+(10)
+
+The agent probes this field only if its score exceeds
+a threshold θ and the remaining probe budget Bt is
+positive:
+
+• Dependency relevance. Measures the relationship between field i and the proposed action at
+in the task graph G:
+di (t) = D(i, at , G) ∈ [0, 1].
+
+Probe Selection and Belief Correction
+
+(9)
+
+E NV P ROBE-Judge. This variant introduces a
+secondary language model to evaluate the selected
+
+ρself
+i (t)
+
+5
+
+Algorithm 1 E NV P ROBE: Environment Probing
+and Belief Correction
+Require: Initial beliefs b0 , task graph G, horizon
+H, probe budget B, threshold θ
+1: B0 ← B
+2: for t = 0, . . . , H − 1 do
+3:
+Propose task action at based on bt
+4:
+for each field i ∈ F do
+5:
+Compute ci , di (t), si (t), and ui (t)
+6:
+Compute ρi (t) using Eq. (8)
+7:
+end for
+8:
+Select i⋆t using Eq. (10)
+9:
+Compute zt using Eq. (11)
+10:
+if zt = 1 then
+i⋆
+11:
+Observe environment value gtt
+12:
+Update beliefs using Eq. (2)
+13:
+τ̂i⋆t (t + 1) ← 0
+14:
+Bt+1 ← Bt − 1
+15:
+Replan using corrected beliefs bt+1
+16:
+else
+17:
+Execute proposed task action at
+18:
+Update bt+1 from execution feedback
+19:
+Bt+1 ← Bt
+20:
+end if
+21: end for
+22: return Final beliefs bH
+
+(t) = ci + di (t).
+
+(12)
+
+Metrics and statistics. Our primary metric is terminal world-state accuracy (WSA, AH ), defined
+in Eq. (1). Secondary metrics include task success
+(TS), useful-probe rate (UPR), and collapse onset
+(τc ). We use paired evaluations with bootstrap confidence intervals (Efron and Tibshirani, 1994) and
+multiple-comparison correction.
+
+Oracle variants. Oracle-Probe selects fields
+with known belief errors, while Oracle-TW additionally weights errors by task importance:
+i∈F
+
+Experimental Setup
+
+Baselines. We compare E NV P ROBE-Simple and
+E NV P ROBE-Judge against No-Probe and PeriodicProbe, motivated by partially observable planning (Kaelbling et al., 1998; Ross et al., 2008);
+Random-Probe; Self-Uncertainty, based on uncertainty sampling (Lewis and Gale, 1994; Settles,
+2009) and LLM information seeking (Hu et al.,
+2024; Fang and Ke, 2025); and Oracle-Probe. E N V P ROBE-Judge incorporates an LLM critic inspired
+by reflection-based agents (Shinn et al., 2023; Zhou
+et al., 2024a). Oracle-Probe and Oracle-TW serve
+as privileged diagnostic references.
+
+This variant retains the same probe selection and
+belief correction procedure while relying only on
+task criticality and dependency relevance.
+
+ioracle
+= arg max wi 1{bit ̸= gti }.
+t
+
+5.1
+
+Experimental settings. We evaluate low-,
+medium-, and high-mutation regimes, using the
+medium regime for primary comparisons and
+the others for robustness analysis. All methods
+share the same interaction horizon, probe budget,
+and initial conditions, with paired seeds ensuring
+controlled comparisons.
+
+Structural variant. To isolate structural information, E NV P ROBE-(c + d) removes staleness and
+uncertainty from Eq. (8):
+(c+d)
+
+Experiments
+
+Environments. We evaluate three controlled environments with observable ground-truth states,
+enabling direct measurement of belief drift. ObjectStateWorld models mutable object locations
+and lock states, resembling embodied tasks such
+as ALFWorld (Shridhar et al., 2021) and ScienceWorld (Wang et al., 2022). ToolDAGWorld captures procedural dependencies and changing tool
+states, motivated by Toolformer (Schick et al.,
+2023) and ToolLLM (Qin et al., 2024). GraphNavWorld models partially observable navigation
+with dynamic graph connectivity, complementing
+navigation and interaction benchmarks such as WebArena (Zhou et al., 2024b), Mind2Web (Deng
+et al., 2023), AgentBench (Liu et al., 2023), and UltraHorizon (Luo et al., 2025). Each probe reveals
+the ground-truth value of a selected field at the cost
+of one interaction step.
+
+probe, following reflection and agent-critique approaches (Shinn et al., 2023; Zhou et al., 2024a).
+Given the current beliefs, proposed action, and
+highest-scoring candidates, the judge may override
+the decision in Eq. (11).
+
+ρi
+
+5
+
+(13)
+
+Agent implementation. All methods use GPT4o mini (OpenAI, 2024) with deterministic decoding. The agent updates field-level beliefs, staleness
+
+Both serve as diagnostic references because they require ground-truth information unavailable to practical agents.
+6
+
+estimates, and confidence scores after each interaction. E NV P ROBE-Judge uses the same backbone
+for its critic, while E NV P ROBE-Simple applies the
+score in Eq. (8) directly. Staleness is normalized as
+si (t) = min(1, τ̂i /10).
+5.2
+
+needed for task completion, consistent with the
+belief-gain bound in Eq. (23) and the actiondisplacement bound in Eq. (24).
+5.2.2
+
+Table 3 shows that targeted probing matters more
+than probe frequency. On procedural tasks, E N V P ROBE -Simple outperforms Periodic-Probe by
+11.76%, highlighting the importance of structural
+cues. E NV P ROBE-Judge offers modest additional
+gains, while uncertainty-based probing remains vulnerable to confident errors. Oracle comparisons
+further suggest that correcting more beliefs does
+not necessarily improve task-relevant accuracy.
+
+Results
+
+5.2.1
+
+Result: Probing Repairs the World
+Model
+Belief repair across environments. Table 2
+shows that E NV P ROBE-Simple consistently improves terminal world-state accuracy over PeriodicProbe, with gains of +11.76% on procedural tasks
+and +3.79% on spatial tasks. The smaller spatial improvement is consistent with Lemma A.4,
+suggesting that self-reported reliability provides
+weaker guidance when environmental changes are
+externally induced.
+
+5.2.3
+
+Collapse-onset delay.
+
+Drift before action collapse. Figure 4 and Table 4 show that belief drift precedes action collapse
+by 2.42 steps on average in spatial environments,
+whereas procedural tasks exhibit more frequent
+action-first failures. This difference reflects the
+stronger coupling between tool-precondition beliefs and action validity: a single incorrect prerequisite can invalidate an action before aggregate
+belief accuracy collapses.
+
+Non-dominated
+Dominated
+
+Structural-only
+
+Pareto frontier
+
+Terminal world-state accuracy AH
+
+50%
+
+45%
+
+On ToolDAGWorld, E N -
+
+to 7.48 steps relative to Periodic-Probe. As shown
+in Figure 3, spatial environments often begin near
+or below the accuracy threshold, making collapse
+onset less informative for spatial evaluation.
+
+Procedural Pareto frontier
+Without
+uncertainty
+
+When and Why Probing Works
+
+V P ROBE -Simple delays belief collapse from 1.68
+
+Selection signals and task trade-off. The ablations in Table 2 compare the full score in Eq. (8)
+with Structural-only (Eq. (12)) and Without uncertainty, which removes ui (t). Both improve belief
+accuracy, but removing uncertainty substantially
+reduces task success (8.2% versus 20.5%). This
+demonstrates that maximizing belief repair alone
+can compromise task completion, consistent with
+Theorem A.8.
+55%
+
+Targeted Probing vs. Probe Frequency
+
+Oracle-TW
+
+Component ablation. Table 5 and Figure 5 examine the contributions of the four signals in
+Eq. (8). Removing task criticality or dependency
+substantially reduces belief accuracy, confirming
+the importance of structural information. Staleness provides a smaller benefit, whereas removing
+uncertainty improves belief accuracy but reduces
+task success. The structural-only score in Eq. (12)
+achieves the highest observed procedural accuracy,
+consistent with the limited value of self-reported
+reliability characterized by Lemma A.4.
+
+EnvProbe-Simple
+
+40%
+
+Without
+staleness
+
+No-Probe
+
+Light-Probe
+Zone
+
+35%
+
+Periodic-Probe
+
+30%
+
+Without
+dependency
+
+25%
+
+Random-Probe
+0%
+
+20%
+
+40%
+
+60%
+
+Without task
+criticality
+80%
+
+100%
+
+Task success (episodes completed)
+
+Figure 2: Empirical belief–task Pareto frontier on
+ToolDAGWorld. Task success versus terminal accuracy
+AH . Filled markers indicate nondominated policies;
+hollow markers indicate dominated policies. Probeintensive methods favor belief accuracy, while lighter
+probing favors task completion.
+
+6
+
+Conclusion
+
+We studied when and why environment probing
+improves the reliability of world models in longhorizon language agents. We introduced E N V P ROBE, a framework that prioritizes belief verification using task criticality, dependency, staleness,
+and uncertainty, and established theoretical bounds
+
+Figure 2 illustrates the competing effects of belief repair and task execution. Additional probing can improve accuracy while consuming steps
+7
+
+Table 2: Terminal world-state accuracy under environment probing. The upper block compares E NV P ROBESimple with Periodic-Probe; the lower block compares score ablations with the full E NV P ROBE-Simple score on
+ˆ denotes the absolute accuracy difference (%).
+ToolDAGWorld. ∆
+n
+
+Method AH
+
+Reference AH
+
+ˆ (%)
+∆
+
+220
+660
+440
+
+0.431
+0.371
+0.341
+
+0.313
+0.306
+0.303
+
++11.76
++6.45
++3.79
+
+Score ablations on ToolDAGWorld; reference: full E NV P ROBE-Simple
+Structural-only vs. full score
+220
+0.491
+Without uncertainty vs. full score
+220
+0.488
+
+0.431
+0.431
+
++6.03
++5.76
+
+Environment / Comparison
+Procedural (ToolDAGWorld)
+Combined (all environments)
+Spatial (GraphNavWorld + ObjectStateWorld)
+
+World-state accuracy trajectories (μ̄ = 0.10)
+ToolDAGWorld
+(procedural)
+
+World-state accuracy At
+
+100%
+
+GraphNavWorld
+(spatial)
+
+EnvProbe-Simple:
+belief collapse 7.48 steps
+
+80%
+
+No-Probe
+Periodic-Probe
+EnvProbe-Simple
+EnvProbe-Judge
+Oracle-Probe (upper bd.)
+
+Periodic-Probe:
+belief collapse 1.68 steps
+
+At = 0.6
+
+60%
+
+ObjectStateWorld
+(spatial)
+
+At = 0.6
+
+At = 0.6
+
+40%
+20%
+0%
+1
+
+10
+
+20
+
+30 1
+
+10
+
+Environment step
+
+20
+
+30 1
+
+10
+
+Environment step
+
+20
+
+30
+
+Environment step
+
+Figure 3: World-state accuracy under medium stress. E NV P ROBE-Simple delays belief collapse (At < 0.6) on
+ToolDAGWorld, while spatial environments exhibit saturated collapse onset due to low initial accuracy.
+Table 3: Probing-policy comparisons under medium
+stress. Terminal world-state accuracy AH .
+
+Table 4: Belief drift and action-collapse timing. Positive offsets indicate that belief drift occurs before action
+collapse.
+
+Policy AH Reference AH
+
+Comparison
+No-Probe vs. Self-Uncertainty (spatial)
+Self-Uncertainty vs. Periodic-Probe (spatial)
+E NV P ROBE-Simple vs. Periodic-Probe (procedural)
+E NV P ROBE-Judge vs. E NV P ROBE-Simple (spatial)
+E NV P ROBE-Judge vs. Oracle-Probe
+
+0.387
+0.303
+0.431
+0.341
+0.341
+
+0.352
+0.307
+0.313
+0.339
+0.364
+
+Environment
+Combined
+Spatial
+Procedural
+
+n Mean Median Drift-first Action-first
+2813
+2210
+603
+
++2.22
++2.42
++1.45
+
+0.0
+0.0
+−2.0
+
+49.2%
+49.0%
+49.6%
+
+11.8%
+1.3%
+50.4%
+
+τc (action first < 0.6, step)
+
+Spatial drift before action collapse, n = 2, 210 episodes
+8
+
+Table 5: Component ablation on ToolDAGWorld. Accuracy changes (%) relative to full E NV P ROBE-Simple;
+green highlights the best result.
+
+GraphNavWorld (spatial)
+ObjectStateWorld (spatial)
+τd = τc
+Mean τd̄ = 1.1, τc̄ = 3.5
+
+Drift first 49.0%
+
+6
+
+Mean offset +2.42 steps
+
+4
+Action first 1.3%
+
+2
+0
+
+0
+
+2
+
+4
+τd (WSA first < 0.6, step)
+
+6
+
+8
+
+Method / Ablation
+Full E NV P ROBE-Simple
+Without task criticality
+Without dependency
+Without staleness
+Without uncertainty
+Structural-only
+
+Figure 4: Belief drift precedes action collapse in spatial environments. The scatter compares belief drift
+(τd ) and action collapse (τc ) at the 0.6 threshold. Points
+above the diagonal indicate drift-first episodes.
+
+on belief repair and its trade-off with task execution. Experiments across procedural and spatial
+environments show that targeted probing improves
+world-state accuracy, delays belief collapse, and
+exposes errors missed by self-reported uncertainty.
+Structural cues consistently provide the strongest
+
+AH
+
+ˆ H (%)
+∆A
+
+0.431
+0.271
+0.310
+0.405
+0.488
+0.491
+
+—
+−15.92
+−12.08
+−2.59
++5.76
++6.03
+
+guidance, while additional probing does not necessarily improve task success. These findings highlight the importance of task-aware belief verification and balancing information acquisition against
+the cost of interaction.
+8
+
+Accuracy / success
+
+World-state accuracy AH
+
+91.8%
+
+100%
+80%
+
+65.0%
+
+Task / AH trade-off
+
+60%
+
+49.1%
+
+48.8%
+
+43.1%
+
+ers. 2022. Do as i can, not as i say: Grounding
+language in robotic affordances. arXiv preprint
+arXiv:2204.01691.
+
+Structural-only
+Full-score reference
+
+Task success
+
+40.5%
+
+40%
+
+31.0%
+
+27.1%
+
+20.5%
+
+Kathryn Chaloner and Isabella Verdinelli. 1995.
+Bayesian experimental design: A review. Statistical Science, 10(3):273–304.
+
+15.9%
+
+15.0%
+
+20%
+
+8.2%
+
+0%
+
+EnvProbe-Simple
+(full score)
+
+Without task
+criticality
+
+Without
+staleness
+
+Without
+uncertainty
+
+Without
+dependency
+
+Structural-only
+(task criticality +
+dependency)
+
+Xiang Deng, Yu Gu, Boyuan Zheng, Shijie Chen,
+Samuel Stevens, Boshi Wang, Huan Sun, and Yu Su.
+2023. Mind2Web: Towards a generalist agent for the
+web. In Advances in Neural Information Processing
+Systems (NeurIPS).
+
+Figure 5: Component ablation: belief accuracy and
+task success. Blue/teal bars show AH ; amber bars show
+task success. Structural cues are essential for belief
+accuracy, while removing uncertainty improves AH at
+the expense of task success.
+
+Structural-only
+
+Vardhan Dongre, Xiaocheng Yang, Emre Can Acikgoz,
+Suvodip Dey, Gokhan Tur, and Dilek Hakkani-Tur.
+2024. ReSpAct: Harmonizing reasoning, speaking,
+and acting towards building large language modelbased conversational AI agents. arXiv preprint
+arXiv:2411.00927.
+
+EnvProbeSimple
+
+Bradley Efron and Robert J. Tibshirani. 1994. An Introduction to the Bootstrap. Chapman and Hall/CRC.
+
+Spatial: no trade-off among probing methods
+
+Terminal world-state accuracy AH
+
+42%
+
+Non-dominated
+Dominated
+Pareto frontier
+
+Dominates other probing methods
+(higher accuracy and task success)
+
+39%
+
+36%
+
+33%
+
+30%
+
+Oracle-Probe
+Random-Probe
+Self-Uncertainty
+
+Djengo Cyun-Jyun Fang and Tsung-Wei Ke. 2025.
+Information seeking for robust decision making under partial observability. arXiv preprint
+arXiv:2510.01531.
+
+Periodic-Probe
+
+Oracle-TW
+27%
+
+EnvProbe-Judge
+
+No-Probe (Pareto)
+
+Daniel Golovin and Andreas Krause. 2011. Adaptive
+submodularity: Theory and applications in active
+learning and stochastic optimization. Journal of Artificial Intelligence Research, 42:427–486.
+
+24%
+20%
+
+30%
+
+40%
+
+50%
+
+60%
+
+Task success (episodes completed)
+
+Figure 6: Spatial belief–task Pareto frontier. Unlike
+the procedural setting (Figure 2), Structural-only dominates all baselines in both belief accuracy and task success. Shorter dependency chains reduce probing costs.
+
+Chuan Guo, Geoff Pleiss, Yu Sun, and Kilian Q. Weinberger. 2017. On calibration of modern neural networks. In Proceedings of the 34th International Conference on Machine Learning (ICML), pages 1321–
+1330.
+
+Limitations
+
+Shibo Hao, Yi Gu, Haodi Ma, Joshua Jiahua Hong, Zhen
+Wang, Daisy Zhe Wang, and Zhiting Hu. 2023. Reasoning with language model is planning with world
+model. In Proceedings of the 2023 Conference on
+Empirical Methods in Natural Language Processing
+(EMNLP).
+
+Our evaluation focuses on controlled environments
+that enable direct measurement of belief accuracy,
+which may not fully capture the complexity of realworld agent interactions. The effectiveness of environment probing may vary with observation quality,
+environmental dynamics, and model capabilities.
+Our theoretical results rely on assumptions about
+belief-repair gains and probe selection that may not
+hold universally. Further evaluation across diverse
+models, tasks, and deployment settings is needed
+to establish the generality and robustness of our
+findings.
+
+Brennen Hill. 2025. Language-driven hierarchical task
+structures as explicit world models for multi-agent
+learning. arXiv preprint arXiv:2509.04731.
+Zhiyuan Hu, Chumin Liu, Xidong Feng, Yilun Zhao,
+See-Kiong Ng, Anh Tuan Luu, Junxian He, Pang Wei
+Koh, and Bryan Hooi. 2024. Uncertainty of thoughts:
+Uncertainty-aware planning enhances information
+seeking in LLMs. In Advances in Neural Information
+Processing Systems (NeurIPS).
+Wenlong Huang, Fei Xia, Ted Xiao, Harris Chan, Jacky
+Liang, Pete Florence, Andy Zeng, Jonathan Tompson,
+Igor Mordatch, Yevgen Chebotar, Pierre Sermanet,
+Noah Brown, Tomas Jackson, Linda Luu, Sergey
+Levine, Karol Hausman, and Brian Ichter. 2022. Inner monologue: Embodied reasoning through planning with language models. In Conference on Robot
+Learning (CoRL).
+
+References
+Michael Ahn, Anthony Brohan, Noah Brown, Yevgen Chebotar, Omar Cortes, Byron David, Chelsea
+Finn, Chuyuan Fu, Keerthana Gopalakrishnan, Karol
+Hausman, Alex Herzog, Daniel Ho, Jasmine Hsu,
+Julian Ibarz, Brian Ichter, Alex Irpan, Eric Jang,
+Rosario Jauregui Ruano, Kyle Jeffrey, and 26 oth-
+
+9
+
+Saurav Kadavath, Tom Conerly, Amanda Askell, Tom
+Henighan, Dawn Drain, Ethan Perez, Nicholas
+Schiefer, Zac Hatfield-Dodds, Nova DasSarma, Eli
+Tran-Johnson, Scott Johnston, Sheer El-Showk,
+Andy Jones, Nelson Elhage, Tristan Hume, Anna
+Chen, Yuntao Bai, Sam Bowman, Stanislav Fort, and
+17 others. 2022. Language models (mostly) know
+what they know. arXiv preprint arXiv:2207.05221.
+
+George L. Nemhauser, Laurence A. Wolsey, and Marshall L. Fisher. 1978. An analysis of approximations for maximizing submodular set functions—I.
+Mathematical Programming, 14(1):265–294. Greedy
+(1 − 1/e) approximation for monotone submodular
+maximization under cardinality constraint.
+OpenAI. 2024. GPT-4o mini: Advancing cost-efficient
+intelligence. https://openai.com/index/gpt-4
+o-mini-advancing-cost-efficient-intellige
+nce/. Accessed 2026-06-26.
+
+Leslie Pack Kaelbling, Michael L. Littman, and Anthony R. Cassandra. 1998. Planning and acting in
+partially observable stochastic domains. Artificial
+Intelligence, 101(1–2):99–134.
+
+Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan
+Yan, Yaxi Lu, Yankai Lin, Xin Cong, Xiangru Tang,
+Bill Qian, Sihan Zhao, Lauren Hong, Runchu Tian,
+Ruobing Xie, Jie Zhou, Mark Gerstein, Dahai Li,
+Zhiyuan Liu, and Maosong Sun. 2024. ToolLLM:
+Facilitating large language models to master 16000+
+real-world APIs. In International Conference on
+Learning Representations (ICLR).
+
+Jing Yu Koh, Robert Lo, Lawrence Jang, Vikram
+Duvvur, Ming Chong Lim, Po-Yu Huang, Graham
+Neubig, Shuyan Zhou, Ruslan Salakhutdinov, and
+Daniel Fried. 2024. VisualWebArena: Evaluating multimodal agents on realistic visual web tasks.
+arXiv preprint arXiv:2401.13649.
+
+Stéphane Ross, Joelle Pineau, Sébastien Paquet, and
+Brahim Chaib-draa. 2008. Online planning algorithms for POMDPs. Journal of Artificial Intelligence Research, 32:663–704.
+
+Andreas Krause and Daniel Golovin. 2014. Submodular
+function maximization. In Lucas Bordeaux, Youssef
+Hamadi, and Pushmeet Kohli, editors, Tractability:
+Practical Approaches to Hard Problems, pages 71–
+104. Cambridge University Press.
+
+Timo Schick, Jane Dwivedi-Yu, Roberto Dessì, Roberta
+Raileanu, Maria Lomeli, Eric Hambro, Luke Zettlemoyer, Nicola Cancedda, and Thomas Scialom. 2023.
+Toolformer: Language models can teach themselves
+to use tools. In Advances in Neural Information Processing Systems (NeurIPS).
+
+Shubham Kumar, Harshit Kumar, Narendra Ahuja,
+and Saurabh Jha. 2026. Towards a belief-based
+world model for LLM agents. arXiv preprint
+arXiv:2609.00455.
+
+Burr Settles. 2009. Active learning literature survey.
+Technical Report 1648, University of Wisconsin–
+Madison.
+
+David D. Lewis and William A. Gale. 1994. A sequential algorithm for training text classifiers. In
+Proceedings of the 17th Annual International ACM
+SIGIR Conference on Research and Development in
+Information Retrieval, pages 3–12.
+
+Noah Shinn, Federico Cassano, Ashwin Gopinath,
+Karthik R. Narasimhan, and Shunyu Yao. 2023. Reflexion: Language agents with verbal reinforcement
+learning. In Advances in Neural Information Processing Systems (NeurIPS).
+
+Xiao Liu, Hao Yu, Hanchen Zhang, Yifan Xu, Xuanyu
+Lei, Hanyu Lai, Yu Gu, Hangliang Ding, Kaiwen
+Men, Kejuan Yang, Shudan Zhang, Xiang Deng, Aohan Zeng, Zhengxiao Du, Chenhui Zhang, Sheng
+Shen, Tianjun Zhang, Yu Su, Huan Sun, and 3 others. 2023. AgentBench: Evaluating LLMs as agents.
+arXiv preprint arXiv:2308.03688.
+
+Mohit Shridhar, Xingdi Yuan, Marc-Alexandre Côté,
+Yonatan Bisk, Adam Trischler, and Matthew
+Hausknecht. 2021. ALFWorld: Aligning text and
+embodied environments for interactive learning. In
+International Conference on Learning Representations (ICLR).
+
+Haotian Luo, Huaisong Zhang, Xuelin Zhang, Haoyu
+Wang, Zeyu Qin, Wenjie Lu, Guozheng Ma, Haiying
+He, Yingsha Xie, Qiyang Zhou, Zixuan Hu, Hongze
+Mi, Yibo Wang, Naiqiang Tan, Hong Chen, Yi R.
+Fung, Chun Yuan, and Li Shen. 2025. UltraHorizon: Benchmarking agent capabilities in ultra longhorizon scenarios. arXiv preprint arXiv:2509.21766.
+
+Guanzhi Wang, Yuqi Xie, Yunfan Jiang, Ajay Mandlekar, Chaowei Xiao, Yuke Zhu, Linxi Fan, and
+Anima Anandkumar. 2024. Voyager: An open-ended
+embodied agent with large language models. Transactions on Machine Learning Research (TMLR).
+Ruoyao Wang, Peter Jansen, Marc-Alexandre Côté, and
+Prithviraj Ammanabrolu. 2022. ScienceWorld: Is
+your agent smarter than a 5th grader? In Proceedings of the 2022 Conference on Empirical Methods
+in Natural Language Processing (EMNLP), pages
+11279–11298.
+
+Aman Madaan, Niket Tandon, Prakhar Gupta, Skyler
+Hallinan, Luyu Gao, Sarah Wiegreffe, Uri Alon,
+Nouha Dziri, Shrimai Prabhumoye, Yiming Yang,
+Shashank Gupta, Bodhisattwa Prasad Majumder,
+Katherine Hermann, Sean Welleck, Amir Yazdanbakhsh, and Peter Clark. 2023. Self-Refine: Iterative refinement with self-feedback. In Advances in
+Neural Information Processing Systems, volume 36,
+pages 46534–46594.
+
+Zehong Wang, Fang Wu, Hongru Wang, Xiangru Tang,
+Bolian Li, Zhenfei Yin, Yijun Ma, Yiyang Li, Weixiang Sun, Xiusi Chen, and Yanfang Ye. 2026. Why
+
+10
+
+reasoning fails to plan: A planning-centric analysis of
+long-horizon decision making in LLM agents. arXiv
+preprint arXiv:2601.22311.
+Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak
+Shafran, Karthik R. Narasimhan, and Yuan Cao. 2023.
+ReAct: Synergizing reasoning and acting in language
+models. In International Conference on Learning
+Representations (ICLR).
+Xingkun Yin and Hongyang Du. 2026. GLOVE: Global
+verifier for LLM memory-environment realignment.
+arXiv preprint arXiv:2601.19249.
+Zhenhang Yuan, Shenghai Yuan, and Lihua Xie. 2026.
+Rpms: Enhancing llm-based embodied planning
+through rule-augmented memory synergy. Preprint,
+arXiv:2603.17831.
+Xuan Zhang, Zhijian Zhou, Lingfeng Qiao, Yulei Qin,
+Ke Li, Xing Sun, Xiaoyu Tan, Chao Qu, and Yuan
+Qi. 2026. Internalizing the future: A unified agentic
+training paradigm for world model planning. arXiv
+preprint arXiv:2606.27483.
+Linfeng Zhao, Willie McClinton, Aidan Curtis, Nishanth Kumar, Tom Silver, Leslie Pack Kaelbling,
+and Lawson L. S. Wong. 2025. Seeing is believing: Belief-space planning with foundation
+models as uncertainty estimators. arXiv preprint
+arXiv:2504.03245.
+Andy Zhou, Kai Yan, Michal Shlapentokh-Rothman,
+Haohan Wang, and Yu-Xiong Wang. 2024a. Language agent tree search unifies reasoning acting and
+planning in language models. In International Conference on Machine Learning (ICML).
+Shuyan Zhou, Frank F. Xu, Hao Zhu, Xuhui Zhou,
+Robert Lo, Abishek Sridhar, Xianyi Cheng, Tianyue
+Ou, Yonatan Bisk, Daniel Fried, Uri Alon, and Graham Neubig. 2024b. WebArena: A realistic web
+environment for building autonomous agents. In International Conference on Learning Representations
+(ICLR).
+
+11
+
+A
+
+Theory
+
+Lemma A.3 (Targeted belief-repair bound). Under Assumption A.1 and Eq. (16), a greedy policy
+allocating BT probes to type T satisfies
+
+We analyze how environment probing improves belief accuracy while reducing the interaction steps
+available for task execution. The analysis distinguishes belief types and characterizes the effects
+of probe selection quality, self-reported reliability,
+and interaction costs.
+A.1
+
+E[GT (Sρ,T )] ≥ (1 − e−γT (ρ) ) max GT (S).
+S⊆FT
+|S|≤BT
+
+(17)
+Lemma A.3 establishes that the belief gain defined in Eq. (14) depends on selection quality, not
+merely the number of probes. Higher γT (ρ) yields
+a stronger approximation guarantee under diminishing returns. The proof is provided in Appendix
+Section B.1.
+
+Belief-Side Gain
+
+We analyze belief repair separately for each type
+T ∈ {proc, spat}. Let F
+T ⊆ F contain nT fields,
+1 P
+T
+i } foland define AH = nT i∈FT 1{biH = gH
+lowing Eq. (1). For a fixed trajectory prefix, the
+expected gain from probing S ⊆ FT , relative to no
+probing, is
+
+Empirical selection quality. We assess selection quality through realized belief gains relative
+to Oracle-TW in Eq. (13) under matched seeds.
+Comparing the full score in Eq. (8) with the structural score in Eq. (12) evaluates the contribution of
+self-reported staleness and uncertainty.
+
+GT (S) = E[ATH | do(Probe(S))]−E[ATH | do(Probe(∅))].
+(14)
+
+Both expectations use the same continuation policy and remaining interaction horizon, so GT (S)
+includes the effects of probing on subsequent decisions.
+
+Lemma A.4 (Limited value of self-reported reliability). Fix t and S ⊊ Fspat . Suppose that, for
+every i ∈ Fspat \ S,
+
+Assumption A.1 (Diminishing belief repair). For
+each type T , the function GT in Eq. (14) is normalized, monotone, and submodular. For all S ⊆ R ⊆
+FT and i ∈ FT \ R,
+GT (∅) = 0,
+
+GT (S) ≤ GT (R),
+
+∆T (i | S) ≥ ∆T (i | R),
+
+E[∆spat (i | S) | ci , di (t), si (t), ui (t)]
+− E[∆spat (i | S) | ci , di (t)] ≤ εspat .
+
+(18)
+
+Assume the structural signals ci , di (t) and selfreported signals si (t), ui (t) are available jointly
+for all candidate fields. Then
+
+(15)
+
+where ∆T (i | S) = GT (S ∪ {i}) − GT (S).
+
+0 ≤ sup E[∆spat (ϕ | S)] − sup E[∆spat (ψ | S)] ≤ 2εspat .
+
+Assumption A.1 captures diminishing returns in
+belief repair, consistent with submodular information gathering (Nemhauser et al., 1978; Golovin
+and Krause, 2011; Krause and Golovin, 2014). It
+is a condition on the environment and continuation policy, rather than a property guaranteed by
+probing.
+
+ϕ
+
+ψ
+
+(19)
+
+Here, ϕ and ψ range over all selection policies
+using the full signals in Eq. (8) and the structural
+signals in Eq. (12), respectively. Lemma A.4 shows
+that self-reported reliability provides limited additional value when it weakly predicts marginal belief
+repair beyond task structure. The result concerns
+optimal selectors under the two information sets,
+rather than guaranteeing the performance of either
+fixed scoring rule. The proof is provided in Appendix Section B.2.
+
+Definition A.2 (Marginal selection quality). For a
+fixed type T , let iρ (S) denote the highest-scoring
+field among FT \ S, following Eq. (10). The score
+ρ in Eq. (8) has marginal selection quality γT (ρ) ∈
+[0, 1] if, for every S ⊊ FT ,
+
+Proposition A.5 (Uncertainty-only miscoverage).
+Let Et = {i ∈ F : bit ̸= gti } be the set of incorrect beliefs. For a threshold α ∈ [0, 1], define
+Ct = {i ∈ Et : ui (t) ≤ α} using Eq. (7). If
+an uncertainty-only policy probes exclusively from
+{i : ui (t) > α}, then, for |Et | > 0,
+
+E[∆T (iρ (S) | S)] ≥ γT (ρ) max ∆T (j | S).
+j∈FT \S
+
+(16)
+Definition A.2 measures how closely scorebased selection approximates the largest available
+marginal gain. Under Assumption A.1, γT (ρ) = 1
+corresponds to optimal marginal selection, while
+smaller values permit less effective targeting.
+
+Recallt ≤ 1 −
+12
+
+|Ct |
+.
+|Et |
+
+(20)
+
+where B(π) = E[AH (π)] − E[AH (NoProbe)],
+provided the type-specific gains in Eq. (14) are
+evaluated against the same no-probe continuation.
+Under the effectiveness condition of Lemma A.7,
+task success simultaneously satisfies
+
+Proposition A.5 establishes that uncertainty-only
+probing cannot cover confidently incorrect beliefs
+excluded by its selection threshold. Its maximum
+error coverage is therefore limited by the fraction
+of incorrect beliefs assigned low uncertainty. The
+proof is provided in Appendix Section B.3.
+
+
+
+ηπ (H − Bproc − Bspat )
+Pr[success(π)] ≤ min 1,
+.
+K
+(24)
+
+Proposition A.6 (Non-adaptive allocation loss).
+For a fixed belief type T , let qi = GT ({i}) denote the single-field gain in Eq. (14), and suppose
+maxi∈FT qi > 0. The relative gain of uniform
+single-field probing satisfies
+P
+i∈FT qi
+T
+≤ 1,
+(21)
+Eff unif =
+nT maxi∈FT qi
+
+Theorem A.8 combines the belief-repair guarantee in Eq. (17) with the action-displacement bound
+in Eq. (22). Additional probes can increase the
+guaranteed belief gain while reducing the number
+of task-action opportunities. The resulting trade-off
+depends on selection quality, belief type, and action
+effectiveness. The proof is provided in Appendix
+Section B.6.
+
+with equality if and only if all single-field gains are
+equal.
+Proposition A.6 quantifies the loss from ignoring heterogeneous belief-repair gains. Unlike the
+targeted selection rule in Eq. (10), uniform probing
+assigns equal probability to all fields, regardless
+of their expected benefit. The proof is provided in
+Appendix Section B.4.
+A.2
+
+B
+
+We provide proofs of the theoretical results in Section A.
+B.1
+
+Task-Side Displacement
+
+GT (ST⋆ ) − GT (Sj ) ≤ GT (Sj ∪ ST⋆ ) − GT (Sj )
+X
+≤
+∆T (i | Sj )
+i∈ST⋆ \Sj
+
+≤ BT max ∆T (i | Sj ).
+i∈FT \Sj
+
+(25)
+Applying the marginal-quality condition in
+Eq. (16) conditionally on Sj gives
+
+Lemma A.7 bounds task success by the expected
+number of available task actions. Since each probe
+consumes one interaction step, increasing Pπ reduces this bound unless probing also improves action effectiveness. The proof is provided in Appendix Section B.5.
+
+E[GT (Sj+1 ) − GT (Sj ) | Sj ]
+= E[∆T (iρ (Sj ) | Sj ) | Sj ]
+≥ γT (ρ) max ∆T (i | Sj )
+
+Theorem A.8 (Probe-action trade-off). Suppose
+policy π allocates a fixed number BT of probes
+to each belief type T ∈ {proc, spat}, with Pπ =
+Bproc + Bspat ≤ B. Under Assumption A.1 and
+Eq. (16), assume the policy satisfies the greedy selection guarantee in Lemma A.3. Then its expected
+terminal belief gain satisfies
+X
+T ∈{proc,spat}
+
+Proof of Lemma A.3
+
+Proof. Fix a belief type T and let Sj denote the
+fields selected after j probes, with S0 = ∅. Let
+ST⋆ ∈ arg maxS⊆FT ,|S|≤BT GT (S). By monotonicity and submodularity in Assumption A.1,
+
+Lemma A.7 (Probe-action displacement). Let
+Pπ ≤ B be the number of probes used by policy π
+within horizon H. Suppose task success requires
+at least K > 0 effective actions, and the conditional probability that any executed task action is
+effective, given the preceding history, is at most
+ηπ ∈ [0, 1]. Then
+
+
+ηπ E[H − Pπ ]
+Pr[success(π)] ≤ min 1,
+.
+K
+(22)
+
+B(π) ≥
+
+Proofs
+
+i∈FT \Sj
+
+≥
+
+(26)
+
+γT (ρ)
+(GT (ST⋆ ) − GT (Sj )) .
+BT
+
+Taking expectations and rearranging,
+GT (ST⋆ ) − E[GT (Sj+1 )]
+
+
+γT (ρ)
+≤ 1−
+(GT (ST⋆ ) − E[GT (Sj )]) .
+BT
+(27)
+
+nT
+(1 − e−γT (ρ) ) max GT (S),
+S⊆FT
+n
+|S|≤BT
+
+(23)
+
+13
+
+Iterating over BT probes and using GT (∅) = 0
+from Eq. (15),
+GT (ST⋆ ) − E[GT (SBT )]
+
+
+γT (ρ) BT
+GT (ST⋆ )
+≤ 1−
+BT
+
+incorrect fields covered by the eligible set satisfies
+|{i ∈ Et : ui (t) > α}|
+|Et |
+|Et \ Ct |
+=
+|Et |
+|Ct |
+=1−
+.
+|Et |
+
+Recallt ≤
+(28)
+
+≤ e−γT (ρ) GT (ST⋆ ).
+Therefore,
+
+This establishes Eq. (20).
+
+
+
+E[GT (SBT )] ≥ 1 − e−γT (ρ) GT (ST⋆ )
+
+
+= 1 − e−γT (ρ) max GT (S),
+
+B.4
+
+Proof of Proposition A.6
+
+Proof. Fix a belief type T and let qi = GT ({i}), as
+defined in Proposition A.6. Under uniform singlefield probing, each field in FT is selected with
+probability 1/nT . By Eq. (14), the expected gain
+is
+X 1
+E[GT ({i})] =
+GT ({i})
+nT
+i∈FT
+1 X
+(33)
+=
+qi
+nT
+
+S⊆FT
+|S|≤BT
+
+(29)
+which establishes Eq. (17).
+B.2
+
+Proof of Lemma A.4
+
+Proof. Fix t and S ⊊ Fspat . Let ϕ⋆ and ψ ⋆ be
+optimal selectors using the full signals in Eq. (8)
+and the structural signals in Eq. (12), respectively.
+Denote their selected fields by iϕ and iψ .
+By the conditional gain bound in Eq. (18), the
+expected marginal gain of any candidate changes
+by at most εspat when self-reported signals are included. Since ψ ⋆ maximizes expected gain using
+structural information, we obtain
+
+i∈FT
+
+≤ max qi .
+i∈FT
+
+Since maxi∈FT qi > 0, dividing both sides by
+this maximum gives
+E[GT ({i})]
+maxj∈FT qj
+P
+i∈FT qi
+=
+nT maxj∈FT qj
+
+Eff Tunif =
+
+E[∆spat (iϕ | S)]
+≤ E[∆spat (iϕ | S) | ciϕ , diϕ (t)] + εspat
+≤ E[∆spat (iψ | S) | ciψ , diψ (t)] + εspat
+
+Equality holds if and only if qi = maxj∈FT qj
+for every i ∈ FT . Otherwise, the inequality is
+strict, establishing Eq. (21).
+
+Taking the supremum over admissible selectors
+yields
+
+B.5
+
+Proof of Lemma A.7
+
+Proof. Let Mπ denote the number of effective task
+actions executed by policy π within horizon H.
+Since each probe consumes one interaction step,
+the number of executed task actions is at most H −
+Pπ .
+By the conditional effectiveness assumption in
+Lemma A.7, the expected number of effective task
+actions satisfies
+"H
+#
+X
+E[Mπ ] = E
+1{effective task action at t}
+
+0 ≤ sup E[∆spat (ϕ | S)] − sup E[∆spat (ψ | S)]
+ψ
+
+≤ 2εspat ,
+(31)
+which establishes Eq. (19).
+B.3
+
+(34)
+
+≤ 1.
+
+(30)
+
+≤ E[∆spat (iψ | S)] + 2εspat .
+
+ϕ
+
+(32)
+
+Proof of Proposition A.5
+
+Proof. By Eq. (7), an uncertainty-only policy with
+threshold α selects fields satisfying ui (t) > α.
+Hence, every incorrectly believed field in Ct , as
+defined in Proposition A.5, is excluded from the
+eligible set. For |Et | > 0, the maximum fraction of
+
+t=1
+
+≤ ηπ E[H − Pπ ].
+(35)
+14
+
+Table 6: Budget-normalized useful-probe rate RB . Green highlights the highest value in each environment.
+Environment
+
+E NV P ROBE-Simple Random-Probe Periodic-Probe Self-Uncertainty Oracle-Probe
+
+GraphNavWorld
+ObjectStateWorld
+Spatial pool
+ToolDAGWorld (diagnostic)
+
+0.91
+0.31
+0.61
+0.00
+
+0.49
+0.29
+0.39
+0.19
+
+Task success requires at least K effective actions.
+Applying Markov’s inequality therefore gives
+Pr[success(π)] ≤ Pr[Mπ ≥ K]
+E[Mπ ]
+≤
+K
+ηπ E[H − Pπ ]
+≤
+.
+K
+
+(36)
+
+
+ηπ E[H − Pπ ]
+Pr[success(π)] ≤ min 1,
+K
+
+
+ηπ (H − E[Pπ ])
+= min 1,
+K
+
+
+ηπ (H − Bproc − Bspat )
+= min 1,
+,
+K
+(40)
+which proves Eq. (24).
+Finally, monotonicity in Eq. (15) implies
+max GT (S) ≤
+
+S⊆FT
+|S|≤BT
+
+Proof. Fix the probe allocation Bproc , Bspat in
+Theorem A.8, and let Sρ,T denote the fields selected by the score-based policy for each T ∈
+{proc, spat}.
+By Eq. (1), terminal belief accuracy decomposes
+as
+1X
+i
+AH =
+1{biH = gH
+}
+n
+i∈F
+X
+1 X
+i
+1{biH = gH
+} (38)
+=
+n
+=
+
+X
+T ∈{proc,spat}
+
+0.97
+0.20
+0.58
+0.00
+
+
+
+Proof of Theorem A.8
+
+T ∈{proc,spat}
+
+0.46
+0.75
+0.61
+0.70
+
+where the inequality follows from Eq. (17). This
+proves Eq. (23).
+For task success, the fixed probe allocation gives
+Pπ = Bproc + Bspat . Applying Eq. (22),
+
+Combining
+this
+inequality
+with
+Pr[success(π)] ≤ 1 yields
+
+
+ηπ E[H − Pπ ]
+Pr[success(π)] ≤ min 1,
+,
+K
+(37)
+which establishes Eq. (22).
+B.6
+
+0.74
+0.67
+0.71
+0.14
+
+max
+
+S⊆FT
+|S|≤BT +1
+
+GT (S),
+
+whereas, for fixed ηπ ,
+
+
+ηπ (H − Bproc − Bspat − 1)
+min 1,
+K
+
+
+ηπ (H − Bproc − Bspat )
+≤ min 1,
+.
+K
+
+(41)
+
+(42)
+
+Thus, increasing the probe allocation weakly increases the optimal belief-repair gain while weakly
+decreasing the task-success upper bound, establishing the claimed probe-action trade-off.
+
+i∈FT
+
+nT T
+A .
+n H
+
+C
+
+Useful-Probe Rate Diagnostics
+
+Using Eq. (14), the common no-probe continuation, and the type-specific gain decomposition
+assumed in Theorem A.8, we obtain
+
+We evaluate probe efficiency using the useful-probe
+rate UPR, defined as the fraction of executed
+probes that correct an incorrect belief, and the
+budget-normalized rate RB = #useful/B, which
+B(π)
+accounts for differences in probe frequency. Both
+= E[AH (π)] − E[AH (NoProbe)]
+X
+metrics complement the analysis in Section 5.2.3.
+nT
+=
+E[ATH (π)] − E[ATH (NoProbe)]
+n
+Table 7: Useful-probe rate across environments.
+T ∈{proc,spat}
+X
+ToolDAGWorld results are diagnostic due to uninstantinT
+=
+E[GT (Sρ,T )]
+ated procedural fields.
+n
+T ∈{proc,spat}
+X
+nT
+Environment
+E NV P ROBE-Simple Random-Probe
+≥
+(1 − e−γT (ρ) ) max GT (S),
+Spatial pool
+0.735
+0.550
+S⊆FT
+n
+T ∈{proc,spat}
+
+Combined
+ToolDAGWorld (diagnostic)
+
+|S|≤BT
+
+(39)
+15
+
+0.477
+0.000
+
+0.460
+0.294
+
+Table 7 shows that E NV P ROBE-Simple achieves
+a higher useful-probe rate than Random-Probe on
+spatial tasks (73.5% versus 55.0%). However, raw
+rates depend on probe frequency, and procedural
+results are affected by scorer limitations.
+Table 6 shows that budget normalization reveals substantial variation across environments.
+E NV P ROBE-Simple approaches Oracle-Probe on
+GraphNavWorld, while Self-Uncertainty performs
+best on ObjectStateWorld and Periodic-Probe leads
+on the spatial pool. Procedural results remain diagnostic because of scorer limitations.
+
+16
+
+

@@ -1,0 +1,4144 @@
+Self-Evolving World Models for LLM Agent Planning
+Xuan Zhang1
+
+Wenxuan Zhang2 See-Kiong Ng1 Yang Deng3,∗
+1
+National University of Singapore
+2
+Singapore University of Technology and Design 3 Singapore Management University
+xuanzhang@u.nus.edu
+
+Abstract
+
+World Model
+
+Agent
+
+frozen
+
+frozen
+
+Environment
+
+predicted signal
+
+arXiv:2606.30639v2 [cs.AI] 1 Sep 2026
+
+World models offer a principled way to
+equip long-horizon LLM agents with foresight: predictions of action consequences before execution. However, unreliable foresight can be ignored, misused, or even degrade downstream decision-making. In this
+paper, we introduce W ORLD E VOLVER, a selfevolving world model framework that revises
+its deployment-time context while keeping the
+downstream agent and all model parameters
+frozen. W ORLD E VOLVER integrates three
+modules: (i) Episodic Memory, which exploits
+real action transitions through retrieval-based
+simulation; (ii) Semantic Memory, which extracts persistent heuristic rules from predictionobservation mismatches; and (iii) Selective
+Foresight, which filters low-confidence predictions before integrating them into agent
+reasoning context. We evaluate W ORLD EVOLVER on ALFWorld and ScienceWorld, measuring world model prediction accuracy on
+Word2World and downstream agent success
+rate on AgentBoard. Extensive experiments
+show that W ORLD E VOLVER achieves the highest prediction accuracy across three backbones
+and leads other world model baselines on downstream agent success rate, demonstrating that
+test-time memory revision enhances both predictive fidelity and planning performance.
+
+1
+
+external world
+
+action
+
+observation
+
+(a) Frozen World Model
+offline trajectories
+
+...
+
+parameter update
+training
+
+distribution
+shift
+
+online deployment
+
+(b) Offline-tuned World Model
+World Model
+
+Agent
+
+frozen
+
+frozen
+
+Environment
+action
+
+external world
+
+observation
+
+prediction
+revision
+
+Mismatch
+
+observation
+
+!=
+
+(c) Self-evolving World Model
+
+Figure 1: Contrast of different world models. Frozen (a)
+and offline-tuned (b) world models supply predictions
+to the agent without revising from deployment-time interaction; self-evolving (c) world models accumulate
+realized transitions and evolve through mismatches between predicted and observed outcomes.
+
+under candidate actions, analogous to learned environment models in model-based reinforcement
+learning (Ha and Schmidhuber, 2018; Hafner et al.,
+2025). Recent LLM-agent work follows this intuition through next-state prediction for web navigation (Chae et al., 2025), one-step visual web lookahead (Gu et al., 2025), explicit prediction before
+ReAct-style action (Fu et al., 2025), and task knowledge models for text-game planning (Qiao et al.,
+2024). These works suggest that world-model foresight can serve as a useful complement to memorybased adaptation, particularly for planning and decision making in long-horizon tasks.
+
+Introduction
+
+LLM agents are typically improved through memory: reusing verbal feedback, retrieved experiences,
+skill libraries, or persistent context across interactions (Shinn et al., 2023; Wang et al., 2024a; Packer
+et al., 2023). A complementary paradigm is emerging through world models (Li et al., 2025a; Ding
+et al., 2025; Maes et al., 2026), where agents improve not only by recalling past interaction experience, but also by anticipating future outcomes
+
+However, the reliability of foresight is not static.
+Deployed agents continually face evolving environments and new task instances, creating distri-
+
+* Corresponding author.
+
+1
+
+Action Accuracy
+
+bution shifts analogous to the sim-to-real gap in
+robotics (Tobin et al., 2017). As a result, a frozen
+world model (Figure 1(a)) suffers from such distribution shifts and can mispredict future transitions.
+At the same time, absorbing each mismatch through
+gradient-based parameter updates (Figure 1(b)) is
+a poor fit for online deployment: such updates incur high computation costs at LLM scale and can
+introduce side effects such as over-editing or catastrophic forgetting (Zheng et al., 2023; Yao et al.,
+2023b; Hartvigsen et al., 2023).
+This makes self-evolution (Qiu et al., 2026; Chu
+et al., 2026) a fundamental requirement for deployed world models (Figure 1(c)): they should
+detect mismatches between predicted and observed
+outcomes and adapt accordingly. Meanwhile, the
+agent-environment loop already exposes reusable
+evidence: realized transitions record what actually happened, while prediction-observation mismatches indicate what the world model misunderstood. Retaining these signals as explicit context
+offers an auditable alternative to repeated parameter updates, so later predictions can condition on
+deployment-time evidence to generate more reliable foresight without changing model weights.
+Even once such evidence is retained, foresight
+remains an action-conditioning signal: once rendered to the agent, it can change the next action.
+Prior work shows that current agents can ignore,
+misuse, or even be harmed by world-model simulations (Qian et al., 2026), echoing model-based
+RL evidence that learned rollouts should be trusted
+selectively under model error (Janner et al., 2019).
+Similarly, recent adaptive-lookahead work further
+suggests that useful imagination depends on when
+and how far the agent should simulate, rather than
+on fixed-horizon rollouts (Liu et al., 2026). The
+controlled oracle diagnostic in Figure 2 provides
+supporting evidence under a fixed agent and backbone: noisy foresight hurts action accuracy, while
+oracle foresight improves it.
+These observations motivate W ORLD E VOLVER:
+a standalone self-evolving world model that continuously revises its deployment-time context while
+the downstream agent and all model parameters remain frozen. It addresses three successive deployment-time challenges through a threemodule design: grounding predictions in realized
+transitions when parametric knowledge is insufficient, abstracting individual prediction-observation
+mismatches into reusable knowledge, and filtering unreliable foresight before it can condition the
+
+0.493
+
+0.5
+0.4
+
+0.385
+0.344
+
+0.3
+0.2
+
+0.271
+
+ALFWorld
+No foresight
+
+0.251
+
+0.281
+
+ScienceWorld
+Noisy foresight
+
+Perfect foresight
+
+Figure 2: Preliminary oracle study with Gemma-4-26BA4B on the Word2World evaluation set (Li et al., 2025b).
+The ReAct agent receives no foresight, noisy foresight,
+or perfect foresight, and generated actions are scored
+against teacher actions by exact action accuracy.
+
+agent. This structure supports online adaptation.
+Concretely, our proposed W ORLD E VOLVER
+couples three complementary mechanisms in an
+executed-action-aligned loop. Episodic Memory
+serves as the exploitation component that reuses
+accumulated action-transition experience through
+retrieval-based simulation, while Semantic Memory acts as the exploration component that turns
+prediction-observation mismatches into persistent
+heuristic knowledge. To mitigate the risk of unreliable foresight, Selective Foresight filters lowconfidence predictions before exposing them to the
+frozen agent. If foresight changes the draft action,
+the world model predicts the revised action again
+and, after execution, stores the realized transition
+in ME and updates MS from the corresponding
+prediction-observation mismatch. In summary, our
+contributions are as follows:
+• We introduce W ORLD E VOLVER, a standalone
+self-evolving world model for LLM agents that
+revises the deployment-time world-model context while the agent and all model parameters
+remain frozen during environmental interaction.
+• We instantiate this memory-centric foresight
+framework as an executed-action-aligned loop
+with three mechanisms: Episodic Memory retrieves realized transitions, Semantic Memory
+accumulates mismatch-derived rules, and Selective Foresight filters unreliable predictions before
+they reach the agent.
+• We benchmark the W ORLD E VOLVER framework
+against RAWM-ϕ and ITP-I on Word2World (Li
+et al., 2025b), ALFWorld (Shridhar et al., 2021),
+and ScienceWorld (Wang et al., 2022), evaluating both world-model prediction alignment with
+future observations and downstream planning improvements from the generated foresight.
+2
+
+2
+
+Related Work
+
+synthesizing interaction data (Zhang et al., 2025a;
+Chen et al., 2025), while Co-Evolving Agents and
+CURE use failures or mutual evaluation to improve
+specialized learners (Jung et al., 2025; Wang et al.,
+2025). Several works also couple agents with coevolving task generators or environment simulators
+that adapt to the agent’s frontier (Guo et al., 2025).
+Closer to our setting, a few recent efforts begin to
+evolve a learned world model alongside the agent,
+either by retraining it on environment rollouts via
+self-supervised RL (Yu et al., 2026; Ding et al.,
+2026), dynamically updating an abstracted state
+model during exploration (Kim and Hwang, 2025),
+or alternating updates between neural and symbolic
+components (Zhao et al., 2026). However, most existing methods evolve the agent policy or external
+context, rather than the world model that supports
+future prediction. As a result, they do not directly
+address how predictive models should adapt under
+changing environments or unreliable foresight.
+
+World Models For LLM Agents. World-model
+foresight extends the model-based reinforcement
+learning lineage (Ha and Schmidhuber, 2018;
+Hafner et al., 2025) to language agents. Existing systems instantiate this idea by using an
+LLM as both planner and simulator (Hao et al.,
+2023), training next-state predictors for web navigation (Chae et al., 2025), adding explicit prediction before action (Fu et al., 2025), or learning
+task-level world knowledge for text-game planning (Qiao et al., 2024). Other work improves
+foresight through offline training or joint optimization, such as co-training agents and world models (Fang et al., 2025), retrieval-augmented world
+model learning (Yang et al., 2025), and syntheticenvironment training (Ding et al., 2026). RAWM-ϕ
+retrieves from a fixed transition library with a PPOtrained head (Yang et al., 2025). AutoManual constructs an online manual for the planner (Chen et al.,
+2024), while WALL-E 2.0 builds symbolic transition knowledge for model-predictive control (Zhou
+et al., 2025). Imagine-then-Plan adapts the imagination horizon (Liu et al., 2026). A complementary
+lesson from episodic-control and language-agent
+memory systems is that accumulated interaction
+experience can ground later decisions through retrieved histories (Blundell et al., 2016; Pritzel et al.,
+2017; Deng et al., 2024; Zheng et al., 2024; Zhong
+et al., 2024; Zhou et al., 2024; Liu et al., 2025).
+W ORLD E VOLVER starts with empty memory, accumulates executed transitions and mismatch-derived
+textual rules online without parameter updates,
+confidence-gates one-step predictions, aligns memory updates with the executed action, and leaves
+the downstream policy frozen.
+Self-Evolution. Recent work increasingly studies
+self-evolving agents, where interaction improves
+behavior through verbal feedback, skill libraries,
+distilled experience, or persistent context (Wang
+et al., 2024a; Packer et al., 2023; Zhao et al., 2024).
+A growing line of fully autonomous approaches
+removes human supervision and bootstraps agents
+from zero or minimal data. Challenger-solver
+methods co-evolve a task proposer and a solver,
+with the proposer generating increasingly difficult
+tasks (Huang et al., 2025; Yu et al., 2025; Xia et al.,
+2025; Yue et al., 2026). WebRL instead adapts
+an online curriculum from the web agent’s current
+performance (Qi et al., 2025). Early Experience
+and DreamGym improve agents by collecting or
+
+3
+
+Methodology
+
+3.1
+
+Problem Formulation
+
+We formulate each task as a partially observed interaction process (S, A, O, T ), where S is the environment state space, A is the action space, O is
+the observation space, and T : S × A → S is the
+transition function. At time step t, the agent cannot directly access the hidden environment state.
+Instead, it observes a textual interaction state:
+st = (o1 , a1 , . . . , ot−1 , at−1 , ot ),
+where oi ∈ O and ai ∈ A denote observations and
+actions, respectively. Given the current state st , the
+agent policy generates an action:
+at ∼ πθ (· | st ).
+A world model predicts future K-step observations
+from the current state and a candidate action:
+(ôt+1 , . . . , ôt+K ) ∼ Wθ (· | st , at ).
+We mainly focus on one-step foresight because the
+next predicted observation ôt+1 from the world
+model directly influences the current action decision of the agent, while the realized observation
+ot+1 immediately provides supervision on whether
+the prediction was reliable. The goal is therefore to
+select and improve ôt+1 through deployment-time
+continual evolution, while keeping both the agent
+policy πθ and world model Wθ frozen.
+3
+
+Self-Evolving World Model
+
+Prediction
+
+Semantic Memory
+
+Agent
+
+Selective
+Foresight
+
+Memory
+
+Environment
+
+filter
+
+action
+
+...
+
+...
+
+observation
+frozen
+
+Episodic Memory
+...
+
+Mismatch
+!=
+
+memory update
+
+...
+
+Figure 3: Overview of W ORLD E VOLVER. A frozen world model produces action-conditioned predictions using
+Episodic Memory for exploitation through retrieval-based simulation over previous action transitions and Semantic
+Memory for exploration through persistent heuristic-rule discovery from prediction-observation mismatches. Selective Foresight filters the prediction before it conditions the frozen agent.
+
+3.2
+
+W ORLD E VOLVER
+
+instructions. The episodic memory contains realized transitions MEt = {(oi , ai , oi+1 )}i<t . Given
+a candidate action at and retrieval size kME , it retrieves the kME most similar past transitions:
+
+W ORLD E VOLVER addresses a central challenge
+in world-model-based agents: predicted futures
+can improve decision making, but unreliable foresight may also mislead the agent. As illustrated in
+Figure 3, rather than updating model parameters,
+W ORLD E VOLVER evolves the evidence provided
+to the frozen world model at inference time.
+At step t, the frozen world model Wθ is augmented with a non-parametric memory store:
+
+kM
+
+t
+E
+ME,k
+(at ) = TopK(o ,a
+M
+,o
+E
+
+i
+
+i
+
+t
+i+1 )∈ME
+
+sim(at , ai ).
+
+It then renders each selected item as raw text containing the previous observation, action, and next
+observation in the context. The similarity function
+sim is defined as the Jaccard score over the openvocabulary action token set. Since new memory
+records are appended only after execution, retrieval
+at step t only relies on previously accumulated experience, with the episodic memory updated as
+
+Mt = (MEt , MSt ),
+where MEt denotes Episodic Memory and MSt denotes Semantic Memory. The world model conditions on the current task context, observation,
+candidate action, and retrieved memory to generate
+predictions that are gated by confidence.
+Inspired by the classical distinction between
+episodic and semantic memory (Tulving, 1972),
+Episodic Memory stores concrete interaction experiences, while Semantic Memory stores abstract, reusable knowledge. In W ORLD E VOLVER,
+Episodic Memory supports exploitation by recalling relevant transitions, whereas Semantic
+Memory supports exploration and uses predictionobservation mismatches as its update signal.
+
+MEt+1 = MEt ∪ {(ot , at , ot+1 )}.
+Semantic Memory The semantic memory converts prediction-observation mismatches into persistent textual heuristics without updating model
+parameters. Instead of treating mismatches as failures of the world model weights, we interpret them
+as feedback on the contextual memory. Such mismatches provide correction evidence for improving
+future simulations. t We store these corrections as
+|M |
+MSt = {(ri , ei )}i=1S , where each ri is a heuristic
+rule with evidence score ei ∈ R.
+Before applying the textual revision, we first
+compare predictions and observations in a factorized state space. The key comparison is therefore
+not whether two observations share the same surface wording, but whether they describe the same
+objects, relations, and actions. For example, the
+observation “The fridge 1 is open. In the fridge 1,
+you see an apple 1.” can be factorized into tuples
+
+Episodic Memory Episodic Memory stores concrete interaction experiences. The key intuition is
+that previous transitions can provide useful grounding for predicting what may happen after a similar
+action in the current environment state. Prior work
+on language-agent memory shows that retrieved
+trajectories and replayed experiences can improve
+decision making by grounding new actions in previous interactions rather than relying only on abstract
+4
+
+Algorithm 1 W ORLD E VOLVER Update
+
+such as (‘fridge 1’, ‘is’, ‘open’) and (‘apple 1’, ‘in’,
+‘fridge 1’). Following Hao et al. (2023) and Shen
+et al. (2026), we use a mapping function g to transform raw observation text into factorized tuples,
+producing ẑt+1 = g(ôt+1 ) and zt+1 = g(ot+1 ).
+The revision process therefore follows the pipeline
+
+Input: agent-visible state st , observation ot , policy πθ ,
+world model Wθ , memories MEt , MSt , retrieval size kME ,
+semantic batch size kMS , threshold τ .
+Output: executed action at and updated memories
+MEt+1 , MSt+1 .
+// Draft and predict
+(0)
+1: Sample draft action at ∼ πθ (· | st ).
+(0)
+t
+2: Retrieve ME,kM (at ) from MEt by actionE
+token Jaccard score.
+(0)
+(0)
+t
+3: Query Wθ on (st , at , ME,k
+(at ), MSt ) to
+ME
+obtain (ôt+1 , qt ).
+// Selective foresight
+4: Set Ft ← ôt+1 if qt ≥ τ ; otherwise Ft ← ∅.
+(1)
+5: Sample at ∼ πθ (· | st , Ft ).
+(1)
+6: Set executed action at ← at .
+// Align prediction with executed action
+(0)
+7: If at ̸= at , obtain a new ôt+1 by querying Wθ
+t
+on (st , at , ME,k
+(at ), MSt ).
+ME
+// Execute and update memory
+8: Execute at in the environment and observe ot+1 .
+9: Set MEt+1 ← MEt ∪ {(ot , at , ot+1 )}.
+10: Compute or accumulate ∆MSt of size kMS from
+(ôt+1 , ot+1 ) and update MSt+1 .
+11: Return at , MEt+1 , MSt+1 .
+
+W
+
+θ
+(st , at ) −−→
+ôt+1 ,
+
+g
+
+LLM critic
+
+(ôt+1 , ot+1 ) →
+− (ẑt+1 , zt+1 ) −−−−−−→ ri ,
+where the final stage produces textual feedback on
+the contextual memory rather than updating the
+world model parameters. When ẑt+1 ̸= zt+1 , the
+mismatch is treated as a failure case, and the LLM
+critic transforms it into candidate textual rules ri .
+Each rule is associated with an evidence score ei ,
+initialized to 1, which is updated by ±1/|MS | depending on whether the rule is supported or contradicted by the factorized-tuple comparison on subsequent observations. Only rules with ei > 0 are
+added to the context. The resulting rule-evidence
+pairs are collected as ∆MSt , and the semantic memory is updated incrementally as
+
+token-level log probability:
+1 Xn
+ℓt =
+log pθ (yi | y<i , st , at , Mt ),
+i=1
+n
+
+MSt+1 = MSt ∪ ∆MSt .
+
+and convert it into a normalized confidence score:
+qt = exp(ℓt ) ∈ (0, 1]. This score corresponds to
+the geometric mean token probability of the output.
+The final agent-visible foresight is defined as
+(
+ôt+1 , qt ≥ τ,
+Ft =
+∅,
+qt < τ,
+
+Following batch semantic-gradient updates for
+language-based agent systems (Wang et al., 2024b),
+Semantic Memory can accumulate a mini-batch of
+kMS mismatch cases before revising the rendered
+rule set. In this variant, the LLM critic produces
+∆MSt as the aggregated rule-evidence updates over
+the mini-batch of mismatches. Thus, Semantic
+Memory is the exploration branch: it turns failures
+into inspectable prompt-level knowledge without
+gradient updates to Wθ .
+
+where τ denotes the confidence threshold.
+Selective Foresight therefore acts as an abstention mechanism based on prediction confidence,
+reducing the risk that unreliable simulations negatively influence downstream decision making.
+
+Selective Foresight Although memory can improve prediction quality, unreliable foresight may
+still mislead the downstream agent. As shown in
+Figure 2, noisy predictions can degrade decision
+making more than providing no foresight at all (Janner et al., 2019; Qian et al., 2026). This raises a
+practical question: should the agent always trust the
+predicted future, or should unreliable predictions
+be filtered before they influence action selection?
+Selective Foresight addresses this problem by
+exposing only sufficiently confident predictions to
+the agent policy. Suppose the world model generates a predicted observation sequence tokenized as
+y1:n . When token probabilities are available from
+the backend model, we first compute the average
+
+3.3
+
+Agent Planning with World Models
+
+Algorithm 1 shows one closed-loop planning step.
+(0)
+The agent (1) samples a draft action at from the
+frozen policy, (2) retrieves kME episodic transitions
+for this action, and (3) asks the frozen world model
+(0)
+to predict the consequence of at under the current memory context. Selective Foresight then (4)
+converts the prediction into an agent-visible signal:
+the predicted observation is passed to the policy
+only when its confidence qt exceeds the threshold
+τ ; otherwise, no foresight is provided to the policy.
+The agent policy subsequently (5-6) samples the
+(1)
+executed action at = at conditioned on (st , Ft ).
+5
+
+Agents We apply two agent types with distinct
+planning styles to test whether the world model generalizes across reasoning paradigms: ReAct (Yao
+et al., 2023a) and ReflAct (Kim et al., 2025).
+
+Because the final action may differ from the draft
+action used for the initial prediction, W ORLD EVOLVER aligns the learning signal with the action actually executed in the environment. When
+(0)
+at ̸= at , the world model (7) is queried once
+more with at to obtain ôt+1 . This second query
+ensures that Semantic Memory is updated from
+the mismatch between the prediction for the executed action and the realized observation. After (8)
+executing at , W ORLD E VOLVER (9) appends the realized transition (ot , at , ot+1 ) to Episodic Memory.
+It then compares the executed-action prediction
+ôt+1 with the realized observation ot+1 ; if they
+differ after factorization, the LLM critic (10) produces rule updates ∆MSt . Finally, the algorithm
+(11) returns the action and updated non-parametric
+memories. This preserves action-level consistency.
+
+4
+
+Evaluation Metrics Prediction metrics measure
+whether the world model matches the next observation; planning metrics measure whether the exposed signal helps the agent complete tasks.
+• World model prediction: (1) Exact Match
+uses normalized string matching between predicted and reference observations. (2) Token
+F1 measures lexical overlap after tokenization,
+micro-averaged across all examples. (3) Cosine
+Similarity measures semantic similarity using
+Qwen3-Embedding-8B (Zhang et al., 2025b) embeddings in the same retrieval space.
+
+Experiment
+
+• Agent planning: We report Success Rate, defined as whether the agent completes the task
+within the allowed interaction budget, and aggregate results using best-of-L across trials.
+
+We evaluate W ORLD E VOLVER along two complementary axes. First, World Model Prediction
+(Section 4.2) measures how accurately the model
+predicts future observations relative to real environment transitions. Second, Agent Planning (Section 4.3) evaluates whether these world models
+improve closed-loop task performance for agents.
+Finally, Section 4.4 discusses the effects of memory hyperparameters and online continual learning,
+with additional analyses provided in Appendix C.
+4.1
+
+Implementation Details World model prediction uses Qwen3.5-9B (Qwen Team, 2026),
+Gemma-4-26B-A4B, and Gemma-4-31B (Google
+DeepMind, 2026). Agent planning evaluation uses
+Gemma-4-26B-A4B and GPT-5.4-mini (OpenAI,
+2026), with the agent and world model sharing
+the same model. Additional implementation details
+and prompts are shown in Appendix B and E.
+
+Setups
+
+4.2
+
+This subsection summarizes the experimental setup,
+and additional details are provided in Appendix A.
+
+Experiments on World Model Prediction
+
+Table 1 evaluates next-observation prediction: (1)
+Among the baselines, RAWM-ϕ is strongest across
+Gemma-4-26B, Qwen3.5-9B, and Gemma-4-31B,
+showing that retrieval from collected trajectories provides useful transition evidence for nextobservation prediction. By contrast, ITP-I consistently underperforms Zero-Shot, due to overgeneration of imagined future details. (2) The
+memory ablations of W ORLD E VOLVER show
+complementary roles: Semantic Memory alone
+gives modest gains over Zero-Shot, whereas the
+Episodic Memory variant provides substantially
+larger improvements and outperforms RAWM-ϕ,
+even though RAWM-ϕ retrieves from the full deployment trajectory set in advance while Episodic
+Memory accumulates strictly online. This gap suggests that retrieval quality depends on the retrieval
+key. RAWM-ϕ retrieves from full state-action text,
+where long and repetitive state descriptions can
+
+Datasets We conduct evaluations on both world
+model prediction and agent planning. To evaluate the alignment between prediction and ground
+truth, we adopt the Word2World Benchmark (Li
+et al., 2025b), which provides transition datasets
+for ALFWorld (Shridhar et al., 2021) and ScienceWorld (Wang et al., 2022). The test split contains
+195 trajectories for each environment. In agent
+planning, we use AgentBoard (Ma et al., 2024),
+with 134 ALFWorld tasks and 90 ScienceWorld
+tasks. Each configuration runs L=5 trials per task,
+with a maximum of 30 steps per trial.
+Baselines We define each comparison by the foresight provided by the world model while keeping
+both the agent and backbone model fixed. We consider the following baselines: Zero-Shot, RAWMϕ (Yang et al., 2025), and ITP-I (Liu et al., 2026).
+6
+
+ALFWorld
+
+Setting
+Exact Match
+
+Token F1
+
+3.60
+20.06
+1.46
+7.53
+47.16
+52.88
+
+35.48
+48.13
+32.48
+38.08
+72.61
+76.75
+
+ScienceWorld
+Cosine Similarity
+
+Exact Match
+
+Token F1
+
+Cosine Similarity
+
+0.41
+14.93
+0.39
+2.71
+34.65
+51.55
+
+16.42
+27.31
+11.50
+19.29
+46.93
+62.43
+
+52.45
+56.50
+47.69
+55.04
+66.51
+73.85
+
+0.59
+2.76
+0.00
+0.90
+28.92
+29.82
+
+12.72
+16.53
+6.68
+13.98
+44.84
+44.88
+
+49.27
+49.76
+41.94
+50.40
+65.08
+65.15
+
+7.58
+32.84
+0.56
+13.34
+56.74
+62.03
+
+25.28
+42.38
+11.91
+30.90
+66.50
+71.60
+
+58.55
+64.84
+49.63
+61.32
+76.00
+78.42
+
+Gemma-4-26B-A4B
+Zero-Shot
+RAWM-ϕ (Yang et al., 2025)
+ITP-I (Liu et al., 2026)
+W ORLD E VOLVER (w/o ME )
+W ORLD E VOLVER (w/o MS )
+W ORLD E VOLVER
+
+67.91
+71.30
+66.10
+69.06
+78.88
+80.13
+Qwen3.5-9B
+
+Zero-Shot
+RAWM-ϕ (Yang et al., 2025)
+ITP-I (Liu et al., 2026)
+W ORLD E VOLVER (w/o ME )
+W ORLD E VOLVER (w/o MS )
+W ORLD E VOLVER
+
+1.58
+14.41
+0.00
+2.04
+34.86
+37.04
+
+34.06
+38.63
+11.22
+33.80
+61.56
+62.38
+
+66.39
+66.31
+52.88
+65.81
+74.34
+74.64
+Gemma-4-31B
+
+Zero-Shot
+RAWM-ϕ (Yang et al., 2025)
+ITP-I (Liu et al., 2026)
+W ORLD E VOLVER (w/o ME )
+W ORLD E VOLVER (w/o MS )
+W ORLD E VOLVER
+
+2.71
+34.33
+1.36
+6.73
+56.27
+56.41
+
+38.42
+57.49
+33.61
+41.30
+80.02
+80.87
+
+69.90
+72.66
+67.64
+71.72
+81.21
+81.39
+
+Table 1: World model prediction accuracy on Word2World; higher is better for all metrics. w/o ME removes
+episodic memory, while w/o MS removes semantic memory. All memories Mt are initialized empty and updated
+online during interaction. Unless otherwise specified, W ORLD E VOLVER here uses kME =5 and kMS =1.
+Agent
+
+ALFWorld
+
+Setting
+
+ScienceWorld
+
+Gemma-4-26B-A4B
+
+GPT-5.4-mini
+
+Gemma-4-26B-A4B
+
+GPT-5.4-mini
+
+ReAct
+
+w/o World Model
+RAWM-ϕ (Yang et al., 2025)
+ITP-I (Liu et al., 2026)
+W ORLD E VOLVER w/o Ft
+W ORLD E VOLVER w/ Ft
+
+23.88
+22.39
+25.37
+24.63
+26.12
+
+49.25
+41.79
+38.81
+43.28
+50.75
+
+44.44
+43.33
+34.44
+46.67
+52.22
+
+65.56
+57.78
+60.00
+62.22
+63.33
+
+ReflAct
+
+w/o World Model
+RAWM-ϕ (Yang et al., 2025)
+ITP-I (Liu et al., 2026)
+W ORLD E VOLVER w/o Ft
+W ORLD E VOLVER w/ Ft
+
+26.12
+20.15
+23.13
+24.63
+27.61
+
+50.00
+42.54
+30.60
+44.78
+47.01
+
+42.22
+41.11
+37.78
+48.89
+50.00
+
+60.00
+58.89
+58.89
+62.22
+63.33
+
+Table 2: Agent planning success rate; higher is better. w/ and w/o Ft denote with and without selective foresight.
+Underlines denote the best overall setting, and bold denotes the best setting among world-model-based methods.
+
+dilute the action signal, whereas episodic memory retrieval more directly matches the target transition being simulated. Representative cases in
+Appendix D show that action-centered retrieval
+can still miss fine-grained executability constraints.
+The three metrics yield consistent rankings across
+backbones and environments, capturing correlated
+aspects of prediction quality in this evaluation.
+Overall, accurate world model prediction benefits most from combining episodic retrieval with semantic rules. The full W ORLD E VOLVER achieves
+the highest prediction accuracy across both environments and all three backbones. Gains over episodic
+memory alone are particularly pronounced on ScienceWorld for the Gemma models, while Qwen3.5-
+
+9B shows smaller but consistent improvements
+from integrating semantic memory.
+4.3
+
+Experiments on Agent Planning
+
+Table 2 evaluates agent planning by Success Rate:
+(1) Compared with world-model prediction results
+in Section 4.2, improving planning success is substantially more challenging. RAWM-ϕ and ITP-I
+often underperform the no-world-model baseline,
+further confirming that misaligned foresight can
+degrade action selection. (2) W ORLD E VOLVER is
+the strongest world-model method across all eight
+settings; selective foresight further improves or ties
+the no-foresight variant in every setting. Relative
+to RAWM-ϕ, W ORLD E VOLVER w/o Ft improves
+7
+
+ALFWorld - ReAct
+
+GPT-5.4-mini
+SR (%)
+
+80
+
+ALFWorld - ReflAct
+
+ScienceWorld - ReAct
+
+ScienceWorld - ReflAct
+
+60
+40
+20
+
+Gemma-4-26B-A4B
+SR (%)
+
+0
+60
+40
+20
+0
+
+1
+
+2
+
+3
+
+4
+
+5
+
+1
+
+2
+
+3
+
+4
+
+5
+
+1
+
+2
+
+3
+
+4
+
+5
+
+1
+
+2
+
+3
+
+4
+
+5
+
+Trial index
+
+w/o WM
+
+RAWM-phi
+
+WorldEvolver w/o Ft
+
+ITP-I
+
+WorldEvolver w/ Ft
+
+Gemma-4-31B Qwen3.5-9B Gemma-4-26B
+Δ EM (%)
+Δ EM (%)
+Δ EM (%)
+
+Figure 4: Cumulative best-of-L Agent Planning Success Rate on ALFWorld and ScienceWorld.
+0
+
+0
+-5
+
+-1
+
+-15
+
+-2
+
+-25
+
+0
+
+0
+-5
+
+-1
+
+-15
+
+-2
+
+-25
+
+0
+
+0
+-5
+
+-1
+
+-15
+
+-2
+
+-25
+1
+
+2
+
+3
+
+kMS
+
+4
+
+ALFWorld
+
+5
+
+mixed: W ORLD E VOLVER w/ Ft tops the no-worldmodel baseline in only two of four cells, winning
+by +1.50 on ReAct/ALFWorld and +3.33 on ReflAct/ScienceWorld but losing by −2.99 on ReflAct/ALFWorld and −2.23 on ReAct/ScienceWorld.
+Confidence-gated abstention is therefore more beneficial for the weaker backbone, where the agent
+leaves more room for useful world model guidance.
+4.4
+1
+
+2
+
+3
+
+kME
+
+4
+
+Discussion
+
+Memory Hyperparameters Figure 5 evaluates
+memory hyperparameters on the same setting as Table 1. Episodic retrieval is the dominant factor: increasing kME from 1 to 5 improves Exact Match by
+16.8/23.5 points on ALFWorld and ScienceWorld
+for Gemma-4-26B-A4B, 7.6/19.2 for Qwen3.5-9B,
+and 9.0/19.3 for Gemma-4-31B. Semantic batch
+size is much less sensitive: most kMS choices differ by within two points, except Gemma-4-31B
+on ALFWorld. We therefore use kME = 5 and
+kMS = 1 in Section 4.2, combining the strongest
+episodic retrieval with a semantic update size that
+is competitive across backbones and environments.
+
+5
+
+ScienceWorld
+
+Figure 5: Relative gains from memory hyperparameters
+for world model prediction, reported as ∆EM. kMS
+varies semantic-memory batch size relative to 1, while
+kME varies episodic-memory retrieval size relative to 5.
+
+average Success Rate by 3.67 points, showing
+the advantage of continual episodic retrieval and
+mismatch-derived heuristic rule generation over
+static offline retrieval. (3) Improvements over the
+no-world-model baseline span both agent types and
+both model backbones. W ORLD E VOLVER w/o Ft
+exceeds the no-world-model baseline in four settings: Gemma-4-26B-A4B with ReAct on ALFWorld (23.88 to 24.63), Gemma-4-26B-A4B on
+ScienceWorld for both ReAct and ReflAct (44.44
+to 46.67; 42.22 to 48.89), and GPT-5.4-mini with
+ReflAct on ScienceWorld (60.00 to 62.22).
+
+Online Continual Learning Figure 4 analyzes
+cumulative best-of-L success rate from trial L=1 to
+L=5. The slope of each curve reflects the benefit of
+additional successful attempts beyond the first trial.
+This analysis is particularly relevant for W ORLD EVOLVER, since episodic memory ME and semantic
+memory MS accumulate across trials and tasks
+within the same environment, allowing later agent
+replanning to exploit refined world-model foresight. The clearest separation appears on ScienceWorld with Gemma-4-26B-A4B, where W ORLD EVOLVER variants increasingly outperform RAWMϕ and ITP-I as the trial index grows, demonstrating that deployment-time memory is most effective when agents can iteratively replan. Gains are
+
+W ORLD E VOLVER w/ Ft beats the no-worldmodel baseline across all four Gemma-4-26B-A4B
+cells, averaging +2.24 Success Rate points on
+ALFWorld and +3.33 on ScienceWorld over the
+no-foresight variant; even ReflAct on ALFWorld
+lifts W ORLD E VOLVER from 24.63 to 27.61, above
+the 26.12 baseline. GPT-5.4-mini gains are more
+8
+
+Environment
+
+Memory setup
+
+ALFWorld
+ScienceWorld
+
+No-WM
+
+Exact Match
+
+Token F1
+
+Cosine
+
+Full
+Reset
+
+0.5288
+0.4387
+
+0.7675
+0.6675
+
+0.8013
+0.7723
+
+ALFWorld / ReAct
+
+Full
+Reset
+
+0.5155
+0.2070
+
+0.6243
+0.3456
+
+0.7385
+0.6178
+
+ALFWorld / ReflAct
+
+Table 3: World Model Prediction with persistent memory and memory reset before each trajectory.
+
+ScienceWorld / ReAct
+
+WorldEvolver w/ Ft
+
+ScienceWorld / ReflAct
+
+Environment
+
+Agent
+
+Best-of-5 SR
+
+Success@1
+
+∆ SR (pp)
+
+ALFWorld
+
+ReAct
+ReflAct
+
+24.1%
+23.9%
+
+18.9%
+19.7%
+
+-0.5
+-0.7
+
+ScienceWorld
+
+ReAct
+ReflAct
+
+45.6%
+47.8%
+
+23.3%
+30.0%
+
+-1.1
+-1.1
+
+40%
+
+50%
+
+60%
+
+70%
+
+Best-of-5 Success Rate
+
+Figure 6: GPT-5.4-mini Agent Planning best-of-5 Success Rate with task-level 95% bootstrap confidence intervals across all four environment-agent settings.
+
+Table 4: Agent Planning with memory reset before
+each task, averaged over three runs. ∆ SR is measured
+against full-memory W ORLD E VOLVER w/o Ft .
+
+Model Prediction directly scores static, one-step
+next-observation predictions, whereas Agent Planning evaluates their effect on closed-loop behavior. A prediction error matters only if it changes
+the agent’s action and may then alter subsequent
+states. Improvements in one-step prediction accuracy therefore do not directly translate into higher
+terminal task success in closed-loop planning.
+
+smaller for GPT-5.4-mini because its stronger planning ability leaves less room for substantial improvement from world model foresight.
+Memory Reset Controls To isolate cross-task
+accumulation from within-trajectory and withintask learning, we add reset controls for both ME
+and MS . For World Model Prediction, both memories are cleared at the start of each trajectory. For
+Agent Planning, both memories are cleared before
+each task and retained across all five trials for that
+task. All control experiments use Gemma-4-26BA4B; in Agent Planning, the agent and world model
+share this backbone. Tables 3 and 4 report the corresponding results. The planning results are means
+over three complete runs, and the deltas use the
+reported full-memory W ORLD E VOLVER w/o Ft
+results as the baseline for a direct comparison.
+Resetting memory substantially reduces nextobservation prediction accuracy but changes bestof-5 planning success by only 0.5 to 1.1 points for
+two reasons. First, the evaluations measure different outcomes: World Model Prediction directly
+scores every one-step forecast, whereas Agent Planning scores final task completion. A wrong forecast
+therefore affects planning success only if it leads
+to a harmful action that the agent cannot correct
+after observing the actual outcome. Second, Agent
+Planning retains memory across the five trials of
+each task, so later trials can use evidence collected
+in earlier trials. Lower one-step accuracy therefore
+does not imply an equally large drop in best-of-5
+success under this controlled reset protocol.
+
+Compared with the smaller open-source Gemma4-26B-A4B, GPT-5.4-mini has stronger general
+reasoning capabilities. Its parametric world knowledge and interaction history already support many
+action-effect inferences without an external world
+model, yielding a stronger no-world-model baseline and less headroom for additional foresight. Figure 6 makes these mixed results explicit: the confidence intervals overlap with their no-world-model
+counterparts in all four settings.
+
+5
+
+Conclusion
+
+We presented W ORLD E VOLVER, a training-free
+framework for self-evolving world models in LLM
+agent planning. Rather than updating model parameters, W ORLD E VOLVER revises world model context at test time through episodic memory, semantic memory, and selective foresight. Experiments
+on ALFWorld and ScienceWorld show that these
+mechanisms improve both world model fidelity
+and downstream planning performance. W ORLD EVOLVER achieves the strongest prediction accuracy
+on Word2World across three backbones and improves downstream agent success rates, suggesting
+that reliable foresight depends on how environmental signals are processed and presented to the agent,
+motivating future work on agentic world modeling.
+
+From Prediction to Planning Tables 1 and 2
+evaluate distinct stages of the pipeline. World
+9
+
+Limitations
+
+References
+
+Evaluation Scope To simplify evaluation and
+isolate the effects of deployment-time world-model
+revision from downstream agent behavior, we conduct experiments in two controlled long-horizon
+text environments, ALFWorld and ScienceWorld.
+This setting allows us to focus specifically on
+world-model foresight and online adaptation, but
+does not cover broader domains such as web navigation, code generation, robotics, or multimodal
+interaction. Extending W ORLD E VOLVER to these
+settings is a natural direction for future work.
+
+Charles Blundell, Benigno Uria, Alexander Pritzel,
+Yazhe Li, Avraham Ruderman, Joel Z. Leibo,
+Jack Rae, Daan Wierstra, and Demis Hassabis.
+2016. Model-free episodic control. arXiv preprint
+arXiv:1606.04460.
+Hyungjoo Chae, Namyoung Kim, Kai Tzu-iunn Ong,
+Minju Gwak, Gwanwoo Song, Jihoon Kim, Sunghwan Kim, Dongha Lee, and Jinyoung Yeo. 2025.
+Web agents with world models: Learning and leveraging environment dynamics in web navigation. In
+The Thirteenth International Conference on Learning
+Representations (ICLR).
+Minghao Chen, Yihang Li, Yanting Yang, Shiyu Yu,
+Binbin Lin, and Xiaofei He. 2024. AutoManual:
+Constructing instruction manuals by LLM agents via
+interactive environmental learning. In Advances in
+Neural Information Processing Systems (NeurIPS).
+
+Confidence Estimation Our foresight filtering
+mechanism relies on prediction confidence signals
+derived from token-level probabilities, which may
+not be available in some closed-model APIs. In
+such settings, alternative confidence estimators,
+such as self-consistency or learned calibration models, would be required. In addition, the current
+dynamic filtering strategy assumes that prediction
+confidence correlates with prediction accuracy, as
+supported by Figure 13, but this relationship can
+vary across environments and backbone models.
+We leave more robust confidence estimation and
+adaptive filtering mechanisms to future work.
+
+Zhaorun Chen, Zhuokai Zhao, Kai Zhang, Bo Liu,
+Qi Qi, Yifan Wu, Tarun Kalluri, Sara Cao, Yuanhao Xiong, Haibo Tong, Huaxiu Yao, Hengduo Li,
+Jiacheng Zhu, Xian Li, Dawn Song, Bo Li, Jason Weston, and Dat Huynh. 2025. Scaling agent
+learning via experience synthesis. arXiv preprint
+arXiv:2511.03773.
+Meng Chu, Xuan Billy Zhang, Kevin Qinghong Lin,
+Lingdong Kong, Jize Zhang, Teng Tu, Weijian Ma,
+Ziqi Huang, Senqiao Yang, Wei Huang, Yeying Jin,
+Zhefan Rao, Jinhui Ye, Xinyu Lin, Xichen Zhang,
+Qisheng Hu, Shuai Yang, Leyang Shen, Wei Chow,
+and 23 others. 2026. Agentic world modeling:
+Foundations, capabilities, laws, and beyond. arXiv
+preprint arXiv:2604.22748.
+
+Ethical Considerations
+Our code implementation is available at https:
+//github.com/magicgh/WorldEvolver. ALFWorld (Shridhar et al., 2021), ScienceWorld (Wang
+et al., 2022), and the Word2World benchmark (Li
+et al., 2025b) are publicly available for research
+use. AI assistance was used as auxiliary support
+for coding and paper writing; all research decisions
+and claims are the authors’ own.
+
+Yang Deng, Xuan Zhang, Wenxuan Zhang, Yifei Yuan,
+See Kiong Ng, and Tat-Seng Chua. 2024. On the
+Multi-turn instruction following for conversational
+web agents. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics
+(Volume 1: Long Papers), pages 8795–8812.
+Hang Ding, Peidong Liu, Junqiao Wang, Ziwei Ji, Meng
+Cao, Rongzhao Zhang, Lynn Ai, Eric Yang, Tianyu
+Shi, and Lei Yu. 2026. DynaWeb: Model-based
+reinforcement learning of web agents. arXiv preprint
+arXiv:2601.22149.
+
+Acknowledgments
+This research/project is supported by the National
+Research Foundation, Singapore under its National
+Large Language Models Funding Initiative (AISG
+Award No: AISG-NMLP-2024-002), and the Singapore Ministry of Education (MOE) Academic
+Research Fund (AcRF) Tier 1 grant (Proposal ID:
+24-SIS-SMU-002). Any opinions, findings and
+conclusions or recommendations expressed in this
+material are those of the author(s) and do not reflect the views of National Research Foundation,
+Singapore.
+
+Jingtao Ding, Yunke Zhang, Yu Shang, Yuheng Zhang,
+Zefang Zong, Jie Feng, Yuan Yuan, Hongyuan Su,
+Nian Li, Nicholas Sukiennik, Fengli Xu, and Yong
+Li. 2025. Understanding world or predicting future?
+a comprehensive survey of world models. ACM Computing Surveys, 58(3):1–38.
+Tianqing Fang, Hongming Zhang, Zhisong Zhang,
+Kaixin Ma, Wenhao Yu, Haitao Mi, and Dong Yu.
+2025. WebEvolver: Enhancing web agent selfimprovement with coevolving world model. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing (EMNLP).
+
+10
+
+Dayuan Fu, Jianzhao Huang, Siyuan Lu, Guanting
+Dong, Yejie Wang, Keqing He, and Weiran Xu. 2025.
+PreAct: Prediction enhances agent’s planning ability.
+In Proceedings of the 31st International Conference
+on Computational Linguistics (COLING).
+
+Minsoo Kim and Seung-won Hwang. 2025. CoEx –
+co-evolving world-model and exploration. In Findings of the Association for Computational Linguistics:
+EMNLP 2025.
+Xinqing Li, Xin He, Le Zhang, Min Wu, Xiaoli Li,
+and Yun Liu. 2025a. A comprehensive survey
+on world models for embodied ai. arXiv preprint
+arXiv:2510.16732.
+
+Google DeepMind. 2026. Gemma 4.
+Yu Gu, Kai Zhang, Yuting Ning, Boyuan Zheng, Boyu
+Gou, Tianci Xue, Cheng Chang, Sanjari Srivastava,
+Yanan Xie, Peng Qi, Huan Sun, and Yu Su. 2025. Is
+your LLM secretly a world model of the internet?
+model-based planning for web agents. arXiv preprint
+arXiv:2411.06559.
+
+Yixia Li, Hongru Wang, Jiahao Qiu, Zhenfei Yin, Dongdong Zhang, Cheng Qian, Zeping Li, Pony Ma, Guanhua Chen, Heng Ji, and Mengdi Wang. 2025b. From
+word to world: Can large language models be implicit text-based world models? arXiv preprint
+arXiv:2512.18832.
+
+Jiacheng Guo, Ling Yang, Peter Chen, Qixin Xiao, Yinjie Wang, Xinzhe Juan, Jiahao Qiu, Ke Shen, and
+Mengdi Wang. 2025. GenEnv: Difficulty-aligned
+co-evolution between LLM agents and environment
+simulators. arXiv preprint arXiv:2512.19682.
+David Ha and Jürgen Schmidhuber. 2018. World models. arXiv preprint arXiv:1803.10122.
+
+Yitao Liu, Chenglei Si, Karthik R Narasimhan, and
+Shunyu Yao. 2025. Contextual experience replay for
+self-improvement of language agents. In Proceedings of the 63rd Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long Papers), pages 14179–14198.
+
+Danijar Hafner, Jurgis Pasukonis, Jimmy Ba, and Timothy Lillicrap. 2025. Mastering diverse control
+tasks through world models. Nature, 640:647–653.
+Preprint at arXiv:2301.04104.
+
+Youwei Liu, Jian Wang, Hanlin Wang, Beichen Guo,
+and Wenjie Li. 2026. Imagine-then-plan: Agent
+learning from adaptive lookahead with world models.
+arXiv preprint arXiv:2601.08955.
+
+Shibo Hao, Yi Gu, Haodi Ma, Joshua Jiahua Hong, Zhen
+Wang, Daisy Zhe Wang, and Zhiting Hu. 2023. Reasoning with language model is planning with world
+model. In Proceedings of the 2023 Conference on
+Empirical Methods in Natural Language Processing
+(EMNLP), pages 8154–8173.
+
+Chang Ma, Junlei Zhang, Zhihao Zhu, Cheng Yang,
+Yujiu Yang, Yaohui Jin, Zhenzhong Lan, Lingpeng
+Kong, and Junxian He. 2024. AgentBoard: An analytical evaluation board of multi-turn LLM agents.
+In Advances in Neural Information Processing Systems (NeurIPS), Datasets and Benchmarks Track,
+volume 37.
+
+Thomas Hartvigsen, Swami Sankaranarayanan, Hamid
+Palangi, Yoon Kim, and Marzyeh Ghassemi. 2023.
+Aging with GRACE: Lifelong model editing with
+discrete key-value adaptors. In Advances in Neural
+Information Processing Systems (NeurIPS).
+
+Lucas Maes, Quentin Le Lidec, Damien Scieur, Yann
+LeCun, and Randall Balestriero. 2026. LeWorldModel: Stable end-to-end joint-embedding predictive architecture from pixels. arXiv preprint
+arXiv:2603.19312.
+
+Chengsong Huang, Wenhao Yu, Xiaoyang Wang, Hongming Zhang, Zongxia Li, Ruosen Li, Jiaxin Huang,
+Haitao Mi, and Dong Yu. 2025. R-Zero: Selfevolving reasoning LLM from zero data. arXiv
+preprint arXiv:2508.05004.
+
+OpenAI. 2026. Introducing GPT-5.4 mini and nano.
+Charles Packer, Sarah Wooders, Kevin Lin, Vivian Fang,
+Shishir G. Patil, Ion Stoica, and Joseph E. Gonzalez.
+2023. MemGPT: Towards LLMs as operating systems. arXiv preprint arXiv:2310.08560.
+
+Michael Janner, Justin Fu, Marvin Zhang, and Sergey
+Levine. 2019. When to trust your model: Modelbased policy optimization. In Advances in Neural
+Information Processing Systems (NeurIPS).
+
+Alexander Pritzel, Benigno Uria, Sriram Srinivasan,
+Adrià Puigdomènech Badia, Oriol Vinyals, Demis
+Hassabis, Daan Wierstra, and Charles Blundell. 2017.
+Neural episodic control. In Proceedings of the
+34th International Conference on Machine Learning
+(ICML).
+
+Yeonsung Jung, Trilok Padhi, Sina Shaham, Dipika
+Khullar, Joonhyun Jeong, Ninareh Mehrabi, and
+Eunho Yang. 2025. Co-evolving agents: Learning from failures as hard negatives. arXiv preprint
+arXiv:2511.22254.
+
+Zehan Qi, Xiao Liu, Iat Long Iong, Hanyu Lai, Xueqiao Sun, Wenyi Zhao, Yu Yang, Xinyue Yang, Jiadai
+Sun, Shuntian Yao, Tianjie Zhang, Wei Xu, Jie Tang,
+and Yuxiao Dong. 2025. WebRL: Training LLM
+web agents via self-evolving online curriculum reinforcement learning. In The Thirteenth International
+Conference on Learning Representations (ICLR).
+
+Jeonghye Kim, Sojeong Rhee, Minbeom Kim, Dohyung
+Kim, Sangmook Lee, Youngchul Sung, and Kyomin
+Jung. 2025. ReflAct: World-grounded decision making in LLM agents via goal-state reflection. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing (EMNLP).
+
+11
+
+Cheng Qian, Emre Can Acikgoz, Bingxuan Li, Xiusi
+Chen, Yuji Zhang, Bingxiang He, Qinyu Luo, Dilek
+Hakkani-Tür, Gokhan Tur, Yunzhu Li, and Heng Ji.
+2026. Current agents fail to leverage world model as
+tool for foresight. arXiv preprint arXiv:2601.03905.
+
+in Natural Language Processing (EMNLP), pages
+11279–11298.
+Wenyi Wang, Hisham A Alyahya, Dylan R Ashley, Oleg
+Serikov, Dmitrii Khizbullin, Francesco Faccio, and
+Jürgen Schmidhuber. 2024b. How to correctly do
+semantic backpropagation on language-based agentic
+systems. arXiv preprint arXiv:2412.03624.
+
+Shuofei Qiao, Runnan Fang, Ningyu Zhang, Yuqi Zhu,
+Xiang Chen, Shumin Deng, Yong Jiang, Pengjun Xie,
+Fei Huang, and Huajun Chen. 2024. Agent planning
+with world knowledge model. In Advances in Neural
+Information Processing Systems (NeurIPS).
+
+Yinjie Wang, Ling Yang, Ye Tian, Ke Shen, and Mengdi
+Wang. 2025. Co-evolving LLM coder and unit tester
+via reinforcement learning. In Advances in Neural Information Processing Systems (NeurIPS). Spotlight.
+
+Yifu Qiu, Zheng Zhao, Waylon Li, Yftah Ziser, Anna
+Korhonen, Shay B Cohen, and Edoardo M Ponti.
+2026. Self-improving world modelling with latent
+actions. arXiv preprint arXiv:2602.06130.
+
+Peng Xia, Kaide Zeng, Jiaqi Liu, Can Qin, Fang Wu,
+Yiyang Zhou, Caiming Xiong, and Huaxiu Yao. 2025.
+Agent0: Unleashing self-evolving agents from zero
+data via tool-integrated reasoning. arXiv preprint
+arXiv:2511.16043.
+
+Qwen Team. 2026. Qwen3.5: Towards native multimodal agents.
+
+Chang Yang, Xinrun Wang, Qinggang Zhang, Qi Jiang,
+and Xiao Huang. 2025. Efficient integration of external knowledge to LLM-based world models via
+retrieval-augmented generation and reinforcement
+learning. In Findings of the Association for Computational Linguistics: EMNLP 2025, pages 9484–9501.
+
+Alec Radford, Jeffrey Wu, Rewon Child, David Luan,
+Dario Amodei, and Ilya Sutskever. 2019. Language
+models are unsupervised multitask learners. OpenAI
+Blog.
+Yijun Shen, Delong Chen, Xianming Hu, Jiaming
+Mi, Hongbo Zhao, Kai Zhang, and Pascale Fung.
+2026. Reward prediction with factorized world states.
+arXiv preprint arXiv:2603.09400.
+
+Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak
+Shafran, Karthik Narasimhan, and Yuan Cao. 2023a.
+ReAct: Synergizing reasoning and acting in language
+models. In The Eleventh International Conference
+on Learning Representations (ICLR).
+
+Noah Shinn, Federico Cassano, Edward Berman, Ashwin Gopinath, Karthik Narasimhan, and Shunyu Yao.
+2023. Reflexion: Language agents with verbal reinforcement learning. In Advances in Neural Information Processing Systems (NeurIPS).
+
+Yunzhi Yao, Peng Wang, Bozhong Tian, Siyuan Cheng,
+Zhoubo Li, Shumin Deng, Huajun Chen, and Ningyu
+Zhang. 2023b. Editing large language models: Problems, methods, and opportunities. In Proceedings
+of the 2023 Conference on Empirical Methods in
+Natural Language Processing, pages 10222–10240,
+Singapore. Association for Computational Linguistics.
+
+Mohit Shridhar, Xingdi Yuan, Marc-Alexandre Côté,
+Yonatan Bisk, Adam Trischler, and Matthew
+Hausknecht. 2021. ALFWorld: Aligning text and
+embodied environments for interactive learning. In
+The Ninth International Conference on Learning Representations (ICLR).
+
+Wenhao Yu, Zhenwen Liang, Chengsong Huang,
+Kishan Panaganti, Tianqing Fang, Haitao Mi,
+and Dong Yu. 2025. Guided self-evolving llms
+with minimal human supervision. arXiv preprint
+arXiv:2512.02472.
+
+Josh Tobin, Rachel Fong, Alex Ray, Jonas Schneider,
+Wojciech Zaremba, and Pieter Abbeel. 2017. Domain randomization for transferring deep neural networks from simulation to the real world. In 2017
+IEEE/RSJ International Conference on Intelligent
+Robots and Systems (IROS), pages 23–30. IEEE.
+
+Xiao Yu, Baolin Peng, Ruize Xu, Yelong Shen,
+Pengcheng He, Suman Nath, Nikhil Singh, Jiangfeng
+Gao, and Zhou Yu. 2026. Reinforcement world
+model learning for LLM-based agents. arXiv
+preprint arXiv:2602.05842.
+
+Endel Tulving. 1972. Episodic and semantic memory.
+In Endel Tulving and Wayne Donaldson, editors, Organization of Memory, pages 381–403. Academic
+Press, New York.
+
+Zhenrui Yue, Kartikeya Upasani, Xianjun Yang, Suyu
+Ge, Shaoliang Nie, Yuning Mao, Zhe Liu, and
+Dong Wang. 2026.
+Dr. zero: Self-evolving
+search agents without training data. arXiv preprint
+arXiv:2601.07055.
+
+Guanzhi Wang, Yuqi Xie, Yunfan Jiang, Ajay Mandlekar, Chaowei Xiao, Yuke Zhu, Linxi Fan, and
+Anima Anandkumar. 2024a. Voyager: An openended embodied agent with large language models.
+Transactions on Machine Learning Research (TMLR).
+Published in TMLR, March 2024.
+
+Kai Zhang, Xiangchao Chen, Bo Liu, Tianci Xue,
+Zeyi Liao, Zhihan Liu, Xiyao Wang, Yuting Ning,
+Zhaorun Chen, Xiaohan Fu, Jian Xie, Yuxuan Sun,
+Boyu Gou, Qi Qi, Zihang Meng, Jianwei Yang, Ning
+Zhang, Xian Li, Ashish Shah, and 11 others. 2025a.
+Agent learning via early experience. arXiv preprint
+arXiv:2510.08558.
+
+Ruoyao Wang, Peter Jansen, Marc-Alexandre Côté, and
+Prithviraj Ammanabrolu. 2022. ScienceWorld: Is
+your agent smarter than a 5th grader? In Proceedings of the 2022 Conference on Empirical Methods
+
+12
+
+only the retrieval encoder; ϕ denotes the absence of RAWM’s PPO-trained MLP head, isolating the in-context retrieval contribution from
+the trained scoring component. It embeds
+the current query (st , at ) and stored transitions
+(si , ai , oi+1 ), retrieves the most similar top-1
+transition by cosine similarity from a fixed retrieval library, and formats them as in-context examples for prediction. We use trajectories from
+the Word2World (Li et al., 2025b) test split as
+the retrieval source for both world-model prediction and agent planning. Retrieval is implemented with Qwen3-Embedding-8B for all retrieval queries across both evaluated environments under the shared embedding configuration.
+
+Yanzhao Zhang, Mingxin Li, Dingkun Long, Xin Zhang,
+Huan Lin, Baosong Yang, Pengjun Xie, An Yang,
+Dayiheng Liu, Junyang Lin, Fei Huang, and Jingren
+Zhou. 2025b. Qwen3 Embedding: Advancing text
+embedding and reranking through foundation models.
+arXiv preprint arXiv:2506.05176.
+Andrew Zhao, Daniel Huang, Quentin Xu, Matthieu
+Lin, Yong-Jin Liu, and Gao Huang. 2024. ExpeL:
+LLM agents are experiential learners. In Proceedings
+of the AAAI Conference on Artificial Intelligence,
+volume 38, pages 19632–19642.
+Hongyu Zhao, Siyu Zhou, Haolin Yang, Zengyi Qin,
+and Tianyi Zhou. 2026. Neuro-symbolic synergy
+for interactive world modeling. arXiv preprint
+arXiv:2602.10480.
+Ce Zheng, Lei Li, Qingxiu Dong, Yuxuan Fan, Zhiyong
+Wu, Jingjing Xu, and Baobao Chang. 2023. Can
+we edit factual knowledge by in-context learning?
+In Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing, pages
+4862–4876.
+
+• ITP-I (Liu et al., 2026) is the training-free variant of Imagine-then-Plan. In the original framework, adaptive lookahead operates within the
+agent planning loop, where the agent selects an
+imagination horizon and conditions action selection on the generated foresight. To isolate the effects of the world model while keeping the agent
+fixed, we move horizon selection and imagination into the world model itself. The world model
+selects k ∈ {0, . . . , kmax } with kmax =5 and returns the corresponding imagined future. For
+prediction evaluation, ITP-I is restricted to onestep imagination so that all methods share the
+same next-observation mismatch target. Multistep imagination is used only in agent planning
+evaluation, where the downstream agent can consume longer horizon foresight during planning.
+
+Longtao Zheng, Rundong Wang, Xinrun Wang, and
+Bo An. 2024. Synapse: Trajectory-as-exemplar
+prompting with memory for computer control. In
+The Twelfth International Conference on Learning
+Representations (ICLR).
+Wanjun Zhong, Lianghong Guo, Qiqi Gao, He Ye, and
+Yanlin Wang. 2024. MemoryBank: Enhancing large
+language models with long-term memory. In Proceedings of the AAAI Conference on Artificial Intelligence.
+Ruiwen Zhou, Yingxuan Yang, Muning Wen, Ying Wen,
+Wenhao Wang, Chunling Xi, Guoqiang Xu, Yong Yu,
+and Weinan Zhang. 2024. TRAD: Enhancing LLM
+agents with step-wise thought retrieval and aligned
+decision. In Proceedings of the 47th International
+ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR).
+
+Agent Policies We evaluate two representative
+agent policies to test whether world-model signals
+transfer reliably across different agent types.
+
+Siyu Zhou, Tianyi Zhou, Yijun Yang, Guodong Long,
+Deheng Ye, Jing Jiang, and Chengqi Zhang. 2025.
+WALL-E 2.0: World alignment by neurosymbolic
+learning improves world model-based LLM agents.
+arXiv preprint arXiv:2504.15785.
+
+A
+
+• ReAct follows the standard thought-action interaction format (Yao et al., 2023a), using in-context
+examples from the AgentBoard prompt.
+
+Experimental Setups
+
+• ReflAct augments ReAct with goal-state reflection before action selection (Kim et al., 2025).
+This setting tests whether world-model predictions remain beneficial when the downstream
+agent already performs explicit reflection.
+
+World Model Baselines We consider three
+inference-only baselines without gradient updates:
+• Zero-Shot follows the standard zero-shot
+prompting paradigm for large language models (Radford et al., 2019). The task description,
+current state, and proposed action are rendered
+directly as a next-observation prediction query.
+
+B
+
+Implementation Details
+
+All generations use temperature 0, top-p sampling with p=0.5, random seed 42, and a 32,768token context window. The mismatch critic and
+factorized-tuple mapping function g share the same
+
+• RAWM-ϕ (Yang et al., 2025) reimplements
+RAWM as an offline retrieval baseline using
+13
+
+Runtime (s/transition)
+
+Method
+Token F1 (%)
+
+8599.9998
+8099.9995
+
+99.9996
+
+99.9991
+
+99.9980
+
+99.9955
+
+99.9897
+
+ALFWorld ScienceWorld Average GPU/h
+
+99.9181
+99.7416
+
+99.9981
+
+99.9948
+
+99.9878
+99.9725
+
+75
+
+Zero-Shot
+RAWM-ϕ
+ITP-I
+W ORLD E VOLVER
+
+99.9346
+99.8292
+
+70
+
+99.5613
+
+ALFWorld
+ScienceWorld
+
+65
+60
+
+99.9725
+
+10
+
+20
+
+30
+
+99.0587
+
+40
+
+50
+
+60
+
+70
+
+80
+
+Figure 7: Selective foresight confidence calibration
+on Token F1 (%) for Gemma-4-26B-A4B under the
+W ORLD E VOLVER configuration in both environments.
+Gemma-4-26B-A4B
+
+GPT-5.4-mini
+
+ALFWorld ScienceWorld ALFWorld ScienceWorld
+ReAct 1 − 10−4
+ReflAct 1 − 10−5
+
+1 − 10−4
+1 − 10−4
+
+1 − 10−6
+1 − 10−6
+
+1.05
+0.75
+1.42
+1.48
+
+3.72
+2.65
+5.03
+5.24
+
+Zero-Shot
+RAWM-ϕ
+ITP-I
+W ORLD E VOLVER
+
+Qwen3.5-9B
+0.53
+0.56
+1.15
+0.69
+
+0.80
+0.91
+1.33
+1.27
+
+0.66
+0.72
+1.23
+0.96
+
+2.32
+2.55
+4.36
+3.38
+
+Zero-Shot
+RAWM-ϕ
+ITP-I
+W ORLD E VOLVER
+
+Gemma-4-31B
+0.70
+0.51
+0.97
+1.25
+
+0.82
+0.53
+1.45
+1.45
+
+0.75
+0.52
+1.19
+1.34
+
+2.66
+1.84
+4.21
+4.73
+
+90
+
+Top-confidence (%)
+
+Agent
+
+Gemma-4-26B-A4B
+1.04
+1.06
+0.63
+0.89
+1.26
+1.61
+1.44
+1.53
+
+Table 6: World model prediction runtime, reported as
+seconds per evaluated transition and total GPU hours
+across both environments on a single NVIDIA H200
+GPU. All methods use the same serving setup.
+
+1 − 10−4
+1 − 10−3
+
+Table 5: Values of τ used for selective foresight filtering
+in the w/ Ft agent-planning settings across backbones.
+
+kME
+
+backbone as Wθ . To support deployment-time continual learning, episodic memory ME and semantic memory MS persist across tasks within each
+environment. Selective foresight is applied when
+the geometric-mean token probability qt exceeds
+threshold τ . Figures 7 and 13 show that confidence
+scores correlate with both Exact Match and Token
+F1 on Gemma-4-26B-A4B. Per-cell thresholds (Table 5) are selected from these calibration curves,
+with values near 1−10−5 performing well; GPT5.4-mini follows the same calibration procedure.
+
+ALFWorld
+EM
+
+1
+2
+3
+4
+5
+
+0.4006
+0.4817
+0.4933
+0.5253
+0.5290
+
+F1 Cosine
+0.6931
+0.7331
+0.7383
+0.7623
+0.7646
+
+0.7741
+0.7909
+0.7925
+0.7997
+0.7977
+
+ScienceWorld
+EM
+0.1585
+0.3624
+0.4764
+0.4811
+0.5038
+
+F1 Cosine
+0.3098
+0.4922
+0.5960
+0.5961
+0.6064
+
+0.5888
+0.6834
+0.7297
+0.7275
+0.7312
+
+Table 7: Varying Episodic Memory retrieval size kME
+with kMS =1. The kME =5 row reports the five-seed
+aggregate; the other rows report canonical runs.
+
+accuracy remains consistently below W ORLD EVOLVER. Overall, W ORLD E VOLVER provides the
+
+C
+
+Evaluation and Analysis
+
+best trade-off between runtime and prediction performance across the evaluated backbones.
+
+Runtime The accuracy gains of W ORLD EVOLVER come from episodic and semantic memory modules, raising the question of whether these
+improvements justify the added inference cost. Table 6 shows that W ORLD E VOLVER introduces only
+moderate runtime overhead relative to Zero-Shot
+and ITP-I. For example, on Gemma-4-26B-A4B,
+runtime increases from 1.05s to 1.48s per transition for W ORLD E VOLVER, compared to 1.42s for
+ITP-I, while achieving substantially stronger Exact
+Match performance in Table 1. This suggests that
+the additional computation is effectively utilized
+for retrieval and mismatch-driven rule conditioning rather than longer imagination rollouts alone.
+RAWM-ϕ is the cheapest among most world-model
+approaches because retrieval embeddings are precomputed offline and excluded from runtime measurement. Despite this advantage, its prediction
+
+Memory Hyperparameter Analysis We first select kME =5 using W ORLD E VOLVER w/o MS and
+kMS =1 using W ORLD E VOLVER w/o ME . We
+then combine these values in the full model and use
+the same configuration across all environments and
+backbones instead of selecting separate hyperparameters for each setting. Tables 7 and 8 report the
+corresponding sweeps with Gemma-4-26B-A4B
+on ALFWorld and ScienceWorld, respectively.
+The
+best
+tested
+combination
+is
+(kME , kMS )=(5, 5) on ALFWorld and (5, 3)
+on ScienceWorld. We nevertheless use the shared
+setting (5, 1) across environments and backbones.
+This configuration is selected on Word2World and
+transferred unchanged to AgentBoard; therefore,
+the memory hyperparameters are not tuned to the
+AgentBoard planning results in this evaluation.
+14
+
+EM
+1
+2
+3
+4
+5
+
+0.5288
+0.5313
+0.5334
+0.5379
+0.5388
+
+F1 Cosine
+0.7675
+0.7662
+0.7701
+0.7762
+0.7776
+
+0.8013
+0.8007
+0.8018
+0.8023
+0.8028
+
+GPT-5.4-mini
+
+ScienceWorld
+EM
+0.5155
+0.4772
+0.5540
+0.4909
+0.4994
+
+ALFWorld - ReAct
+SR (%)
+
+ALFWorld
+
+F1 Cosine
+0.6243
+0.5889
+0.6573
+0.6034
+0.6134
+
+0.7385
+0.7223
+0.7565
+0.7308
+0.7348
+
+ALFWorld - ReflAct
+SR (%)
+
+kMS
+
+Table 8: Semantic Memory batch-size sweep (kME =5).
+
+ScienceWorld - ReflAct
+SR (%)
+
+ScienceWorld - ReAct
+SR (%)
+
+Memory Evolution Figure 10 plots trajectorymacro Exact Match in deployment order.
+W ORLD E VOLVER consistently stays in a higher
+accuracy band than Zero-Shot, RAWM-ϕ, and ITPI across environments and backbones, indicating
+that online memories provide reusable context
+beyond the current trajectory. The separation is
+most pronounced for the Gemma family models.
+On ScienceWorld, W ORLD E VOLVER shows a
+clear mid-deployment lift, while on ALFWorld it
+remains high and stable throughout, suggesting
+that ALFWorld’s more regular transition structure
+enables earlier reuse of accumulated evidence.
+Qwen3.5-9B exhibits lower and noisier local Exact
+Match, implying that memory evidence is less
+effective when the backbone model is less reliable
+at predicting next observations during deployment.
+
+100
+
+Gemma-4-26B-A4B
+
+96 96 96 100 100
+
+50
+
+100 96 100 100 100
+
+39
+
+30 26 31
+
+40
+
+7
+
+0
+
+100
+
+Easy
+(n=24)
+
+Hard
+(n=110)
+
+100 100 96 96 96
+
+50
+
+Easy
+(n=24)
+
+100
+
+39
+
+100
+
+Easy
+(n=24)
+
+91
+
+10
+
+Easy
+(n=24)
+
+7
+
+9
+
+12
+
+Hard
+(n=110)
+
+71
+
+Easy
+(n=34)
+
+76
+
+82
+
+76
+
+Easy
+(n=34)
+
+59
+47
+
+Hard
+(n=56)
+
+56
+38
+
+36
+
+Easy
+(n=34)
+
+41
+
+32
+
+41 41
+
+Hard
+(n=56)
+
+85
+
+46 48 45
+
+50
+
+0
+
+5
+
+82 85 82
+50 50 46 48 52
+
+82
+
+10
+
+34 36
+
+30
+
+Hard
+(n=110)
+
+50
+
+100
+
+8
+
+100
+92 96 96
+
+71
+
+0
+
+9
+
+Hard
+(n=110)
+
+16
+
+0
+
+6
+
+54 50
+
+Hard
+(n=56)
+
+w/o WM
+WorldEvolver w/o Ft
+
+44
+
+53 56
+38 41
+
+41 43
+
+Easy
+(n=34)
+
+RAWM-phi
+WorldEvolver w/ Ft
+
+36
+
+46 45
+
+Hard
+(n=56)
+
+ITP-I
+
+Figure 8: Agent Planning Success Rate (%) by AgentBoard easy/hard split, reported as best-of-5.
+
+Difficulty Breakdown Figure 8 reports success
+rate by task difficulty. ALFWorld easy tasks are
+nearly saturated for both backbones, making the
+hard split more informative. On the hard version
+of ALFWorld, GPT-5.4-mini already achieves substantially higher success than Gemma-4-26B-A4B,
+leaving limited room for additional foresight gains;
+for Gemma-4-26B-A4B, W ORLD E VOLVER yields
+small improvements mainly when selective foresight is enabled. ScienceWorld is less saturated,
+especially for Gemma-4-26B-A4B, so differences
+among world-model methods are more visible. In
+this setting, W ORLD E VOLVER improves Gemma4-26B-A4B across both agent types and gives the
+clearest GPT-5.4-mini gain on ReflAct hard tasks,
+increasing success from 46.00 to 54.00 without Ft
+and 50.00 with Ft . Overall, world model foresight
+is most useful when tasks are not saturated and transition uncertainty remains across environments.
+
+and LOOK remain difficult, especially for Gemma-426B-A4B. The clearest gains appear on transitionsensitive types such as PICK2, where W ORLD EVOLVER improves both backbones and both agent
+policies, suggesting that weaker planners leave
+more room for useful foresight. On ScienceWorld,
+gains concentrate on task families that require tracking environment dynamics, including Lifespan,
+Thermom., and Chemistry, while State Change
+remains near zero across all methods and backbones. This suggests that world model foresight
+captures reusable task-family dynamics, but remains limited when relevant transitions are too
+sparse to be reliably accumulated by ME or abstracted into MS for reuse across subsequent tasks.
+Action-Level Effect of Selective Foresight For
+Gemma-4-26B-A4B, we measure how often visible
+selective foresight changes the draft action, aggregated over all foresight-exposed decision steps in
+the AgentBoard planning rollouts. All rows in Table 9 correspond to the w/ Ft condition.
+The world model adds Ft to the agent’s interac-
+
+Task Type Breakdown Figures 11 and 12 depict
+the success rates of GPT-5.4-mini and Gemma4-26B-A4B by task type. The heatmaps show
+a consistent pattern across backbones. On ALFWorld, PICK is nearly saturated, while CLEAN, COOL,
+15
+
+Environment
+
+Agent
+
+Steps with Ft
+
+Action changed
+
+Change rate
+
+ALFWorld
+
+ReAct
+ReflAct
+
+17,867
+17,981
+
+1,614
+946
+
+9.0%
+5.3%
+
+ScienceWorld
+
+ReAct
+ReflAct
+
+11,450
+10,981
+
+1,912
+1,376
+
+16.7%
+12.5%
+
+Exact Match
+
+Token F1
+
+Table 9: Action changes after selective foresight is
+shown to Gemma-4-26B-A4B during Agent Planning.
+
+ALFWorld
+Cosine
+
+ScienceWorld
+0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80
+
+tion history, which the agent may use to revise
+its draft action; this occurs on 5.3% to 16.7%
+of exposed steps. Figures 11 and 12 compare
+W ORLD E VOLVER with the no-world-model baseline by task type. The clearest gains occur on
+transition-sensitive ALFWorld PICK2 tasks and ScienceWorld Lifespan, Thermom., and Chemistry
+tasks, whereas ALFWorld PICK is nearly saturated
+and ScienceWorld State Change remains near
+zero across methods. These results identify the task
+types on which foresight is associated with higher
+task success across the evaluated benchmarks.
+
+Prediction score
+
+Figure 9: World Model Prediction across five randomly
+seeded trajectory orders with uncertainty bands.
+
+formation, including object identities and relations,
+as in “take soapbottle 1 from shelf 1” in ALFWorld and “connect battery cathode to green light
+bulb cathode” in ScienceWorld. RAWM-ϕ performs (s, a) → (s, a, s′ ) retrieval: it matches the
+full current state-action pair (st , at ) against stored
+state-action keys (si , ai ) and returns the associated
+transition (si , ai , si+1 ). Repetitive state descriptions can therefore dominate the comparison and
+dilute the action signal during transition matching.
+
+Foresight Confidence Figure 13 reports Exact Match over predictions ranked by W ORLD EVOLVER ’s confidence across quantiles. In most
+settings, Exact Match decreases as confidence coverage expands, indicating that higher-confidence
+predictions are generally more reliable and can support selective foresight. Across all retention percentages, W ORLD E VOLVER remains well above
+Zero-Shot, RAWM-ϕ, and ITP-I, suggesting that
+the confidence gate filters a stronger predictive signal rather than merely selecting examples that are
+easy for all methods. This aligns with Table 2,
+where adding Ft consistently matches or improves
+over removing Ft across planning settings.
+AgentBoard reports two planning metrics alongside Success Rate. Progress Rate records the maximum task progress reached across trials. Grounding measures how often the environment accepts
+the agent’s actions as valid. Table 10 reports both
+metrics for every cell of Table 2 for completeness.
+
+Robustness to Evaluation Order We also evaluate five random seeds for World Model Prediction,
+each defining a different evaluation order over trajectories. Figure 9 reports the mean and standard
+deviation across the five orders in each environment
+under the shared evaluation protocol used here.
+The results are consistent across the five seeded
+trajectory orders, indicating that performance is not
+sensitive to the specific order in either environment.
+Statistical Uncertainty and Success@1 For
+Gemma-4-26B-A4B, we compute task-level 95%
+bootstrap confidence intervals from 10,000 resamples and report Success@1, which records task success on the first trial. Each cell in Table 12 reports
+best-of-5 Success Rate [95% CI] / Success@1 in
+percentage points for direct comparison.
+W ORLD E VOLVER w/ Ft has the highest best-of5 point estimate in all four settings, although the
+confidence intervals overlap. It also achieves the
+highest Success@1 among world-model methods
+in all four settings. Across all methods, its Success@1 is highest in both ScienceWorld settings,
+ties the no-world-model baseline on ALFWorld
+ReflAct, and trails it on ALFWorld ReAct.
+
+Comparison of Retrieval Methods We compare
+the top-1 transition-retrieval accuracy of W ORLD EVOLVER ’s action-based Episodic Memory and
+RAWM-ϕ (Yang et al., 2025), using Gemma-426B-A4B as the shared backbone throughout.
+As discussed in Section 4.2, action-centered retrieval outperforms full state-action retrieval in both
+environments, with a particularly large gain on
+ALFWorld. State descriptions in these environments are lengthy and highly repetitive, whereas
+action strings already encode task-relevant state in-
+
+Planning-Time Overhead and Memory Growth
+Table 13 reports W ORLD E VOLVER w/o Ft using Gemma-4-26B-A4B with kME =5 and kMS =1.
+WM invocations include prediction and memory16
+
+Agent Mode
+
+ALFWorld
+
+Condition
+
+Progress Rate
+
+ScienceWorld
+
+Grounding
+
+Progress Rate
+
+Grounding
+
+Gemma-4-26B-A4B
+
+ReAct
+
+w/o World Model
+RAWM-ϕ (Yang et al., 2025)
+ITP-I (Liu et al., 2026)
+W ORLD E VOLVER w/o Ft
+
+61.57
+60.70
+63.25
+61.57
+
+72.13
+76.77
+75.17
+79.76
+
+76.58
+74.88
+73.42
+79.47
+
+35.76
+34.28
+40.31
+35.02
+
+ReflAct
+
+w/o World Model
+RAWM-ϕ (Yang et al., 2025)
+ITP-I (Liu et al., 2026)
+W ORLD E VOLVER w/o Ft
+
+63.81
+58.27
+61.38
+62.38
+
+70.25
+69.29
+72.95
+77.30
+
+75.22
+73.89
+74.68
+77.58
+
+33.09
+29.41
+36.65
+26.93
+
+GPT-5.4-mini
+
+ReAct
+
+w/o World Model
+RAWM-ϕ (Yang et al., 2025)
+ITP-I (Liu et al., 2026)
+W ORLD E VOLVER w/o Ft
+
+75.31
+73.82
+70.52
+74.07
+
+76.05
+79.62
+83.61
+77.04
+
+88.31
+84.74
+85.62
+87.39
+
+38.62
+40.23
+40.40
+40.59
+
+ReflAct
+
+w/o World Model
+RAWM-ϕ (Yang et al., 2025)
+ITP-I (Liu et al., 2026)
+W ORLD E VOLVER w/o Ft
+
+76.12
+71.27
+66.23
+71.95
+
+78.81
+78.21
+78.14
+82.23
+
+84.43
+83.25
+82.87
+82.69
+
+40.89
+39.07
+42.79
+41.56
+
+Table 10: AgentBoard planning metrics for the Success Rate results in Table 2. Values are percentages without
+percent signs for both backbones and environments.
+
+Environment
+
+Action-Jaccard
+
+RAWM-ϕ
+
+∆
+
+ALFWorld
+ScienceWorld
+
+0.783
+0.687
+
+0.529
+0.653
+
++0.254
++0.034
+
+ALFWorld
+Method
+
+ReAct
+
+ReflAct
+
+w/o World Model
+23.9 [17, 31] / 22.4 26.1 [19, 34] / 20.9
+RAWM-ϕ
+22.4 [16, 29] / 17.2 20.1 [14, 27] / 15.7
+ITP-I
+25.4 [19, 33] / 18.7 23.1 [16, 31] / 14.2
+W ORLD E VOLVER w/o Ft 24.6 [18, 32] / 17.2 24.6 [18, 32] / 17.9
+W ORLD E VOLVER w/ Ft 26.1 [19, 34] / 19.4 27.6 [21, 35] / 20.9
+
+Table 11: Top-1 transition-retrieval accuracy. ∆ denotes
+Action-Jaccard minus RAWM-ϕ across environments.
+
+ScienceWorld
+Method
+
+update calls, whereas LLM calls include all underlying LLM calls. Maximum prompt tokens measure the peak context length associated with memory growth during closed-loop planning.
+
+ReAct
+
+ReflAct
+
+w/o World Model
+44.4 [34, 56] / 28.9 42.2 [32, 52] / 31.1
+RAWM-ϕ
+43.3 [33, 53] / 26.7 41.1 [31, 51] / 25.6
+ITP-I
+34.4 [24, 44] / 24.4 37.8 [28, 48] / 27.8
+W ORLD E VOLVER w/o Ft 46.7 [37, 57] / 24.4 48.9 [39, 59] / 32.2
+W ORLD E VOLVER w/ Ft 52.2 [42, 62] / 36.7 50.0 [40, 60] / 33.3
+
+Table 12: Agent Planning uncertainty and first-trial success for Gemma-4-26B-A4B. Each cell reports best-of-5
+Success Rate [task-level 95% bootstrap CI] / Success@1
+(%) across all four environment-agent settings.
+
+The two representative failures in Section D
+show how relevant memory can still mislead prediction. In ALFWorld, retrieved successful pickup
+transitions cause the model to predict a pickup for
+“take soapbottle 2 from garbagecan 1,” although
+the gold observation is “Nothing happens.” In ScienceWorld, same-task circuit transitions cause the
+model to predict a successful connection for “connect green light bulb anode to switch cathode using
+yellow wire,” although the simulator returns “No
+known action matches that input.” In both cases, retrieval identifies the correct task domain but misses
+a fine-grained executability or command-validity
+constraint during action-conditioned prediction.
+
+Selective-Foresight Threshold Calibration Selective Foresight is used only in Agent Planning.
+As detailed in Appendix B, thresholds are selected from the Word2World test-set confidencequality curves in Figure 7, which sweep confidenceretention levels and report Token F1. These curves
+provide prediction-level threshold sensitivity. We
+then fix the selected thresholds and transfer them
+unchanged to AgentBoard, so no AgentBoard plan17
+
+WM invocations LLM calls Retrieval Max prompt tokens
+/ agent step
+/ agent step ms / call
+/ WM call
+
+Setting
+ALFWorld ReAct
+ALFWorld ReflAct
+ScienceWorld ReAct
+ScienceWorld ReflAct
+
+2.086
+2.054
+2.157
+2.131
+
+1.609
+1.642
+1.866
+1.874
+
+16.244
+18.335
+10.100
+10.906
+
+2,982
+2,726
+4,324
+4,211
+
+Table 13: Planning-time overhead and peak context
+length for W ORLD E VOLVER w/o Ft during planning.
+
+Field
+
+Value
+
+Task
+Target action
+Model prediction
+Gold next state
+
+put two soapbottle in cart
+take soapbottle 2 from garbagecan 1
+You pick up the soapbottle 2 from the garbagecan 1.
+Nothing happens.
+
+Rank
+
+Source action
+
+1
+
+take soapbottle 1 from You pick up the soapbottle 1 from the
+shelf 1
+shelf 1.
+go to garbagecan 1
+You arrive at garbagecan 1. On the
+garbagecan 1, you see a papertowelroll
+1, and a soapbottle 2.
+examine sinkbasin 1
+On the sinkbasin 1, you see a soapbar 1.
+go to shelf 1
+You arrive at shelf 1. On the shelf 1, you
+see a soapbottle 1.
+go to shelf 2
+You arrive at shelf 2. On the shelf 2, you
+see nothing.
+
+2
+
+ECE-F1-10 F1 C-index
+Predictions
+Mean
+Environment
+scored
+Mean F1 confidence
+↓
+↑
+ALFWorld
+ScienceWorld
+
+34,150
+29,489
+
+0.7646
+0.6065
+
+0.9912
+0.9771
+
+0.2266
+0.3706
+
+3
+4
+
+0.6632
+0.6963
+
+5
+
+Table 14: Confidence calibration and ranking diagnostics across five seeded trajectory orders in aggregate.
+
+Table 15: Representative Episodic Memory retrieval
+failure in ALFWorld with retrieved transitions.
+
+ning outcome is used for threshold selection.
+To reduce sensitivity to a single evaluation order, we aggregate post-hoc calibration diagnostics
+across five randomly seeded trajectory orders for
+World Model Prediction in each environment.
+Selective Foresight uses qt to rank and filter predictions rather than as a probability estimate. ECEF1-10 is the sample-weighted absolute gap between
+mean confidence and mean Token F1 across ten
+confidence bins. Because Token F1 is our primary
+prediction-quality metric and is continuous, we
+report C-index for ranking instead of ROC-AUC,
+which would require binarizing F1 at an arbitrary
+threshold. C-index measures how often higher confidence corresponds to higher F1 across comparable pairs, with 0.5 indicating random ranking and
+1.0 perfect ranking. Scores of 0.6632 and 0.6963
+indicate 66.3% and 69.6% correct ordering on ALFWorld and ScienceWorld, respectively.
+
+D
+
+Source gold
+
+Field
+
+Value
+
+Task
+Target action
+
+electrical conductivity of unknown substance L
+connect green light bulb anode to switch cathode using
+yellow wire
+Model prediction The yellow wire connects green bulb anode to switch
+cathode.
+Gold next state
+No known action matches that input.
+
+Rank
+
+Source action
+
+1
+
+connect battery cathode to Connections must specify specific
+green light bulb
+points of contact on polarized electrical components. . .
+connect battery cathode to cathode on battery is now connected to
+green light bulb cathode
+cathode on green light bulb
+connect battery anode to Connections must specify specific
+switch
+points of contact on polarized electrical components. . .
+connect battery anode to anode on battery is now connected to
+switch anode
+anode on switch
+connect battery to switch Connections must specify specific
+points of contact on polarized electrical components. . .
+
+2
+3
+
+4
+5
+
+Source gold
+
+Table 16: Representative Episodic Memory retrieval
+failure in ScienceWorld with circuit transitions.
+
+family. The failure is that simulator command validity is highly specific. Similar connection memories help identify the correct physical domain, but
+they do not guarantee that every phrasing of a connection command is accepted by the environment.
+The model overgeneralizes from nearby valid circuit updates and predicts a successful connection.
+Together, these cases show that action-centered retrieval can identify the relevant domain while still
+missing fine-grained executability constraints.
+
+Case Study
+
+We present one retrieval failure from each environment. In both cases, Episodic Memory retrieves
+task-relevant transitions, but the model fails to recognize that the specific action cannot be executed
+and incorrectly predicts a successful outcome.
+Retrieval surfaces closely related same-task transitions involving the relevant object class and location. The failure arises because the current transition depends on a fine-grained executability condition: although similar pickup and location memories are relevant, the specific target command produces no state change. The model therefore overgeneralizes from nearby successful transitions and
+predicts a pickup despite the no-op outcome.
+Retrieval is domain-relevant: all retrieved transitions involve circuit construction in the same task
+
+E
+
+Prompts
+
+The ReAct and ReflAct prompts for ALFWorld
+are shown in Figures 14 and 15, with ScienceWorld counterparts in Figures 16 and 17. Worldmodel prompts are provided in Figures 18–23. The
+two memory-update prompts used in W ORLD EVOLVER are shown in Figures 24 and 25.
+
+18
+
+ALFWorld
+Exact Match (%)
+
+100
+
+ScienceWorld
+Exact Match (%)
+
+100
+
+Gemma-4-26B-A4B
+
+Qwen3.5-9B
+
+Gemma-4-31B
+
+75
+50
+25
+0
+
+0
+
+50
+
+100
+
+150
+
+200
+
+0
+
+50
+
+100
+
+150
+
+200
+
+0
+
+50
+
+100
+
+150
+
+200
+
+0
+
+50
+
+100
+
+150
+
+200
+
+0
+
+50
+
+100
+
+150
+
+200
+
+0
+
+50
+
+100
+
+150
+
+200
+
+75
+50
+25
+0
+
+Trajectory index
+RAWM-ϕ
+
+Zero-Shot
+
+ITP-I
+
+WorldEvolver
+
+Figure 10: Trajectory-level world model prediction Exact Match (%) along the Word2World deployment order. We
+report macro Exact Match averaged over the prediction steps within each trajectory.
+
+ALFWorld
+
+ScienceWorld
+100
+
+96
+
+0
+
+91
+
+0
+
+50
+
+76
+
+93
+
+83
+
+50
+
+50
+
+60
+
+0
+
+56
+
+RAWM-ϕ
+
+96
+
+0
+
+78
+
+0
+
+28
+
+59
+
+70
+
+78
+
+43
+
+62
+
+40
+
+0
+
+67
+
+ITP-I
+
+96
+
+0
+
+70
+
+5
+
+6
+
+65
+
+85
+
+72
+
+36
+
+62
+
+40
+
+0
+
+67
+
+WorldEvolver
+w/o Ft
+
+100
+
+0
+
+83
+
+0
+
+17
+
+71
+
+85
+
+67
+
+36
+
+75
+
+40
+
+0
+
+89
+
+WorldEvolver
+w/ Ft
+
+100
+
+3
+
+91
+
+24
+
+17
+
+82
+
+85
+
+89
+
+29
+
+62
+
+40
+
+0
+
+78
+
+K
+IC
+
+AN
+
+T
+EA
+
+OL
+
+OK
+
+K2
+
+an
+
+d
+Fin
+
+nt
+oi
+.P
+
+.
+
+ge
+ta
+
+ge
+
+P
+
+E
+CL
+
+H
+
+CO
+
+LO
+
+C
+PI
+
+e
+Lif
+
+sp
+
+t
+el
+
+M
+
+om
+
+rm
+he
+
+e
+Lif
+
+T
+
+an
+
+S
+
+e
+
+at
+
+St
+
+Ch
+
+ry
+
+80
+
+60
+
+ist
+
+SR (%)
+
+ReAct
+
+w/o WM
+
+em
+Ch
+
+40
+
+ReflAct
+
+w/o WM
+
+100
+
+26
+
+43
+
+19
+
+72
+
+47
+
+85
+
+94
+
+14
+
+75
+
+0
+
+0
+
+67
+
+RAWM-ϕ
+
+100
+
+10
+
+13
+
+19
+
+67
+
+65
+
+81
+
+89
+
+29
+
+62
+
+0
+
+0
+
+67
+
+ITP-I
+
+96
+
+3
+
+35
+
+0
+
+28
+
+24
+
+81
+
+94
+
+21
+
+75
+
+0
+
+0
+
+56
+
+WorldEvolver
+w/o Ft
+
+96
+
+19
+
+35
+
+5
+
+67
+
+59
+
+81
+
+89
+
+36
+
+62
+
+0
+
+0
+
+89
+
+WorldEvolver
+w/ Ft
+
+96
+
+16
+
+26
+
+14
+
+78
+
+71
+
+89
+
+94
+
+14
+
+75
+
+20
+
+0
+
+78
+
+K
+IC
+
+N
+EA
+CL
+
+T
+EA
+
+L
+OO
+
+OK
+LO
+
+2
+CK
+PI
+
+n
+pa
+es
+Lif
+
+d
+Fin
+
+nt
+oi
+.P
+
+om
+
+.
+
+ge
+ta
+
+e
+ng
+ha
+
+P
+
+H
+
+C
+
+t
+
+l
+Me
+
+T
+
+rm
+he
+
+e
+Lif
+
+S
+
+e
+
+at
+
+St
+
+C
+
+ry
+
+20
+
+0
+
+ist
+
+em
+Ch
+
+Figure 11: Heatmap of agent planning success rates (%) for GPT-5.4-mini across different world models, reported
+as best-of-5 performance on ALFWorld and ScienceWorld task types.
+
+19
+
+ALFWorld
+
+ScienceWorld
+100
+
+w/o WM
+
+100
+
+0
+
+0
+
+0
+
+0
+
+47
+
+56
+
+78
+
+21
+
+62
+
+20
+
+0
+
+22
+
+RAWM-ϕ
+
+96
+
+0
+
+0
+
+0
+
+0
+
+41
+
+41
+
+83
+
+29
+
+62
+
+0
+
+0
+
+44
+
+ITP-I
+
+100
+
+0
+
+0
+
+0
+
+0
+
+59
+
+30
+
+72
+
+14
+
+62
+
+20
+
+0
+
+22
+
+WorldEvolver
+w/o Ft
+
+100
+
+0
+
+0
+
+0
+
+0
+
+53
+
+52
+
+78
+
+14
+
+75
+
+20
+
+0
+
+56
+
+WorldEvolver
+w/ Ft
+
+100
+
+0
+
+0
+
+0
+
+0
+
+65
+
+70
+
+94
+
+14
+
+62
+
+0
+
+0
+
+44
+
+CK
+PI
+
+N
+EA
+CL
+
+T
+EA
+
+L
+OO
+
+OK
+LO
+
+2
+CK
+PI
+
+n
+pa
+es
+Lif
+
+d
+Fin
+
+nt
+oi
+.P
+
+om
+
+.
+
+ge
+ta
+
+e
+ng
+ha
+
+H
+
+C
+
+t
+
+l
+Me
+
+rm
+
+e
+Th
+
+e
+Lif
+
+S
+
+te
+
+a
+
+St
+
+C
+
+80
+
+60
+
+ry
+
+ist
+
+SR (%)
+
+ReAct
+
+em
+Ch
+
+40
+
+w/o WM
+
+100
+
+0
+
+0
+
+0
+
+0
+
+65
+
+37
+
+94
+
+21
+
+62
+
+0
+
+0
+
+33
+
+RAWM-ϕ
+
+92
+
+0
+
+0
+
+0
+
+0
+
+29
+
+30
+
+94
+
+21
+
+62
+
+0
+
+0
+
+44
+
+ReflAct
+
+ITP-I
+
+96
+
+0
+
+0
+
+0
+
+0
+
+47
+
+33
+
+89
+
+0
+
+62
+
+0
+
+0
+
+44
+
+WorldEvolver
+w/o Ft
+
+96
+
+0
+
+0
+
+0
+
+0
+
+59
+
+48
+
+94
+
+21
+
+75
+
+20
+
+0
+
+44
+
+WorldEvolver
+w/ Ft
+
+100
+
+3
+
+0
+
+0
+
+0
+
+71
+
+52
+
+94
+
+21
+
+75
+
+20
+
+0
+
+44
+
+K
+IC
+
+AN
+
+T
+EA
+
+OL
+
+OK
+
+K2
+
+an
+
+d
+Fin
+
+nt
+oi
+.P
+
+.
+
+ge
+ta
+
+ge
+
+P
+
+E
+CL
+
+H
+
+CO
+
+LO
+
+C
+PI
+
+e
+Lif
+
+sp
+
+M
+
+t
+el
+
+om
+
+m
+er
+
+Th
+
+e
+Lif
+
+an
+
+S
+
+e
+
+at
+
+St
+
+Ch
+
+20
+
+0
+
+ry
+
+ist
+
+em
+Ch
+
+ALFWorld
+Exact Match (%)
+
+100
+
+ScienceWorld
+Exact Match (%)
+
+Figure 12: Heatmap of agent planning success rates (%) for Gemma-4-26B-A4B across different world models,
+reported as best-of-5 performance on ALFWorld and ScienceWorld task types.
+
+100
+
+Gemma-4-26B-A4B
+
+Qwen3.5-9B
+
+Gemma-4-31B
+
+75
+50
+25
+0
+0
+
+25
+
+50
+
+75
+
+100
+
+0
+
+25
+
+50
+
+75
+
+100
+
+0
+
+25
+
+50
+
+75
+
+100
+
+0
+
+25
+
+50
+
+75
+
+100
+
+0
+
+25
+
+50
+
+75
+
+100
+
+0
+
+25
+
+50
+
+75
+
+100
+
+75
+50
+25
+0
+
+Top-confidence prefix (%)
+Zero-Shot
+
+RAWM-ϕ
+
+ITP-I
+
+WorldEvolver
+
+Figure 13: Selective foresight confidence calibration, measured as Exact Match on the top-confidence prefix.
+
+20
+
+Prompt Template for ReAct Agent (ALFWorld)
+Your task is to interact with a virtual household simulator to accomplish a specific task. With each interaction, you will
+receive an observation. Your role is to decide on an action based on the observation. Please ensure that any objects
+({obj}) and receptacles ({recep}) you mention in your response are present in the observation provided.
+Available actions:
+take {obj} from {recep} put {obj} in/on {recep} open {recep} close {recep} toggle
+{obj}/{recep} clean {obj} using {recep} cool {obj} using {recep} heat {obj} using
+{recep} inventory examine {recep}/{obj} go to {recep}
+For each of your turns, you will be given the observation of the last turn. You should first think about what to do, and
+then output the action for this turn.
+Response format:
+Thought: <your thought>
+Action: <your next action>
+Return exactly one line. Do not begin with a newline, blank line, space, markdown, or any text before “Thought:” or
+“Action:”.
+
+Figure 14: ReAct agent prompt for ALFWorld, with placeholders for available actions and the response format.
+
+Prompt Template for ReflAct Agent (ALFWorld)
+Your task is to interact with a virtual household simulator to accomplish a specific task. With each interaction, you
+will receive an observation. Your role is to decide on an action based on the observation. The available actions and
+object/receptacle constraints match the ReAct prompt above (Figure 14).
+For each of your turns, you should first reflect in one sentence on the agent’s state in relation to the task goal, and then
+output the action for this turn.
+Response format:
+Reflection: <your reflection>
+Action: <your next action>
+Return exactly one line. Do not begin with a newline, blank line, space, markdown, or any text before “Reflection:” or
+“Action:”.
+
+Figure 15: ReflAct agent prompt for ALFWorld, replacing the ReAct Thought with Reflection.
+
+Prompt Template for ReAct Agent (ScienceWorld)
+You are an agent in a virtual science school environment, tasked to interact with various elements.
+Available commands:
+Manipulation: open/close {OBJ}, pick up {OBJ}, put down {OBJ}, move {OBJ} to {OBJ}, pour {OBJ}
+into {OBJ}, dunk {OBJ} into {OBJ}, mix {OBJ}.
+Inspection: look around, look at {OBJ}, look in {OBJ}, read {OBJ}.
+Device Operations: activate {OBJ}, deactivate {OBJ}, use {OBJ} [on {OBJ}].
+Movement: go to {LOC}.
+Miscellaneous: eat {OBJ}, flush {OBJ}, focus on {OBJ}, wait [DURATION].
+Information: task, inventory.
+where {OBJ} is an object, {LOC} a location, and [DURATION] a specified time.
+For each of your turns, you will be given the observation of the last turn. You should first think about what to do, and
+then output the action for this turn.
+Response format:
+Thought: <your thought>
+Action: <your next action>
+
+Figure 16: ReAct agent prompt for ScienceWorld, enumerating six command groups (Manipulation, Inspection,
+Device Operations, Movement, Miscellaneous, Information) and a per-turn Thought/Action response format.
+
+21
+
+Prompt Template for ReflAct Agent (ScienceWorld)
+You are an agent in a virtual science school environment, tasked to interact with various elements. The available
+commands match the ReAct prompt above (Figure 16).
+For each of your turns, you should first reflect in one sentence on the agent’s state in relation to the task goal, and then
+output the action for this turn.
+Response format:
+Reflection: <your reflection>
+Action: <your next action>
+
+Figure 17: ReflAct agent prompt for ScienceWorld, inheriting the six ScienceWorld command groups.
+
+Prompt Template for Zero-Shot World Model
+You are a world model for the {env_name} environment. Given the agent’s current observation, its proposed action, and
+the task goal, predict what the agent will observe next.
+Output format: a single paragraph starting with “Prediction:” describing the next observation in the style of the
+environment’s own text output.
+User message:
+Task goal: {task_goal}
+Current observation: {observation}
+Proposed action: {action}
+
+Figure 18: Zero-Shot world model prompt.
+
+Prompt Template for RAWM-ϕ World Model
+You are a world model. Given the agent’s current state and proposed action, predict what the agent will observe next.
+Output format: a single paragraph starting with “Prediction:” describing the next observation in the style of the
+environment’s own text output.
+System-prompt block (retrieved transitions, prepended above the output directive):
+## Retrieved similar past transitions
+Transition 1:
+State: {state_1}
+Action: {action_1}
+Observation: {observation_1}
+Transition 2: . . .
+
+Figure 19: RAWM-ϕ (Yang et al., 2025) world model prompt, augmented with top-k transitions retrieved by cosine
+similarity over Qwen3-Embedding-8B embeddings of the live (st , at ) query against the fixed Word2World corpus.
+
+22
+
+Prompt Template for ITP-I World Model
+You are a world model for the {env_name} environment. Given an action/observation history, imagine the next few
+steps, describing likely observations and key objects.
+User message (one-step imagination contract for prediction; multi-step for planning):
+Goal: {task_goal}
+Current state: {observation}
+Action: {action}
+Prediction-evaluation cells restrict ITP-I to a single imagined step so all methods share the next-observation target.
+Agent-planning cells let the world model select k ∈ {0, . . . , 5} and return the corresponding k-step imagined future
+enclosed by <Foresight>. . . </Foresight>.
+
+Figure 20: ITP-I world model prompt following the Imagine-then-Plan (Liu et al., 2026) inference, with horizon k
+fixed at 1 for World Model Prediction evaluation and selected by the model during Agent Planning.
+
+Prompt Template for Episodic Memory World Model
+You are a world model for the {env_name} environment. Given the agent’s current observation, its proposed action, and
+the task goal, predict what the agent will observe next.
+If a “## Retrieved similar past transitions” section is provided, use those transitions as analogies for what can change
+after this action. Let the retrieved transitions guide what changes, but keep the prediction consistent with the current
+observation and task goal.
+Output format: a single paragraph starting with “Prediction:” describing the next observation in the style of the
+environment’s own text output.
+Grounding block (Episodic Memory):
+## Retrieved similar past transitions
+Transition 1: (State, Action, Observation)
+...
+Transition kME : (State, Action, Observation)
+
+Figure 21: Episodic Memory world model prompt, augmented with top-kME action-keyed transitions retrieved
+from ME via Jaccard similarity over actions and prepended as a grounding block.
+
+Prompt Template for Semantic Memory World Model
+You are a world model for the {env_name} environment. Given the agent’s current observation, its proposed action, and
+the task goal, predict what the agent will observe next.
+If a “## Frame Axioms and Persistence Rules” section appears above, treat each rule as a constraint: do not predict any
+change to a property the rules say does not change for the action being taken. Use the rules to filter out spurious changes.
+Output format: a single paragraph starting with “Prediction:” describing the next observation in the style of the
+environment’s own text output.
+Grounding block (Semantic Memory):
+## Frame Axioms and Persistence Rules
+Rule 1: {rule_text} (evidence e1 )
+...
+Rule |MS |: {rule_text} (evidence e|MS | )
+
+Figure 22: Semantic Memory world model prompt, grounded by mismatch-derived persistence rules from MS
+rendered as frame axioms and ranked by accumulated evidence score.
+
+23
+
+Prompt Template for W ORLD E VOLVER
+You are a world model for the {env_name} environment. Given the agent’s current observation, its proposed action, and
+the task goal, predict what the agent will observe next.
+If a “## Frame Axioms and Persistence Rules” section appears above, treat each rule as a constraint: do not predict any
+change to a property the rules say does not change for the action being taken.
+If a “## Retrieved similar past transitions” section is provided, use those transitions as analogies for what can change
+after this action. Let the retrieved transitions guide what changes, and use the frame axioms / persistence rules to filter
+out spurious changes.
+Output format: a single paragraph starting with “Prediction:” describing the next observation in the style of the
+environment’s own text output.
+Grounding blocks (Semantic above, Episodic below):
+## Frame Axioms and Persistence Rules
+{rules from MS }
+## Retrieved similar past transitions
+{kME transitions from ME }
+
+Figure 23: W ORLD E VOLVER world model prompt combining Episodic and Semantic Memory grounding blocks,
+with foresight-based confidence filtering applied post-generation without modifying the prompt.
+
+Prompt Template for Observation Factorizer
+System message:
+You extract compact world-state triples from text observations. Return only valid JSON; do
+not explain.
+User message:
+Extract (subject, predicate, object) triples that describe the world state from the observation
+below. Output ONLY a JSON array of triples, each triple as a 3-element array of strings.
+Environment: {env}
+Observation: {obs}
+Respond with JSON array only, no other text. Example output format:
+[[“fridge 1”, “is”, “open”], [“mug 1”, “on”, “countertop 2”], [“water 1”, “state”, “liquid”]]
+
+Figure 24: Observation factorizer prompt, converting predicted and gold observations into factorized triples whose
+set difference determines whether Semantic Memory identifies a mismatch.
+
+24
+
+Prompt Template for Preservation-Rule Extractor
+System message:
+You are extracting PRESERVATION RULES for the {env} text environment from world model prediction
+mismatches.
+A preservation rule says what should stay the same after an action. Look for cases where the
+prediction changed a fact, but the gold next observation shows that the fact did not change.
+Return one JSON object per general rule:
+- key: a short lowercase dot-separated name such as “examine.object_location”. Use the same
+key for the same rule across different mismatches.
+- text: one clear sentence stating the rule generically for this environment, not for one
+specific object instance.
+Example:
+[{“key”:“examine.object_location”,“text”:“Examining an object does not move it.”}]
+Only output rules about facts that should NOT have changed. If the batch does not show a
+reusable preservation rule, output []. Do not invent rules to fill the list.
+Output strict JSON only: a single list of objects with key and text fields. No markdown fences
+and no commentary.
+User message (rendered over a mismatch batch of size kMS ):
+Environment: {env}
+From the following mismatches, extract preservation rules (what does NOT change after the
+action). Return strict JSON only: a JSON list of objects.
+Mismatch 1:
+State: {state_1}
+Action: {action_1}
+Prediction: {prediction_1}
+Gold next observation: {gold_next_1}
+Mismatch 2: . . .
+
+Figure 25: Preservation-rule extractor prompt, processing a batch of kMS mismatches per Semantic Memory update
+and returning a JSON rule list appended to MS for use in W ORLD E VOLVER grounding.
+
+25
+
+
