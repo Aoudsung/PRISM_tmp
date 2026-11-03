@@ -1,0 +1,29 @@
+\begin{table*}[t]
+\centering
+\begingroup
+\fontsize{8}{9.5}\selectfont
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrrrrrr@{}}
+\toprule
+\rowcolor{ResultHeader}
+\textbf{Method} & \multicolumn{4}{c}{\textbf{AppWorld}} & \multicolumn{4}{c}{\textbf{PlanBench-XL}} \\
+\cmidrule(lr){2-5} \cmidrule(lr){6-9}
+ & $\E[\UB]\uparrow$ & $\Devo\uparrow$ & $\E[Y](\%)\uparrow$ & $\Duse\uparrow$ & $\E[\UB]\uparrow$ & $\Devo\uparrow$ & $\E[Y](\%)\uparrow$ & $\Duse\uparrow$ \\
+\midrule
+Frozen Base & \result{0.3341}{0.0101} & $+0.0000$ & $46.03$ & $+0.2819$ & \result{0.3290}{0.0429} & $+0.0000$ & $45.56$ & $+0.1458$ \\
+AREW / T3 & \result{0.3665}{0.0085} & $+0.0324$ & $50.79$ & $+0.3500$ & \result{0.3744}{0.0377} & $+0.0455$ & $52.22$ & $+0.1556$ \\
+GiGPO & \result{0.3952}{0.0071} & $+0.0610$ & $55.16$ & $+0.3500$ & \result{0.4070}{0.0395} & $+0.0780$ & $57.04$ & $+0.2554$ \\
+InfoPO & \result{0.5268}{0.0676} & $+0.1927$ & $74.60$ & $+0.4569$ & \result{0.5279}{0.0689} & $+0.1989$ & $74.81$ & $+0.4344$ \\
+WorldEvolver & \result{0.4487}{0.0081} & $+0.1145$ & $63.10$ & $+0.4083$ & \result{0.5227}{0.0228} & $+0.1937$ & $74.07$ & $+0.4861$ \\
+PoS+EnvProbe & \result{0.6649}{0.0104} & $+0.3308$ & $97.22$ & $+0.5362$ & \result{0.6630}{0.0081} & $+0.3340$ & $97.04$ & $+0.5450$ \\
+Step-DPO & \result{0.6770}{0.0398} & $+0.3429$ & $96.63$ & $+0.6611$ & \result{0.6643}{0.0358} & $+0.3353$ & $94.81$ & $\mathbf{+0.6021}$ \\
+Ablation-Unweighted & \result{0.6484}{0.0432} & $+0.3142$ & $96.43$ & $+0.4737$ & \result{0.6386}{0.0444} & $+0.3096$ & $94.81$ & $+0.3746$ \\
+\rowcolor{ResultHighlight}
+\textbf{\prism{} (Ours)} & \resultbf{0.6948}{0.0091} & $\mathbf{+0.3606}$ & $\mathbf{99.60}$ & $\mathbf{+0.6708}$ & \resultbf{0.6847}{0.0130} & $\mathbf{+0.3558}$ & $\mathbf{97.78}$ & $+0.5365$ \\
+\bottomrule
+\end{tabular*}
+\endgroup
+\caption{Complete results for \textbf{Qwen3.8-27B} ($3$ seeds, mean $\pm$ standard deviation for $\E[\UB]$). AppWorld uses \texttt{test\_normal} ($168$ tasks); PlanBench-XL uses \texttt{test} ($90$ queries). $\Devo$ is the utility gain over Frozen Base, $\E[Y]$ is native terminal success, and $\Duse$ is development-set masked-feedback utilization. Best values within each column are bold.}
+\label{tab:full_results_qwen38_27b}
+\end{table*}

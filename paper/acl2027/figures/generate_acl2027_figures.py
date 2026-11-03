@@ -17,7 +17,7 @@ from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
 # ============================================================================
-# 1. Global Typography, Chrome & OKLab CVD-Safe Palette Configuration
+# 1. Global Typography, Chrome & Print Palette Configuration
 # ============================================================================
 ACL_RCPARAMS = {
     "pdf.fonttype": 42,

@@ -2,23 +2,27 @@
 \centering
 \begingroup
 \fontsize{8}{9.5}\selectfont
-\setlength{\tabcolsep}{2.5pt}
-\renewcommand{\arraystretch}{1.16}
-\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.38\columnwidth}>{\centering\arraybackslash}p{0.25\columnwidth}>{\columncolor{ResultHighlight}\centering\arraybackslash}p{0.29\columnwidth}@{}}
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{1.18}
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}lrrr@{}}
 \toprule
-\rowcolor{ResultHeader}
-\textbf{Diagnostic metric}\newline($p=0.4$) & \textbf{Two-sample}\newline\textbf{RLOO} & \textbf{\prism{}} \\
+\textbf{Metric} & \textbf{RLOO} & \textbf{\prism{}} & \textbf{Change} \\
 \midrule
-Expected objective $J(\theta_0)$ & \begin{tabular}[t]{@{}c@{}}$58/125$\\$=0.4640$\end{tabular} & \begin{tabular}[t]{@{}c@{}}$58/125$\\$=0.4640$\end{tabular} \\
-Analytical $\nabla_\theta J(\theta_0)$ bias & $0.0000$ & $\mathbf{0.0000}$ \\
-Root-gate variance diff. & Baseline & $\mathbf{-0.0164736}$ \\
-Total gradient variance $\sum_i\Var(\widehat{g}_i)$ & $0.0711904$ & \begin{tabular}[t]{@{}c@{}}$\mathbf{0.0395168}$\\($-44.5\%$)\end{tabular} \\
-Expected pair cost $\E[C]/B$ & $0.4800$ & $0.5000$ \\
-Variance $\times$ cost product & $0.0341714\,B$ & \begin{tabular}[t]{@{}c@{}}$\mathbf{0.0197584\,B}$\\($-42.2\%$)\end{tabular} \\
-Cold-start miss rate ($p=0.02$) & $96.04\%$ & $\mathbf{0.00\%}$ \\
+Objective $J(\theta_0)$ & $0.4640$ & $0.4640$ & --- \\
+Gradient bias & $0.0000$ & $\mathbf{0.0000}$ & --- \\
+Root-gate var. diff. & Baseline & $\mathbf{-0.0164736}$ & --- \\
+\addlinespace[2pt]
+Total grad. variance & $0.0711904$ & $\mathbf{0.0395168}$ & $-44.5\%$ \\
+Pair cost $\E[C]/B$ & $0.4800$ & $0.5000$ & --- \\
+Variance $\times$ cost ($B$) & $0.0341714$ & $\mathbf{0.0197584}$ & $-42.2\%$ \\
+\addlinespace[2pt]
+Miss rate ($p=0.02$) & $96.04\%$ & $\mathbf{0.00\%}$ & --- \\
 \bottomrule
-\end{tabular}
+\end{tabular*}
+\par\vspace{3pt}
+\parbox{\columnwidth}{\fontsize{7}{8.5}\selectfont\color{ResultMuted}
+Both objectives equal $58/125$. Gradient variance is $\sum_i\Var(\widehat{g}_i)$. Changes are relative to two-sample RLOO where reported.}
 \endgroup
-\caption{Exact rational enumeration verification of Theorem~\ref{thm:unbiased} and Theorem~\ref{thm:variance} on the canonical two-stage partially observable benchmark.}
+\caption{Exact enumeration on the canonical two-stage benchmark ($p=0.4$ unless specified), verifying Theorems~\ref{thm:unbiased} and~\ref{thm:variance}.}
 \label{tab:exact_verification}
 \end{table}

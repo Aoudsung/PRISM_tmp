@@ -77,7 +77,7 @@ Specifically, \spar{} models candidate actions into information-probing and dire
 Under this evaluation standard, \spar{} expands one probing trajectory and one execution trajectory from the identical interaction state during training, overcoming exploration missingness caused by initial policy biases and directly revealing the long-term impact of both choices on downstream task success through same-origin stratified two-branch sampling.
 To address the distribution shift induced by active branch sampling, \spar{} recalibrates branch gradients according to the current policy's original mode selection probabilities and constructs a cross-branch baseline, leveraging this aligned probability reweighting mechanism to ensure that policy optimization remains strictly aligned with the test-time execution objective while fully exploiting contrastive signals.
 Theoretical analysis proves that this update mechanism remains unbiased with respect to the test-time single-stream execution objective and significantly reduces the estimation variance of mode-selection gradients, ensuring stable long-horizon policy optimization.
-Experiments across two long-horizon tool-interaction benchmarks and two mainstream open-weight LLM backbones demonstrate that \spar{} significantly outperforms existing RL-based methods and test-time enhancement methods in budget-aware task utility, task success rate, and environmental feedback utilization efficiency.
+Experiments across two long-horizon tool-interaction benchmarks and three open-weight LLM backbones demonstrate that \spar{} significantly outperforms existing RL-based methods and test-time enhancement methods in budget-aware task utility, task success rate, and environmental feedback utilization efficiency.
 \end{abstract}
 
 % ============================================================================
@@ -120,7 +120,7 @@ Our primary contributions are summarized as follows.
 \begin{itemize}[leftmargin=*, nosep, topsep=2pt]
     \item \textbf{Long-Horizon RL Framework Balancing Exploration Coverage and Objective Alignment.} We propose the \textbf{\spar{}} training framework, which jointly designs same-origin stratified two-branch sampling and aligned probability reweighting under a unified budget-aware task utility, enabling agents to learn on-demand probing from cross-mode comparative experiences and internalize it into an efficient single-stream policy without test-time search.
     \item \textbf{Theoretical Guarantees on Objective Unbiasedness and Variance Reduction.} We prove that the \spar{} two-branch gradient estimator remains strictly unbiased with respect to the test-time single-stream execution objective (Theorem~\ref{thm:unbiased}) and achieves strictly lower root mode-selection gradient variance than two-sample Reinforcement Learning with Leave-One-Out Baseline (RLOO) (Theorem~\ref{thm:variance}), verified via exact distribution enumeration in a two-stage partially observable environment.
-    \item \textbf{Long-Horizon Benchmark Verification and Feedback Utilization Diagnostics.} Extensive experiments on AppWorld and PlanBench-XL across two mainstream open-weight LLM backbones demonstrate that \spar{} significantly outperforms existing RL-based methods and test-time enhancement methods in budget-aware task utility and task success rate, while paired masked-feedback diagnostics confirm that the updated policy substantially improves its actual utilization efficiency of returned probing evidence.
+    \item \textbf{Long-Horizon Benchmark Verification and Feedback Utilization Diagnostics.} Extensive experiments on AppWorld and PlanBench-XL across three open-weight LLM backbones demonstrate that \spar{} significantly outperforms existing RL-based methods and test-time enhancement methods in budget-aware task utility and task success rate, while paired masked-feedback diagnostics confirm that the updated policy substantially improves its actual utilization efficiency of returned probing evidence.
 \end{itemize}
 
 % ============================================================================
@@ -259,7 +259,7 @@ where $U_{\mathrm{visible}}$ retains the true payload of $q$ in $h_{T+1}$, where
 % Describe AppWorld (9 apps, 457 APIs, 750 tasks; train=90, dev=57, test_normal=168) and PlanBench-XL (retail domain, 327 queries, 56 datatypes, 1,665 candidate tools; train=150, dev=87, test=90). Emphasize the strict train/dev/test isolation protocol: snapshot branching is used ONLY on train; dev is used for checkpoint selection and \Delta_{use} diagnostics; test is evaluated once in pure single-stream mode without rollback.
 
 % [Paragraph 2: Backbone Models & Training Configuration]
-% Detail the multi-backbone evaluation across Qwen/Qwen2.5-7B-Instruct (7.6B, L=28, d=3584) and meta-llama/Llama-3.1-8B-Instruct (8.0B, L=32, d=4096) with Dual-Mode LoRA (r=16, \alpha=32.0) across N_seeds=3 random seeds (42, 43, 44).
+% Detail the multi-backbone evaluation across Qwen/Qwen2.5-7B-Instruct (7.6B, L=28, d=3584), meta-llama/Llama-3.1-8B-Instruct (8.0B, L=32, d=4096), and Qwen/Qwen3.8-27B (27.0B, L=64, d=5120) with Dual-Mode LoRA (r=16, \alpha=32.0) across N_seeds=3 random seeds (42, 43, 44).
 
 % [Paragraph 3: Compared Baselines (2025-2026 SOTA)]
 % Group the 8 compared methods into 4 families:
@@ -278,7 +278,7 @@ where $U_{\mathrm{visible}}$ retains the true payload of $q$ in $h_{T+1}$, where
 
 \subsection{Main Cross-Backbone Self-Evolution Results (RQ1)}
 \label{subsec:rq1_main}
-% Analyze Table 1 across Qwen2.5-7B-Instruct and Llama-3.1-8B-Instruct on both AppWorld and PlanBench-XL.
+% Analyze Table 1 across Qwen2.5-7B-Instruct, Llama-3.1-8B-Instruct, and Qwen3.8-27B on both AppWorld and PlanBench-XL.
 % Highlight the clear performance hierarchy: Frozen Base < On-Policy Group RL (AREW, GiGPO) < Intrinsic/World-Model RL (InfoPO, WorldEvolver) < Explicit State Probing (PoS+EnvProbe) < Same-Prefix Preference (Step-DPO) < PRISM-Evolve.
 
 \subsection{Why Objective-Preserving Weighting Beats Unweighted Preference (RQ2)}
@@ -402,5 +402,13 @@ Since $u = p(1-p) \le 1/4 < 1/2$ for all $p \in (0, 1)$, the variance reduction 
 \State \Return Evolved policy $\pi_{\theta_K}$
 \end{algorithmic}
 \end{algorithm}
+
+\clearpage
+\section{Complete Cross-Backbone Results}
+\label{app:full_results}
+Tables~\ref{tab:full_results_qwen25_7b}--\ref{tab:full_results_qwen38_27b} provide the full results underlying Table~\ref{tab:main_results}, including self-evolution gain, native terminal success, and development-set masked-feedback utilization for all three backbones.
+\input{tables/full_results_qwen25_7b}
+\input{tables/full_results_llama31_8b}
+\input{tables/full_results_qwen38_27b}
 
 \end{document}

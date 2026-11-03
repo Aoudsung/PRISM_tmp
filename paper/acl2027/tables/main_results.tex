@@ -3,44 +3,27 @@
 \begingroup
 \fontsize{8}{9.5}\selectfont
 \setlength{\tabcolsep}{3pt}
-\renewcommand{\arraystretch}{1.12}
-\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrrrrrr@{}}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrrrr@{}}
 \toprule
 \rowcolor{ResultHeader}
-\textbf{Method} & \multicolumn{4}{c}{\textbf{AppWorld}} & \multicolumn{4}{c}{\textbf{PlanBench-XL}} \\
-\rowcolor{ResultHeader}
- & \multicolumn{4}{c}{\texttt{test\_normal}, $168$ tasks} & \multicolumn{4}{c}{\texttt{test}, $90$ queries} \\
-\cmidrule(lr){2-5} \cmidrule(lr){6-9}
- & $\E[\UB]\uparrow$ & $\Devo\uparrow$ & $\E[Y](\%)\uparrow$ & $\Duse\uparrow$ & $\E[\UB]\uparrow$ & $\Devo\uparrow$ & $\E[Y](\%)\uparrow$ & $\Duse\uparrow$ \\
+\textbf{Method} & \multicolumn{3}{c}{\textbf{AppWorld}} & \multicolumn{3}{c}{\textbf{PlanBench-XL}} \\
+\cmidrule(lr){2-4} \cmidrule(lr){5-7}
+ & Qwen2.5-7B & Llama-3.1-8B & Qwen3.8-27B & Qwen2.5-7B & Llama-3.1-8B & Qwen3.8-27B \\
 \midrule
-\rowcolor{ResultHeader}
-\multicolumn{9}{l}{\textbf{Qwen2.5-7B-Instruct}\quad($7.6\text{B},\ d=3584$)} \\
-Frozen Base & \result{0.2583}{0.0109} & $+0.0000$ & $34.92$ & $+0.2042$ & \result{0.2633}{0.0304} & $+0.0000$ & $35.93$ & $+0.1167$ \\
-AREW / T3 & \result{0.2771}{0.0127} & $+0.0188$ & $37.70$ & $+0.2333$ & \result{0.2809}{0.0218} & $+0.0176$ & $38.52$ & $+0.1167$ \\
-GiGPO & \result{0.3094}{0.0299} & $+0.0512$ & $42.46$ & $+0.2625$ & \result{0.3163}{0.0395} & $+0.0530$ & $43.70$ & $+0.1361$ \\
-InfoPO & \result{0.3634}{0.0289} & $+0.1052$ & $50.40$ & $+0.3208$ & \result{0.3975}{0.0447} & $+0.1341$ & $55.56$ & $+0.2194$ \\
-WorldEvolver & \result{0.3636}{0.0188} & $+0.1053$ & $50.40$ & $+0.3694$ & \result{0.4441}{0.0253} & $+0.1807$ & $62.59$ & $+0.3208$ \\
-PoS+EnvProbe & \result{0.5112}{0.0021} & $+0.2529$ & $72.42$ & $+0.4083$ & \result{0.4921}{0.0234} & $+0.2288$ & $70.00$ & $+0.3951$ \\
-Step-DPO & \result{0.5583}{0.0713} & $+0.3000$ & $79.37$ & $+0.4958$ & \result{0.5356}{0.0730} & $+0.2723$ & $75.93$ & $\mathbf{+0.4142}$ \\
-Ablation-Unweighted & \result{0.5842}{0.1161} & $+0.3260$ & $\mathbf{88.49}$ & $+0.3912$ & \result{0.5932}{0.0605} & $+0.3299$ & $90.37$ & $+0.2403$ \\
+Frozen Base & \result{0.2583}{0.0109} & \result{0.2720}{0.0121} & \result{0.3341}{0.0101} & \result{0.2633}{0.0304} & \result{0.2682}{0.0338} & \result{0.3290}{0.0429} \\
+AREW / T3 & \result{0.2771}{0.0127} & \result{0.2826}{0.0087} & \result{0.3665}{0.0085} & \result{0.2809}{0.0218} & \result{0.3068}{0.0433} & \result{0.3744}{0.0377} \\
+GiGPO & \result{0.3094}{0.0299} & \result{0.3295}{0.0268} & \result{0.3952}{0.0071} & \result{0.3163}{0.0395} & \result{0.3419}{0.0558} & \result{0.4070}{0.0395} \\
+InfoPO & \result{0.3634}{0.0289} & \result{0.3955}{0.0035} & \result{0.5268}{0.0676} & \result{0.3975}{0.0447} & \result{0.4163}{0.0449} & \result{0.5279}{0.0689} \\
+WorldEvolver & \result{0.3636}{0.0188} & \result{0.3827}{0.0052} & \result{0.4487}{0.0081} & \result{0.4441}{0.0253} & \result{0.4541}{0.0347} & \result{0.5227}{0.0228} \\
+PoS+EnvProbe & \result{0.5112}{0.0021} & \result{0.5583}{0.0059} & \result{0.6649}{0.0104} & \result{0.4921}{0.0234} & \result{0.5627}{0.0224} & \result{0.6630}{0.0081} \\
+Step-DPO & \result{0.5583}{0.0713} & \result{0.5871}{0.0636} & \result{0.6770}{0.0398} & \result{0.5356}{0.0730} & \result{0.5607}{0.0658} & \result{0.6643}{0.0358} \\
+Ablation-Unweighted & \result{0.5842}{0.1161} & \result{0.5279}{0.1105} & \result{0.6484}{0.0432} & \result{0.5932}{0.0605} & \result{0.5939}{0.0828} & \result{0.6386}{0.0444} \\
 \rowcolor{ResultHighlight}
-\textbf{\prism{} (Ours)} & \resultbf{0.6130}{0.1138} & $\mathbf{+0.3547}$ & $\mathbf{88.49}$ & $\mathbf{+0.5033}$ & \resultbf{0.6243}{0.0470} & $\mathbf{+0.3610}$ & $\mathbf{91.48}$ & $+0.3724$ \\
-\midrule
-\rowcolor{ResultHeader}
-\multicolumn{9}{l}{\textbf{Llama-3.1-8B-Instruct}\quad($8.0\text{B},\ d=4096$)} \\
-Frozen Base & \result{0.2610}{0.0099} & $+0.0000$ & $35.32$ & $+0.2139$ & \result{0.2683}{0.0226} & $+0.0000$ & $36.67$ & $+0.1167$ \\
-AREW / T3 & \result{0.2744}{0.0141} & $+0.0134$ & $37.30$ & $+0.2333$ & \result{0.2933}{0.0326} & $+0.0249$ & $40.37$ & $+0.1167$ \\
-GiGPO & \result{0.3148}{0.0338} & $+0.0538$ & $43.25$ & $+0.2819$ & \result{0.3189}{0.0350} & $+0.0506$ & $44.07$ & $+0.1458$ \\
-WorldEvolver & \result{0.3688}{0.0123} & $+0.1078$ & $51.19$ & $+0.3694$ & \result{0.4441}{0.0253} & $+0.1757$ & $62.59$ & $+0.3208$ \\
-InfoPO & \result{0.3838}{0.0232} & $+0.1227$ & $53.37$ & $+0.3500$ & \result{0.4127}{0.0517} & $+0.1444$ & $57.78$ & $+0.2486$ \\
-PoS+EnvProbe & \result{0.5112}{0.0021} & $+0.2501$ & $72.42$ & $+0.4083$ & \result{0.5067}{0.0044} & $+0.2384$ & $72.22$ & $+0.4142$ \\
-Step-DPO & \result{0.5782}{0.0725} & $+0.3171$ & $82.34$ & $+0.5153$ & \result{0.5567}{0.0680} & $+0.2883$ & $79.26$ & $+0.3746$ \\
-Ablation-Unweighted & \result{0.6258}{0.0663} & $+0.3647$ & $96.23$ & $+0.4536$ & \result{0.6197}{0.0442} & $+0.3514$ & $95.19$ & $+0.2806$ \\
-\rowcolor{ResultHighlight}
-\textbf{\prism{} (Ours)} & \resultbf{0.6592}{0.0495} & $\mathbf{+0.3982}$ & $\mathbf{96.63}$ & $\mathbf{+0.5453}$ & \resultbf{0.6507}{0.0386} & $\mathbf{+0.3824}$ & $\mathbf{95.93}$ & $\mathbf{+0.3962}$ \\
+\textbf{\prism{} (Ours)} & \resultbf{0.6130}{0.1138} & \resultbf{0.6279}{0.1102} & \resultbf{0.6948}{0.0091} & \resultbf{0.6243}{0.0470} & \resultbf{0.6677}{0.0197} & \resultbf{0.6847}{0.0130} \\
 \bottomrule
 \end{tabular*}
 \endgroup
-\caption{Main performance comparison on held-out test sets across two open-weight LLM backbones ($3$ seeds, Mean $\pm$ Std). $\E[\UB]$ denotes normalized success-over-time utility, $\Devo$ denotes self-evolution gain over Frozen Base, $\E[Y]$ is native terminal verification success rate, and $\Duse$ measures development-set masked-feedback utilization.}
+\caption{Budget-aware test utility $\E[\UB]\uparrow$ across three backbones ($3$ seeds, mean $\pm$ standard deviation). AppWorld uses \texttt{test\_normal} ($168$ tasks), and PlanBench-XL uses \texttt{test} ($90$ queries). Full metrics are reported in Appendix~\ref{app:full_results}.}
 \label{tab:main_results}
 \end{table*}

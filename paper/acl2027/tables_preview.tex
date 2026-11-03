@@ -25,4 +25,15 @@
 \end{minipage}\vspace{1em}]
 \input{tables/exact_verification}
 \null\clearpage
+\onecolumn
+\appendix
+\setcounter{section}{3}
+\section{Complete Cross-Backbone Results}
+\label{app:full_results}
+\renewenvironment{table*}[1][]{\par\noindent\begin{minipage}{\textwidth}\captionsetup{type=table}}{\end{minipage}\par}
+\input{tables/full_results_qwen25_7b}
+\vspace{1em}
+\input{tables/full_results_llama31_8b}
+\vspace{1em}
+\input{tables/full_results_qwen38_27b}
 \end{document}
