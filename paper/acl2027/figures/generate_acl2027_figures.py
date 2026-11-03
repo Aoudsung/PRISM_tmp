@@ -5,8 +5,7 @@ Publication-grade experimental figure generator for our ACL 2027 paper:
 SPAR: Breaking Information Self-Locking in Long-Horizon Agents via
 Stratified Probing with Aligned Reweighting.
 
-Engineered for ZERO text overlaps, ZERO axis/legend collisions, and strict
-box-containment verified via PyMuPDF (fitz) bounding-box auditing.
+Vector PDF and 300-dpi PNG figures with compact, print-oriented annotations.
 """
 
 import os
@@ -27,18 +26,18 @@ ACL_RCPARAMS = {
     "font.serif": ["Times New Roman", "Nimbus Roman", "Times", "DejaVu Serif"],
     "mathtext.fontset": "stix",
     "font.size": 8.2,
-    "axes.titlesize": 8.8,
+    "axes.titlesize": 8.4,
     "axes.titleweight": "bold",
     "axes.titlepad": 7.5,
-    "axes.labelsize": 8.2,
+    "axes.labelsize": 7.8,
     "axes.labelpad": 5.5,
     "xtick.labelsize": 7.5,
     "ytick.labelsize": 7.5,
     "legend.fontsize": 7.4,
     "legend.labelspacing": 0.62,
     "figure.titlesize": 9.5,
-    "axes.linewidth": 0.75,
-    "axes.edgecolor": "#334155",
+    "axes.linewidth": 0.6,
+    "axes.edgecolor": "#94A3B8",
     "axes.labelcolor": "#0F172A",
     "xtick.color": "#334155",
     "ytick.color": "#334155",
@@ -49,10 +48,10 @@ ACL_RCPARAMS = {
     "axes.spines.top": False,
     "axes.spines.right": False,
     "axes.axisbelow": True,
-    "grid.color": "#CBD5E1",
-    "grid.linestyle": "--",
-    "grid.linewidth": 0.5,
-    "grid.alpha": 0.65,
+    "grid.color": "#E2E8EE",
+    "grid.linestyle": "-",
+    "grid.linewidth": 0.45,
+    "grid.alpha": 0.85,
     "legend.frameon": False,
     "savefig.bbox": "tight",
     "savefig.pad_inches": 0.04,
@@ -76,7 +75,7 @@ PALETTE = {
     "Frozen_Line":         "#64748B",  # Darker grey for reference dashed lines
 }
 
-OUT_DIR = "/apps/users/adminuser/prism-exact-reproduction/paper_figures"
+OUT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
@@ -288,18 +287,19 @@ def plot_fig2_coverage_and_evolution():
     ax0.plot(p_grid, cov_rloo, color=PALETTE["GiGPO"], lw=1.7, ls="--", label="On-Policy RLOO ($n=2$)")
     ax0.plot(p_grid, starvation_rloo, color=PALETTE["Ablation_Unweighted"], lw=1.6, ls=":", label=r"Zero-Probe Miss $(1-p)^2$")
 
-    ax0.fill_between(p_grid, cov_rloo, cov_strat, color=PALETTE["SPAR_Accent"], alpha=0.13)
+    ax0.fill_between(p_grid, cov_rloo, cov_strat, color=PALETTE["SPAR_Accent"], alpha=0.07)
 
-    # Highlight cold-start point p = 0.02 in the wide empty band y in [42, 72], x in [0.06, 0.22]
+    # State the cold-start coordinate explicitly; no leader crosses the curves.
     ax0.scatter([0.02], [96.04], color=PALETTE["Ablation_Unweighted"], s=24, zorder=5)
     ax0.scatter([0.02], [100.0], color=PALETTE["SPAR"], s=24, zorder=5)
-    ax0.annotate(
-        "96.0% Miss ($p=0.02$)", xy=(0.02, 96.04), xytext=(0.08, 52.0),
-        fontsize=6.8, fontweight="bold", color=PALETTE["Ablation_Unweighted"],
-        arrowprops=dict(arrowstyle="->", color=PALETTE["Ablation_Unweighted"], lw=0.85)
+    ax0.text(
+        0.96, 0.055, "Cold start ($p=0.02$)\n96.0% zero-probe miss",
+        transform=ax0.transAxes, ha="right", va="bottom", linespacing=1.35,
+        fontsize=6.6, color="#334155"
     )
-    ax0.text(0.28, 86.0, "100% Exact Coverage", fontsize=6.8, fontweight="bold",
-             color=PALETTE["SPAR"], ha="center")
+    ax0.annotate("100% exact coverage", xy=(0.49, 100), xytext=(0, 4),
+                 textcoords="offset points", ha="right", va="bottom",
+                 fontsize=6.6, fontweight="bold", color="#0F172A")
 
     ax0.set_title(r"(a) Coverage vs. Gate $p(h)$")
     ax0.set_xlabel(r"Initial Probe Gate $p(h)$")
@@ -331,11 +331,11 @@ def plot_fig2_coverage_and_evolution():
         if label == "SPAR (Ours)":
             ax1.fill_between(stages, vals_arr - 0.016, vals_arr + 0.016, color=col, alpha=0.12)
 
-    # Placed in empty upper-left region x in [0.1, 1.8], y in [0.58, 0.67]
+    # Offset in points keeps the endpoint label clear at both export resolutions.
     ax1.annotate(
-        "0.597 (+0.324)", xy=(3, 0.5967), xytext=(0.25, 0.615),
-        fontsize=6.9, fontweight="bold", color=PALETTE["SPAR"],
-        arrowprops=dict(arrowstyle="->", color=PALETTE["SPAR"], lw=0.85)
+        "0.597 (+0.324)", xy=(3, 0.5967), xytext=(-2, 6),
+        textcoords="offset points", ha="right", va="bottom",
+        fontsize=6.9, fontweight="bold", color="#0F172A"
     )
 
     ax1.set_title("(b) AppWorld Self-Evolution")
@@ -363,11 +363,10 @@ def plot_fig2_coverage_and_evolution():
         if label == "SPAR (Ours)":
             ax2.fill_between(stages, vals_arr - 0.015, vals_arr + 0.015, color=col, alpha=0.12)
 
-    # Placed in empty upper-left region x in [0.1, 1.8], y in [0.63, 0.72]
     ax2.annotate(
-        "0.677 (+0.453)", xy=(3, 0.6765), xytext=(0.25, 0.665),
-        fontsize=6.9, fontweight="bold", color=PALETTE["SPAR"],
-        arrowprops=dict(arrowstyle="->", color=PALETTE["SPAR"], lw=0.85)
+        "0.677 (+0.453)", xy=(3, 0.6765), xytext=(-2, 6),
+        textcoords="offset points", ha="right", va="bottom",
+        fontsize=6.9, fontweight="bold", color="#0F172A"
     )
 
     ax2.set_title("(c) PlanBench-XL Self-Evolution")
@@ -448,13 +447,11 @@ def plot_fig3_multibackbone_main():
         base_means = data_dict["Frozen Base"][0]
         for idx, (m_name, col) in enumerate(methods):
             means, stds = data_dict[m_name]
-            edge_col = "#003B46" if m_name == "SPAR (Ours)" else "none"
-            lw_bar = 0.85 if m_name == "SPAR (Ours)" else 0.0
             bars = ax.bar(
                 x + offsets[idx], means, width * 0.90,
                 yerr=stds, capsize=1.6,
-                color=col, edgecolor=edge_col, linewidth=lw_bar,
-                error_kw=dict(lw=0.6, ecolor="#334155", capthick=0.6),
+                color=col, edgecolor="none",
+                error_kw=dict(lw=0.55, ecolor="#64748B", capthick=0.55),
                 label=m_name, zorder=3
             )
             if m_name == "SPAR (Ours)":
@@ -470,8 +467,7 @@ def plot_fig3_multibackbone_main():
                         bar.get_x() + bar.get_width() / 2.0, top_y,
                         f"{val:.3f}\n(+{delta:.2f})",
                         ha="center", va="bottom", fontsize=6.5, linespacing=1.25,
-                        fontweight="bold", color=PALETTE["SPAR"],
-                        bbox=dict(boxstyle="round,pad=0.14", facecolor="#E0F4F8", edgecolor=PALETTE["SPAR"], lw=0.55)
+                        fontweight="bold", color="#0F172A"
                     )
 
         ax.set_title(title_str)
@@ -527,12 +523,14 @@ def plot_fig4_reweighting_and_budget():
         ax0_top.text(
             bar.get_x() + bar.get_width() / 2.0, u_spar[idx] + 0.015,
             gains_vs_unw[idx], ha="center", va="bottom",
-            fontsize=6.4, fontweight="bold", color=PALETTE["SPAR"]
+            fontsize=6.4, fontweight="bold", color="#0F172A"
         )
 
     ax0_top.set_title("(a) Reweighting vs. Over-Probing")
     ax0_top.set_ylabel(r"Utility $\mathbb{E}[U_B] \uparrow$", fontsize=7.6)
     ax0_top.set_ylim(0.42, 0.76)
+    ax0_top.text(0.02, 0.97, "Gain vs. w/o Gate Weight (pts)",
+                 transform=ax0_top.transAxes, va="top", fontsize=5.9, color="#64748B")
     ax0_top.grid(True, axis="y")
     plt.setp(ax0_top.get_xticklabels(), visible=False)
 
@@ -543,14 +541,19 @@ def plot_fig4_reweighting_and_budget():
 
     cost_drops = ["-8.0%", "-10.4%", "-7.4%", "-9.3%"]
     for idx, bar in enumerate(bars_c_spar):
+        bracket_y = max(c_unw[idx], c_spar[idx]) + 0.007
+        ax0_bot.plot([gx[idx], gx[idx], gx[idx] + bw, gx[idx] + bw],
+                     [bracket_y - 0.003, bracket_y, bracket_y, bracket_y - 0.003],
+                     color="#64748B", lw=0.6)
         ax0_bot.text(
-            bar.get_x() + bar.get_width() / 2.0, c_spar[idx] - 0.032,
+            gx[idx] + bw / 2.0, bracket_y + 0.003,
             cost_drops[idx], ha="center", va="bottom",
-            fontsize=5.8, fontweight="bold", color="#FFFFFF"
+            fontsize=6.2, fontweight="bold", color="#0F172A"
         )
 
     ax0_bot.set_ylabel(r"Cost $\mathbb{E}[C]/B \downarrow$", fontsize=7.6)
-    ax0_bot.set_ylim(0.26, 0.39)
+    ax0_bot.set_ylim(0.26, 0.405)
+    ax0_bot.set_yticks([0.28, 0.32, 0.36, 0.40])
     ax0_bot.set_xticks(gx)
     ax0_bot.set_xticklabels(groups, fontsize=7.1, linespacing=1.28)
     ax0_bot.grid(True, axis="y")
@@ -575,11 +578,13 @@ def plot_fig4_reweighting_and_budget():
     for label, vals, col, ls, mk, lw in b_curves:
         ax1.plot(budgets, vals, color=col, ls=ls, marker=mk, lw=lw, markersize=4.3, label=label)
 
-    # Placed in empty upper-left region x in [0.58, 0.95], y in [0.58, 0.72]
-    ax1.annotate(
-        "+6.1 pts vs. Unweighted", xy=(0.6, 0.4290), xytext=(0.62, 0.635),
-        fontsize=6.7, fontweight="bold", color=PALETTE["SPAR"],
-        arrowprops=dict(arrowstyle="->", color=PALETTE["SPAR"], lw=0.85)
+    # A local difference bracket replaces the diagonal arrow onto one series.
+    ax1.plot([0.565, 0.55, 0.55, 0.565], [0.3678, 0.3678, 0.4290, 0.4290],
+             color=PALETTE["SPAR"], lw=0.8)
+    ax1.text(
+        0.04, 0.93, "Tight budget: +6.1 pts\nvs. w/o Gate Weight",
+        transform=ax1.transAxes, ha="left", va="top", linespacing=1.35,
+        fontsize=6.5, color="#0F172A"
     )
 
     ax1.set_title(r"(b) Budget Scaling ($B / B_0$)")
@@ -616,7 +621,7 @@ def plot_fig4_reweighting_and_budget():
     for bar, val in zip(b2, llama_split_u):
         ax2.text(
             bar.get_x() + bar.get_width() / 2.0, val + 0.015, f"{val:.2f}",
-            ha="center", va="bottom", fontsize=6.5, fontweight="bold", color=PALETTE["SPAR"]
+            ha="center", va="bottom", fontsize=6.5, fontweight="bold", color="#0F172A"
         )
 
     ax2.set_title("(c) Split-Step Schedule")
@@ -639,7 +644,7 @@ def plot_fig4_reweighting_and_budget():
 # ============================================================================
 def plot_fig5_feedback_and_breakdown():
     fig, axes = plt.subplots(
-        1, 2, figsize=(7.6, 2.90),
+        1, 2, figsize=(7.6, 2.90), sharey=True,
         gridspec_kw={"width_ratios": [1.0, 1.15], "wspace": 0.14}
     )
     fig.subplots_adjust(left=0.14, right=0.985, bottom=0.19, top=0.76)
@@ -674,14 +679,17 @@ def plot_fig5_feedback_and_breakdown():
     ax0.axhspan(7.55, 8.45, color="#E0F4F8", alpha=0.65, zorder=1)
     ax0.axhspan(4.55, 5.45, color="#FEE2E2", alpha=0.45, zorder=1)
 
-    # Placed in the 100% empty lower-right area x in [0.45, 0.72], y in [0.3, 2.3]
-    # (since rows 0, 1, 2 have max x <= 0.350!)
-    ax0.annotate(
-        "+16.8 to +19.7 pts\nover Unweighted",
-        xy=(0.5579, 8.0), xytext=(0.45, 1.2),
-        fontsize=6.7, linespacing=1.25, fontweight="bold", color=PALETTE["SPAR"],
-        bbox=dict(boxstyle="round,pad=0.2", facecolor="#F0F9FA", edgecolor=PALETTE["SPAR"], lw=0.6),
-        arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-0.18", color=PALETTE["SPAR"], lw=0.9)
+    # The range covers all three backbones; the note names the compared rows.
+    gains = 100 * np.array([duse_qwen7b[8] - duse_qwen7b[5],
+                            duse_llama8b[8] - duse_llama8b[5],
+                            duse_qwen27b[8] - duse_qwen27b[5]])
+    ax0.text(
+        0.46, 1.5, f"+{gains.min():.1f} to +{gains.max():.1f} pts",
+        fontsize=7.0, fontweight="bold", color="#0F172A", va="bottom"
+    )
+    ax0.text(
+        0.46, 1.35, "SPAR vs. w/o Gate Weight\nacross all three backbones",
+        fontsize=6.1, linespacing=1.4, color="#475569", va="top"
     )
 
     ax0.set_title(r"(a) Masked-Feedback Gain $\Delta_{\mathrm{use}} \uparrow$")
@@ -690,12 +698,10 @@ def plot_fig5_feedback_and_breakdown():
     for ticklabel, m_name in zip(ax0.get_yticklabels(), methods_ord):
         if m_name == "SPAR (Ours)":
             ticklabel.set_fontweight("bold")
-            ticklabel.set_color(PALETTE["SPAR"])
-        elif m_name == "w/o Gate Weight":
-            ticklabel.set_color(PALETTE["Ablation_Unweighted"])
 
     ax0.set_xlabel(r"$\Delta_{\mathrm{use}}(\pi) = \mathbb{E}[U_{\mathrm{visible}} - U_{\mathrm{masked}}]$", labelpad=7.5)
     ax0.set_xlim(0.15, 0.74)
+    ax0.set_ylim(-0.65, 8.65)
     ax0.grid(True, axis="x")
 
     # Legend for Panel (a) in top-left header band
@@ -732,7 +738,7 @@ def plot_fig5_feedback_and_breakdown():
 
     ax1.set_title("(b) Trajectory Outcome Breakdown (%)")
     ax1.set_yticks(y_pos)
-    ax1.set_yticklabels([])
+    ax1.tick_params(axis="y", labelleft=False, left=False)
     ax1.set_xlabel("Proportion of Test Episodes (%)", labelpad=7.5)
     ax1.set_xlim(0, 100)
     ax1.grid(False)

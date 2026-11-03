@@ -1,0 +1,28 @@
+% Compile from paper/acl2027 on mgt01; uses the same table inputs as main.tex.
+\documentclass[11pt]{article}
+\usepackage[preprint]{acl}
+\usepackage{times,latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,booktabs,colortbl}
+\input{tables/style}
+\newcommand{\prism}{\textsc{SPAR}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\UB}{U_B}
+\newcommand{\Devo}{\Delta_{\mathrm{evo}}}
+\newcommand{\Duse}{\Delta_{\mathrm{use}}}
+% The theorem numbers are those of the current manuscript's Section 3.
+\makeatletter
+\newlabel{thm:unbiased}{{3.1}{1}{}{}{}}
+\newlabel{thm:variance}{{3.2}{1}{}{}{}}
+\makeatother
+\renewenvironment{table*}[1][]{}{}
+\begin{document}
+\twocolumn[\begin{minipage}{\textwidth}
+\captionsetup{type=table}
+\input{tables/main_results}
+\end{minipage}\vspace{1em}]
+\input{tables/exact_verification}
+\null\clearpage
+\end{document}

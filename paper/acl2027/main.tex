@@ -31,6 +31,8 @@
 \usepackage{algorithm}
 \usepackage{algpseudocode}
 \usepackage{enumitem}
+\usepackage{colortbl}
+\input{tables/style}
 
 % Theorem Environments
 \newtheorem{theorem}{Theorem}[section]
@@ -266,42 +268,7 @@ where $U_{\mathrm{visible}}$ retains the true payload of $q$ in $h_{T+1}$, where
 % (3) Intrinsic information & world-model RL: InfoPO (Zhang et al., 2026), WorldEvolver (Liu et al., 2026), and PoS+EnvProbe (Chen et al., 2026);
 % (4) Same-prefix preference & unweighted ablations: Step-DPO (Lai et al., 2024) and Ablation-Unweighted (setting p -> 1/2 in \ell_I, \ell_E).
 
-\begin{table*}[t]
-\centering
-\small
-\setlength{\tabcolsep}{4.8pt}
-\begin{tabular}{llcccccccc}
-\toprule
-\multirow{2}{*}{\textbf{Backbone LLM}} & \multirow{2}{*}{\textbf{Method}} & \multicolumn{4}{c}{\textbf{AppWorld (\texttt{test\_normal}, $168$ tasks)}} & \multicolumn{4}{c}{\textbf{PlanBench-XL (\texttt{test}, $90$ queries)}} \\
-\cmidrule(lr){3-6} \cmidrule(lr){7-10}
- & & $\E[\UB] \uparrow$ & $\Devo \uparrow$ & $\E[Y]$ (\%) $\uparrow$ & $\Duse \uparrow$ & $\E[\UB] \uparrow$ & $\Devo \uparrow$ & $\E[Y]$ (\%) $\uparrow$ & $\Duse \uparrow$ \\
-\midrule
-\multirow{9}{*}{\shortstack[l]{\texttt{Qwen2.5-7B}\\\texttt{-Instruct}\\($7.6\text{B}, d{=}3584$)}}
- & Frozen Base & $0.2583 \pm 0.0109$ & $+0.0000$ & $34.92$ & $+0.2042$ & $0.2633 \pm 0.0304$ & $+0.0000$ & $35.93$ & $+0.1167$ \\
- & AREW / T3 & $0.2771 \pm 0.0127$ & $+0.0188$ & $37.70$ & $+0.2333$ & $0.2809 \pm 0.0218$ & $+0.0176$ & $38.52$ & $+0.1167$ \\
- & GiGPO & $0.3094 \pm 0.0299$ & $+0.0512$ & $42.46$ & $+0.2625$ & $0.3163 \pm 0.0395$ & $+0.0530$ & $43.70$ & $+0.1361$ \\
- & InfoPO & $0.3634 \pm 0.0289$ & $+0.1052$ & $50.40$ & $+0.3208$ & $0.3975 \pm 0.0447$ & $+0.1341$ & $55.56$ & $+0.2194$ \\
- & WorldEvolver & $0.3636 \pm 0.0188$ & $+0.1053$ & $50.40$ & $+0.3694$ & $0.4441 \pm 0.0253$ & $+0.1807$ & $62.59$ & $+0.3208$ \\
- & PoS+EnvProbe & $0.5112 \pm 0.0021$ & $+0.2529$ & $72.42$ & $+0.4083$ & $0.4921 \pm 0.0234$ & $+0.2288$ & $70.00$ & $+0.3951$ \\
- & Step-DPO & $0.5583 \pm 0.0713$ & $+0.3000$ & $79.37$ & $+0.4958$ & $0.5356 \pm 0.0730$ & $+0.2723$ & $75.93$ & $\mathbf{+0.4142}$ \\
- & Ablation-Unweighted & $0.5842 \pm 0.1161$ & $+0.3260$ & $\mathbf{88.49}$ & $+0.3912$ & $0.5932 \pm 0.0605$ & $+0.3299$ & $90.37$ & $+0.2403$ \\
- & \textbf{\prism{} (Ours)} & $\mathbf{0.6130 \pm 0.1138}$ & $\mathbf{+0.3547}$ & $\mathbf{88.49}$ & $\mathbf{+0.5033}$ & $\mathbf{0.6243 \pm 0.0470}$ & $\mathbf{+0.3610}$ & $\mathbf{91.48}$ & $+0.3724$ \\
-\midrule
-\multirow{9}{*}{\shortstack[l]{\texttt{Llama-3.1-8B}\\\texttt{-Instruct}\\($8.0\text{B}, d{=}4096$)}}
- & Frozen Base & $0.2610 \pm 0.0099$ & $+0.0000$ & $35.32$ & $+0.2139$ & $0.2683 \pm 0.0226$ & $+0.0000$ & $36.67$ & $+0.1167$ \\
- & AREW / T3 & $0.2744 \pm 0.0141$ & $+0.0134$ & $37.30$ & $+0.2333$ & $0.2933 \pm 0.0326$ & $+0.0249$ & $40.37$ & $+0.1167$ \\
- & GiGPO & $0.3148 \pm 0.0338$ & $+0.0538$ & $43.25$ & $+0.2819$ & $0.3189 \pm 0.0350$ & $+0.0506$ & $44.07$ & $+0.1458$ \\
- & WorldEvolver & $0.3688 \pm 0.0123$ & $+0.1078$ & $51.19$ & $+0.3694$ & $0.4441 \pm 0.0253$ & $+0.1757$ & $62.59$ & $+0.3208$ \\
- & InfoPO & $0.3838 \pm 0.0232$ & $+0.1227$ & $53.37$ & $+0.3500$ & $0.4127 \pm 0.0517$ & $+0.1444$ & $57.78$ & $+0.2486$ \\
- & PoS+EnvProbe & $0.5112 \pm 0.0021$ & $+0.2501$ & $72.42$ & $+0.4083$ & $0.5067 \pm 0.0044$ & $+0.2384$ & $72.22$ & $+0.4142$ \\
- & Step-DPO & $0.5782 \pm 0.0725$ & $+0.3171$ & $82.34$ & $+0.5153$ & $0.5567 \pm 0.0680$ & $+0.2883$ & $79.26$ & $+0.3746$ \\
- & Ablation-Unweighted & $0.6258 \pm 0.0663$ & $+0.3647$ & $96.23$ & $+0.4536$ & $0.6197 \pm 0.0442$ & $+0.3514$ & $95.19$ & $+0.2806$ \\
- & \textbf{\prism{} (Ours)} & $\mathbf{0.6592 \pm 0.0495}$ & $\mathbf{+0.3982}$ & $\mathbf{96.63}$ & $\mathbf{+0.5453}$ & $\mathbf{0.6507 \pm 0.0386}$ & $\mathbf{+0.3824}$ & $\mathbf{95.93}$ & $\mathbf{+0.3962}$ \\
-\bottomrule
-\end{tabular}
-\caption{Main performance comparison on held-out test sets across two open-weight LLM backbones ($3$ seeds, Mean $\pm$ Std). $\E[\UB]$ denotes normalized success-over-time utility, $\Devo$ denotes self-evolution gain over Frozen Base, $\E[Y]$ is native terminal verification success rate, and $\Duse$ measures development-set masked-feedback utilization.}
-\label{tab:main_results}
-\end{table*}
+\input{tables/main_results}
 
 % ============================================================================
 % SECTION 5: RESULTS AND DIAGNOSTIC ANALYSIS (Target: ~2.0 pages)
@@ -321,26 +288,7 @@ where $U_{\mathrm{visible}}$ retains the true payload of $q$ in $h_{T+1}$, where
 
 \subsection{Exact Rational Enumeration and Variance Verification (RQ3)}
 \label{subsec:rq3_exact}
-\begin{table}[t]
-\centering
-\small
-\setlength{\tabcolsep}{4.5pt}
-\begin{tabular}{lcc}
-\toprule
-\textbf{Diagnostic Metric ($p=0.4$)} & \textbf{Two-Sample RLOO} & \textbf{\prism{}} \\
-\midrule
-Expected Objective $J(\theta_0)$ & $58/125 = 0.4640$ & $58/125 = 0.4640$ \\
-Analytical $\nabla_\theta J(\theta_0)$ Bias & $0.0000$ & $\mathbf{0.0000}$ \\
-Root-Gate Variance Diff.\ & Baseline & $\mathbf{-0.0164736}$ \\
-Total Gradient Variance $\sum_i \Var(\widehat{g}_i)$ & $0.0711904$ & $\mathbf{0.0395168}$ ($-44.5\%$) \\
-Expected Pair Cost $\E[C]/B$ & $0.4800$ & $0.5000$ \\
-Variance $\times$ Cost Product & $0.0341714\,B$ & $\mathbf{0.0197584\,B}$ ($-42.2\%$) \\
-Cold-Start Miss Rate ($p{=}0.02$) & $96.04\%$ & $\mathbf{0.00\%}$ \\
-\bottomrule
-\end{tabular}
-\caption{Exact rational enumeration verification of Theorem~\ref{thm:unbiased} and Theorem~\ref{thm:variance} on the canonical two-stage partially observable benchmark.}
-\label{tab:exact_verification}
-\end{table}
+\input{tables/exact_verification}
 
 \subsection{Evolution of Feedback Utilization $\Duse$ and Failure Recovery (RQ4)}
 \label{subsec:rq4_duse}

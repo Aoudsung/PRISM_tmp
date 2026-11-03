@@ -1,0 +1,24 @@
+\begin{table}[t]
+\centering
+\begingroup
+\fontsize{8}{9.5}\selectfont
+\setlength{\tabcolsep}{2.5pt}
+\renewcommand{\arraystretch}{1.16}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.38\columnwidth}>{\centering\arraybackslash}p{0.25\columnwidth}>{\columncolor{ResultHighlight}\centering\arraybackslash}p{0.29\columnwidth}@{}}
+\toprule
+\rowcolor{ResultHeader}
+\textbf{Diagnostic metric}\newline($p=0.4$) & \textbf{Two-sample}\newline\textbf{RLOO} & \textbf{\prism{}} \\
+\midrule
+Expected objective $J(\theta_0)$ & \begin{tabular}[t]{@{}c@{}}$58/125$\\$=0.4640$\end{tabular} & \begin{tabular}[t]{@{}c@{}}$58/125$\\$=0.4640$\end{tabular} \\
+Analytical $\nabla_\theta J(\theta_0)$ bias & $0.0000$ & $\mathbf{0.0000}$ \\
+Root-gate variance diff. & Baseline & $\mathbf{-0.0164736}$ \\
+Total gradient variance $\sum_i\Var(\widehat{g}_i)$ & $0.0711904$ & \begin{tabular}[t]{@{}c@{}}$\mathbf{0.0395168}$\\($-44.5\%$)\end{tabular} \\
+Expected pair cost $\E[C]/B$ & $0.4800$ & $0.5000$ \\
+Variance $\times$ cost product & $0.0341714\,B$ & \begin{tabular}[t]{@{}c@{}}$\mathbf{0.0197584\,B}$\\($-42.2\%$)\end{tabular} \\
+Cold-start miss rate ($p=0.02$) & $96.04\%$ & $\mathbf{0.00\%}$ \\
+\bottomrule
+\end{tabular}
+\endgroup
+\caption{Exact rational enumeration verification of Theorem~\ref{thm:unbiased} and Theorem~\ref{thm:variance} on the canonical two-stage partially observable benchmark.}
+\label{tab:exact_verification}
+\end{table}
