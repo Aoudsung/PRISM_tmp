@@ -93,72 +93,81 @@ def _is_zero_loss(index, stages, benchmark, method):
                for v in index[(model, benchmark, method, stage)])
 
 
-def _loss_page(index, stages, benchmark, methods, page, out_dir, zero_methods=None):
-    rows = len(methods)
-    has_zero = bool(zero_methods)
-    fig_h = 3.65 if has_zero else (1.08 + .90 * rows)
-    fig, axes = plt.subplots(rows, 3, figsize=(7.6, fig_h), squeeze=False, sharex=True)
-    fig.subplots_adjust(left=.10, right=.99, bottom=.33 if has_zero else .14,
-                        top=.86 if has_zero else .85, wspace=.23, hspace=.42)
-    for row, method in enumerate(methods):
+def _loss_overview(index, stages, benchmark, methods, out_dir, zero_methods=None):
+    fig, axes = plt.subplots(3, 4, figsize=(7.6, 4.6), sharex=True)
+    fig.subplots_adjust(left=.085, right=.985, bottom=.12, top=.87,
+                        wspace=.55, hspace=.62)
+    model_styles = [
+        {"marker": "o", "ls": "-"},
+        {"marker": "s", "ls": "--"},
+        {"marker": "D", "ls": "-."},
+    ]
+    offsets = [-.045, 0, .045]
+    statistics = []
+    for panel, (ax, method) in enumerate(zip(axes.flat, methods)):
+        color = _loss_style(method)["color"]
         bounds = []
-        style = _loss_style(method)
-        for col, model in enumerate(MODEL_IDS):
-            ax = axes[row, col]
+        for model, model_style, offset in zip(MODEL_IDS, model_styles, offsets):
             avg, sd = _stats(index, stages, model, benchmark, method, "mean_loss")
             bounds.extend([float((avg-sd).min()), float((avg+sd).max())])
-            ax.fill_between(stages, avg-sd, avg+sd, color=style["color"], alpha=.12, linewidth=0)
-            ax.plot(stages, avg, ms=3.2, markeredgecolor="white", markeredgewidth=.3, **style)
-            if row == 0:
-                ax.set_title(f"({chr(97+col)}) {MODEL_LABELS[model]}", pad=6)
-            ax.set_xticks(stages)
-            ax.set_xlim(stages[0]-.12, stages[-1]+.12)
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=3))
-            ax.yaxis.set_major_formatter(FormatStrFormatter("%.2g"))
-            ax.tick_params(labelsize=7, pad=2)
-            ax.grid(axis="y")
-            if col == 0:
-                ax.set_ylabel(f"{METHOD_LABELS[method]}\nLoss")
-            else:
-                ax.tick_params(labelleft=False)
-            if row == rows-1:
-                ax.set_xlabel("Training stage")
+            # Fixed offsets within each categorical stage keep intervals distinguishable.
+            x = np.asarray(stages, dtype=float) + offset
+            ax.errorbar(x, avg, yerr=sd, fmt="none", ecolor=color, alpha=.42,
+                        elinewidth=.6, capsize=1.35, capthick=.6, zorder=1)
+            ax.plot(x, avg, color=color, lw=1.3, ms=3.4,
+                    markerfacecolor="white" if model_style["marker"] == "s" else color,
+                    markeredgecolor=color, markeredgewidth=.55, zorder=3, **model_style)
+            statistics.extend({"model": model, "method": method, "stage_k": int(k),
+                               "mean": float(mean), "std": float(std)}
+                              for k, mean, std in zip(stages, avg, sd))
         pad = max((max(bounds)-min(bounds))*.09, abs(max(bounds))*.045, .001)
-        for ax in axes[row]:
-            ax.set_ylim(min(bounds)-pad, max(bounds)+pad)
-    if has_zero:
-        ax_z = fig.add_axes([.10, .02, .89, .20])
-        ax_z.axis("off")
-        ax_z.set_xlim(0, 1)
-        ax_z.set_ylim(0, 1)
-        ax_z.text(.0, .96, f"Recorded zero-loss methods across stages {stages[0]}–{stages[-1]} (mean ± SD)",
-                  fontsize=7.1, fontweight="bold", va="top", color=COLORS["ink"])
-        ax_z.plot([.0, 1.0], [.78, .78], lw=.6, color=COLORS["ink"])
-        ax_z.text(.01, .66, "Method", ha="left", va="center", fontsize=6.7, fontweight="bold")
-        model_xs = [.36, .63, .90]
-        for x, model in zip(model_xs, MODEL_IDS):
-            ax_z.text(x, .66, MODEL_LABELS[model], ha="center", va="center", fontsize=6.7, fontweight="bold")
-        ax_z.plot([.0, 1.0], [.54, .54], lw=.45, color=COLORS["ink"])
-        for y, zm in zip(np.linspace(.41, .11, len(zero_methods)), zero_methods):
-            ax_z.text(.01, y, METHOD_LABELS[zm], ha="left", va="center", fontsize=6.6, color=COLORS["ink"])
-            for x, model in zip(model_xs, MODEL_IDS):
-                avg, sd = _stats(index, stages, model, benchmark, zm, "mean_loss")
+        ax.set_ylim(min(bounds)-pad, max(bounds)+pad)
+        ax.set_title(f"({chr(97+panel)}) {METHOD_LABELS[method]}", pad=6)
+        ax.set_xticks(stages)
+        ax.set_xlim(stages[0]-.16, stages[-1]+.16)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=3))
+        ax.yaxis.set_major_formatter(FormatStrFormatter("%.2g"))
+        ax.tick_params(labelsize=7, pad=2)
+        ax.grid(axis="y")
+        ax.tick_params(labelbottom=True)
+    for ax in list(axes.flat)[len(methods):]:
+        ax.axis("off")
+    if zero_methods:
+        ax = axes.flat[-1]
+        ax.set_title("(l) Zero-loss methods", pad=6)
+        ax.text(.02, .85, "Method", transform=ax.transAxes, fontsize=6.5, fontweight="bold")
+        ax.text(.98, .85, "All models", transform=ax.transAxes, fontsize=6.5,
+                fontweight="bold", ha="right")
+        ax.plot([.02, .98], [.77, .77], transform=ax.transAxes, color="#94A3B8", lw=.5)
+        for y, method in zip([.61, .40, .19], zero_methods):
+            for model in MODEL_IDS:
+                avg, sd = _stats(index, stages, model, benchmark, method, "mean_loss")
                 assert np.all(avg == 0) and np.all(sd == 0)
-                ax_z.text(x, y, "0.0000 ± 0.0000", ha="center", va="center", fontsize=6.5, color="#475569")
-        ax_z.plot([.0, 1.0], [.01, .01], lw=.6, color=COLORS["ink"])
-    fig.text(.10, .98, BENCH_LABELS[benchmark], fontsize=8.4, fontweight="bold", va="top")
-    lead_color = _loss_style(methods[-1])["color"]
-    handles = [Line2D([], [], color=lead_color, marker="o", lw=1.35, ms=3.2, label="Mean (3 seeds)"),
-               Patch(facecolor=lead_color, alpha=.16, edgecolor="none", label="± SD")]
-    fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(.995, 1.015), ncol=2,
-               fontsize=7.2, handletextpad=.4, columnspacing=1.2)
+            ax.text(.02, y, METHOD_LABELS[method], transform=ax.transAxes, fontsize=6.5)
+            ax.text(.98, y, "0 ± 0", transform=ax.transAxes, fontsize=6.8, ha="right")
+    fig.text(.085, .985, BENCH_LABELS[benchmark], fontsize=8.4, fontweight="bold", va="top")
+    handles = [Line2D([], [], color="#334155", lw=1.3, ms=3.4,
+                      markerfacecolor="white" if style["marker"] == "s" else "#334155",
+                      label=MODEL_LABELS[model], **style)
+               for model, style in zip(MODEL_IDS, model_styles)]
+    handles.append(Line2D([], [], color="#64748B", ls="", marker="|", ms=6, label="± SD"))
+    fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(.995, 1.005), ncol=4,
+               fontsize=7.1, handletextpad=.4, columnspacing=1.1)
+    fig.supxlabel("Training stage", y=.025, fontsize=7.8)
+    fig.supylabel("Recorded training loss", x=.008, fontsize=7.8)
     prefix = "supp_02_appworld_losses" if benchmark == "appworld" else "supp_03_planbench_losses"
-    extra_title = f" + zero-loss methods ({', '.join(METHOD_LABELS[m] for m in zero_methods)})" if has_zero else ""
-    extra_note = " Non-updating / search-only methods with identically zero recorded loss across all stages and seeds are tabulated at the bottom." if has_zero else ""
-    return save_figure(fig, out_dir, f"{prefix}_methods_{page:02d}",
-        f"Training | {BENCH_LABELS[benchmark]} loss | {', '.join(METHOD_LABELS[m] for m in methods)}{extra_title}",
-        f"Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.{extra_note}",
+    record = save_figure(fig, out_dir, f"{prefix}_combined",
+        f"Training | {BENCH_LABELS[benchmark]} losses across three models",
+        "One panel per nonzero-loss method; each panel retains the original loss units and a shared scale "
+        "for its three models. Points are three-seed means; thin intervals are sample SD. Models use "
+        "fixed line styles and circle/square/diamond markers; color retains method identity. "
+        "Stages have horizontal offsets -0.045/0/+0.045 solely to separate markers and intervals. "
+        "The final cell preserves methods whose recorded losses are zero for all models, stages and seeds.",
         ["training_progress"])
+    record.update(panel_count=len(methods), curve_count=len(methods)*len(MODEL_IDS),
+                  mean_point_count=len(statistics), loss_statistics=statistics,
+                  zero_loss_methods=list(zero_methods or []))
+    return record
 
 
 def _ledger_index(metrics):
@@ -310,12 +319,8 @@ def build(metrics, comparisons, out_dir):
     for benchmark in BENCHMARKS:
         zero_methods[benchmark] = [m for m in METHODS if _is_zero_loss(index, stages, benchmark, m)]
         methods = [m for m in METHODS if m not in zero_methods[benchmark]]
-        for start in range(0, len(methods), 3):
-            is_last = (start + 3) >= len(methods)
-            records.append(_loss_page(
-                index, stages, benchmark, methods[start:start+3], start//3 + 1, out_dir,
-                zero_methods=zero_methods[benchmark] if is_last else None,
-            ))
+        records.append(_loss_overview(index, stages, benchmark, methods, out_dir,
+                                      zero_methods=zero_methods[benchmark]))
     for benchmark in BENCHMARKS:
         records.append(_resource_table_combined(metrics, benchmark, out_dir))
     records.append(_resource_counts(metrics, out_dir))

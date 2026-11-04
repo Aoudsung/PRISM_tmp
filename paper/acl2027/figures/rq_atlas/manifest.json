@@ -1,6 +1,6 @@
 {
-  "backup_tag": "backup/acl-approved-style-20261104",
-  "figure_count": 45,
+  "backup_tag": "backup/acl-loss-pages-final-20261104",
+  "figure_count": 29,
   "style_reference": "paper/acl2027/figures/reference_guided/rq5_budget_response_example.png",
   "in_figure_explanatory_footers": false,
   "source_files": [
@@ -9,21 +9,11 @@
   ],
   "figures": [
     {
-      "stem": "rq1_01_test_utility_full",
-      "title": "RQ1 | Test utility",
-      "note": "Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold and second-best underlined.",
-      "pdf": "rq1_01_test_utility_full.pdf",
-      "png": "rq1_01_test_utility_full.png",
-      "source_groups": [
-        "metrics/main_results"
-      ]
-    },
-    {
-      "stem": "rq1_02_test_success_full",
-      "title": "RQ1 | Test success (%)",
-      "note": "Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold and second-best underlined.",
-      "pdf": "rq1_02_test_success_full.pdf",
-      "png": "rq1_02_test_success_full.png",
+      "stem": "rq1_01_test_results_full",
+      "title": "RQ1 | Test utility and success (%)",
+      "note": "Complete 14-method table with three-seed means and sample SD for both test utility and success rate. Model blocks each contain AppWorld and PlanBench-XL; best means are bold and second-best underlined.",
+      "pdf": "rq1_01_test_results_full.pdf",
+      "png": "rq1_01_test_results_full.png",
       "source_groups": [
         "metrics/main_results"
       ]
@@ -142,41 +132,21 @@
       ]
     },
     {
-      "stem": "rq4_01_stage_values_appworld_0_1",
-      "title": "RQ4 | AppWorld complete stages (0, 1)",
-      "note": "Mean +/- sample SD over three seeds. Column maxima are bold where values differ.",
-      "pdf": "rq4_01_stage_values_appworld_0_1.pdf",
-      "png": "rq4_01_stage_values_appworld_0_1.png",
+      "stem": "rq4_01_stage_values_appworld",
+      "title": "RQ4 | AppWorld complete stage values (Stages 0–3)",
+      "note": "Mean +/- sample SD over three seeds across all four training stages (0–3). Column maxima are bold where values differ.",
+      "pdf": "rq4_01_stage_values_appworld.pdf",
+      "png": "rq4_01_stage_values_appworld.png",
       "source_groups": [
         "metrics.stage_results"
       ]
     },
     {
-      "stem": "rq4_01_stage_values_appworld_2_3",
-      "title": "RQ4 | AppWorld complete stages (2, 3)",
-      "note": "Mean +/- sample SD over three seeds. Column maxima are bold where values differ.",
-      "pdf": "rq4_01_stage_values_appworld_2_3.pdf",
-      "png": "rq4_01_stage_values_appworld_2_3.png",
-      "source_groups": [
-        "metrics.stage_results"
-      ]
-    },
-    {
-      "stem": "rq4_01_stage_values_planbench_xl_0_1",
-      "title": "RQ4 | PlanBench-XL complete stages (0, 1)",
-      "note": "Mean +/- sample SD over three seeds. Column maxima are bold where values differ.",
-      "pdf": "rq4_01_stage_values_planbench_xl_0_1.pdf",
-      "png": "rq4_01_stage_values_planbench_xl_0_1.png",
-      "source_groups": [
-        "metrics.stage_results"
-      ]
-    },
-    {
-      "stem": "rq4_01_stage_values_planbench_xl_2_3",
-      "title": "RQ4 | PlanBench-XL complete stages (2, 3)",
-      "note": "Mean +/- sample SD over three seeds. Column maxima are bold where values differ.",
-      "pdf": "rq4_01_stage_values_planbench_xl_2_3.pdf",
-      "png": "rq4_01_stage_values_planbench_xl_2_3.png",
+      "stem": "rq4_01_stage_values_planbench_xl",
+      "title": "RQ4 | PlanBench-XL complete stage values (Stages 0–3)",
+      "note": "Mean +/- sample SD over three seeds across all four training stages (0–3). Column maxima are bold where values differ.",
+      "pdf": "rq4_01_stage_values_planbench_xl.pdf",
+      "png": "rq4_01_stage_values_planbench_xl.png",
       "source_groups": [
         "metrics.stage_results"
       ]
@@ -197,16 +167,6 @@
       "note": "Fixed 24-task diagnostic; points are means and whiskers sample SD over three seeds.",
       "pdf": "rq4_02_feedback_utilization_planbench_xl.pdf",
       "png": "rq4_02_feedback_utilization_planbench_xl.png",
-      "source_groups": [
-        "metrics.main_results.final_dev.delta_use"
-      ]
-    },
-    {
-      "stem": "rq4_02_feedback_values",
-      "title": "RQ4 | Complete feedback values",
-      "note": "Fixed 24-task diagnostic; mean +/- sample SD over three seeds. Highest means per column are bold.",
-      "pdf": "rq4_02_feedback_values.pdf",
-      "png": "rq4_02_feedback_values.png",
       "source_groups": [
         "metrics.main_results.final_dev.delta_use"
       ]
@@ -242,12 +202,13 @@
       ]
     },
     {
-      "stem": "rq4_04_conditional_recovery",
-      "title": "RQ4 | Conditional recovery counts",
-      "note": "Recovered successes / evaluations with recorded failure; highest pooled conditional rates are bold.",
-      "pdf": "rq4_04_conditional_recovery.pdf",
-      "png": "rq4_04_conditional_recovery.png",
+      "stem": "rq4_04_feedback_and_recovery_values",
+      "title": "RQ4 | Complete feedback utilization and conditional recovery",
+      "note": "Panel (a): fixed 24-task diagnostic mean +/- sample SD over three seeds. Panel (b): recovered successes / evaluations with recorded failure and pooled rates. Column maxima are bold.",
+      "pdf": "rq4_04_feedback_and_recovery_values.pdf",
+      "png": "rq4_04_feedback_and_recovery_values.png",
       "source_groups": [
+        "metrics.main_results.final_dev.delta_use",
         "comparisons.trajectory_outcomes"
       ]
     },
@@ -262,21 +223,11 @@
       ]
     },
     {
-      "stem": "rq5_02_budget_values_utility",
-      "title": "RQ5 | Complete budget utility values",
-      "note": "All 14 methods and three budgets; three-seed means. Highest values per column are bold.",
-      "pdf": "rq5_02_budget_values_utility.pdf",
-      "png": "rq5_02_budget_values_utility.png",
-      "source_groups": [
-        "metrics.budgets"
-      ]
-    },
-    {
-      "stem": "rq5_02_budget_values_success",
-      "title": "RQ5 | Complete budget success values",
-      "note": "All 14 methods and three budgets; three-seed means. Highest values per column are bold.",
-      "pdf": "rq5_02_budget_values_success.pdf",
-      "png": "rq5_02_budget_values_success.png",
+      "stem": "rq5_02_budget_values_full",
+      "title": "RQ5 | Complete budget utility and success values",
+      "note": "All 14 methods and three budgets on AppWorld; three-seed means for both utility and success rate (%). Highest values per column are bold.",
+      "pdf": "rq5_02_budget_values_full.pdf",
+      "png": "rq5_02_budget_values_full.png",
       "source_groups": [
         "metrics.budgets"
       ]
@@ -302,156 +253,1448 @@
       ]
     },
     {
-      "stem": "supp_02_appworld_losses_methods_01",
-      "title": "Training | AppWorld loss | AREW / T3, GiGPO, InfoPO",
-      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
-      "pdf": "supp_02_appworld_losses_methods_01.pdf",
-      "png": "supp_02_appworld_losses_methods_01.png",
+      "stem": "supp_02_appworld_losses_combined",
+      "title": "Training | AppWorld losses across three models",
+      "note": "One panel per nonzero-loss method; each panel retains the original loss units and a shared scale for its three models. Points are three-seed means; thin intervals are sample SD. Models use fixed line styles and circle/square/diamond markers; color retains method identity. Stages have horizontal offsets -0.045/0/+0.045 solely to separate markers and intervals. The final cell preserves methods whose recorded losses are zero for all models, stages and seeds.",
+      "pdf": "supp_02_appworld_losses_combined.pdf",
+      "png": "supp_02_appworld_losses_combined.png",
       "source_groups": [
         "training_progress"
+      ],
+      "panel_count": 11,
+      "curve_count": 33,
+      "mean_point_count": 99,
+      "loss_statistics": [
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "arew",
+          "stage_k": 1,
+          "mean": -0.5137384057044982,
+          "std": 0.0718867978275458
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "arew",
+          "stage_k": 2,
+          "mean": -0.39118437605599565,
+          "std": 0.10533477578035808
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "arew",
+          "stage_k": 3,
+          "mean": -0.36211270540952684,
+          "std": 0.07917006644435236
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "arew",
+          "stage_k": 1,
+          "mean": -0.4558183193206787,
+          "std": 0.06383015120306405
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "arew",
+          "stage_k": 2,
+          "mean": -0.358385449151198,
+          "std": 0.11084628044599089
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "arew",
+          "stage_k": 3,
+          "mean": -0.39157450099786123,
+          "std": 0.06910166079762234
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "arew",
+          "stage_k": 1,
+          "mean": -0.4674258331457774,
+          "std": 0.13962336398388395
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "arew",
+          "stage_k": 2,
+          "mean": -0.41288340737422313,
+          "std": 0.16716484719723426
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "arew",
+          "stage_k": 3,
+          "mean": -0.49217137098312375,
+          "std": 0.02407317214970072
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "gigpo",
+          "stage_k": 1,
+          "mean": -0.3007981071869532,
+          "std": 0.01793860322474414
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "gigpo",
+          "stage_k": 2,
+          "mean": -0.24382103035847347,
+          "std": 0.0204735465522038
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "gigpo",
+          "stage_k": 3,
+          "mean": -0.29429211368163427,
+          "std": 0.09283532321403704
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "gigpo",
+          "stage_k": 1,
+          "mean": -0.3116158862908681,
+          "std": 0.012025881262428352
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "gigpo",
+          "stage_k": 2,
+          "mean": -0.22907745912671093,
+          "std": 0.015592100149910944
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "gigpo",
+          "stage_k": 3,
+          "mean": -0.3008057728409767,
+          "std": 0.08118388890615887
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "gigpo",
+          "stage_k": 1,
+          "mean": -0.2606318003187577,
+          "std": 0.043028863509854666
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "gigpo",
+          "stage_k": 2,
+          "mean": -0.22019574890534085,
+          "std": 0.06218834577512847
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "gigpo",
+          "stage_k": 3,
+          "mean": -0.27305457293987273,
+          "std": 0.03043292186510462
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "infopo",
+          "stage_k": 1,
+          "mean": -0.297779193520546,
+          "std": 0.02581187355303167
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "infopo",
+          "stage_k": 2,
+          "mean": -0.2619767501950264,
+          "std": 0.05569549660633777
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "infopo",
+          "stage_k": 3,
+          "mean": -0.27498072385787964,
+          "std": 0.00550706059211702
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "infopo",
+          "stage_k": 1,
+          "mean": -0.31306103865305585,
+          "std": 0.039849074203359966
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "infopo",
+          "stage_k": 2,
+          "mean": -0.22609097162882485,
+          "std": 0.05411903629438915
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "infopo",
+          "stage_k": 3,
+          "mean": -0.25244342039028805,
+          "std": 0.05329114643726827
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "infopo",
+          "stage_k": 1,
+          "mean": -0.26746203228831295,
+          "std": 0.08754590313774999
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "infopo",
+          "stage_k": 2,
+          "mean": -0.25066404001166426,
+          "std": 0.053154163554417086
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "infopo",
+          "stage_k": 3,
+          "mean": -0.2581566199660301,
+          "std": 0.026735602527662553
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 1,
+          "mean": 0.2621559018890063,
+          "std": 0.07392827639175603
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 2,
+          "mean": 0.23961532413959505,
+          "std": 0.03084532633698929
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 3,
+          "mean": 0.2367348114649455,
+          "std": 0.039671602541505986
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 1,
+          "mean": 0.24883461097876233,
+          "std": 0.06937260480279629
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 2,
+          "mean": 0.22651160086194674,
+          "std": 0.0407375527867403
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 3,
+          "mean": 0.21747128119071327,
+          "std": 0.036273200714046834
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "step_dpo",
+          "stage_k": 1,
+          "mean": 0.20709392502903937,
+          "std": 0.0588382760444502
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "step_dpo",
+          "stage_k": 2,
+          "mean": 0.1872226521372795,
+          "std": 0.03493692729018578
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "step_dpo",
+          "stage_k": 3,
+          "mean": 0.1473135686130263,
+          "std": 0.040810600940898986
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 1,
+          "mean": -0.4155429209272066,
+          "std": 0.061743071685824165
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 2,
+          "mean": -0.2505426907911897,
+          "std": 0.12529737508205857
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 3,
+          "mean": -0.2866948932409286,
+          "std": 0.12914950711861575
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 1,
+          "mean": -0.34366390605767566,
+          "std": 0.05036245267214206
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 2,
+          "mean": -0.23844856408735116,
+          "std": 0.12431937524578034
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 3,
+          "mean": -0.32774414246280986,
+          "std": 0.05654134605585813
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_pg",
+          "stage_k": 1,
+          "mean": -0.3000345695298165,
+          "std": 0.142914177745711
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_pg",
+          "stage_k": 2,
+          "mean": -0.26208366304636005,
+          "std": 0.13807221362786537
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_pg",
+          "stage_k": 3,
+          "mean": -0.2930907468001048,
+          "std": 0.028131627364150792
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 1,
+          "mean": -0.2861641995608806,
+          "std": 0.01380345137532313
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 2,
+          "mean": -0.1558788084735473,
+          "std": 0.09067705163616635
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 3,
+          "mean": -0.22161128409206868,
+          "std": 0.10337489055718416
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 1,
+          "mean": -0.21903676999111968,
+          "std": 0.0506476907592398
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 2,
+          "mean": -0.1481503446896871,
+          "std": 0.08192778709104884
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 3,
+          "mean": -0.23207779886821908,
+          "std": 0.08974549024402909
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_value_baseline",
+          "stage_k": 1,
+          "mean": -0.18625470896561938,
+          "std": 0.078162307862154
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_value_baseline",
+          "stage_k": 2,
+          "mean": -0.1309508241713047,
+          "std": 0.10140091366024047
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_value_baseline",
+          "stage_k": 3,
+          "mean": -0.23819269500672816,
+          "std": 0.009769001351958214
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 1,
+          "mean": -0.37628462444990873,
+          "std": 0.020102348676467378
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 2,
+          "mean": -0.2972805981834729,
+          "std": 0.014263971412971917
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 3,
+          "mean": -0.35863967513044676,
+          "std": 0.12371206043516646
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 1,
+          "mean": -0.3767373740673065,
+          "std": 0.016326382631925433
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 2,
+          "mean": -0.3099129170179367,
+          "std": 0.027467626912267982
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 3,
+          "mean": -0.3741884802778562,
+          "std": 0.060542032158226414
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_rloo",
+          "stage_k": 1,
+          "mean": -0.3079328232444823,
+          "std": 0.06596659934507897
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_rloo",
+          "stage_k": 2,
+          "mean": -0.2791079406936963,
+          "std": 0.06027401620227632
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_rloo",
+          "stage_k": 3,
+          "mean": -0.3207730193932851,
+          "std": 0.04851258073469759
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 1,
+          "mean": -0.3437234049042066,
+          "std": 0.062473840398888834
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 2,
+          "mean": -0.20457453181346255,
+          "std": 0.15754023948342522
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 3,
+          "mean": -0.20274819309512773,
+          "std": 0.058920118877886285
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 1,
+          "mean": -0.24654068872332577,
+          "std": 0.0982305242242217
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 2,
+          "mean": -0.2369524046778679,
+          "std": 0.1106543189007963
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 3,
+          "mean": -0.2206425437082847,
+          "std": 0.07555784506643429
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "info_rl_neighbor",
+          "stage_k": 1,
+          "mean": -0.3089480533575018,
+          "std": 0.10826521641749312
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "info_rl_neighbor",
+          "stage_k": 2,
+          "mean": -0.17457915470004082,
+          "std": 0.13825623886456592
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "info_rl_neighbor",
+          "stage_k": 3,
+          "mean": -0.20984575847784678,
+          "std": 0.031083570605942263
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 1,
+          "mean": -0.34413843651612597,
+          "std": 0.03574748274553542
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 2,
+          "mean": -0.26749869038661317,
+          "std": 0.09916224416657428
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 3,
+          "mean": -0.33448507140080136,
+          "std": 0.1405264244902201
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 1,
+          "mean": -0.343984022239844,
+          "std": 0.025647782890074824
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 2,
+          "mean": -0.27363824397325515,
+          "std": 0.09550797806621843
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 3,
+          "mean": -0.36567926903565723,
+          "std": 0.15005988695039768
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "unstratified_2branch",
+          "stage_k": 1,
+          "mean": -0.32543043519059817,
+          "std": 0.019005235763306885
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "unstratified_2branch",
+          "stage_k": 2,
+          "mean": -0.29909504068394505,
+          "std": 0.06103125661763534
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "unstratified_2branch",
+          "stage_k": 3,
+          "mean": -0.3377883831659953,
+          "std": 0.04452264815446183
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 1,
+          "mean": -1.217227296034495,
+          "std": 0.16017570063710868
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 2,
+          "mean": -0.9495007753372192,
+          "std": 0.1898693117430521
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 3,
+          "mean": -0.9555627991755804,
+          "std": 0.26919098173423883
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 1,
+          "mean": -1.2133034507433573,
+          "std": 0.16669320066532733
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 2,
+          "mean": -0.9621155500411988,
+          "std": 0.23697248897292417
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 3,
+          "mean": -0.9862950056791305,
+          "std": 0.2955652537545947
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "ablation_unweighted",
+          "stage_k": 1,
+          "mean": -1.0805055300394695,
+          "std": 0.17189793775984874
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "ablation_unweighted",
+          "stage_k": 2,
+          "mean": -0.8721769034862518,
+          "std": 0.28915330504797093
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "ablation_unweighted",
+          "stage_k": 3,
+          "mean": -0.7657605767250061,
+          "std": 0.12882245731144532
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 1,
+          "mean": -1.792187817891439,
+          "std": 0.2124838372525892
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 2,
+          "mean": -1.3245854775110881,
+          "std": 0.2133997663514165
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 3,
+          "mean": -0.916230861345927,
+          "std": 0.021434948123207336
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 1,
+          "mean": -1.7259677012761434,
+          "std": 0.19680862186031906
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 2,
+          "mean": -1.232380787531535,
+          "std": 0.20894563631680688
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 3,
+          "mean": -0.8061817526817322,
+          "std": 0.051155886540541866
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "prism_evolve",
+          "stage_k": 1,
+          "mean": -1.3913068016370138,
+          "std": 0.20251400627198166
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "prism_evolve",
+          "stage_k": 2,
+          "mean": -0.8876701633135479,
+          "std": 0.20515472655613218
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "prism_evolve",
+          "stage_k": 3,
+          "mean": -0.5050283193588258,
+          "std": 0.04683518550957938
+        }
+      ],
+      "zero_loss_methods": [
+        "frozen_base",
+        "worldevolver",
+        "pos_envprobe"
       ]
     },
     {
-      "stem": "supp_02_appworld_losses_methods_02",
-      "title": "Training | AppWorld loss | Step-DPO, Outcome-PG, Outcome-Value",
-      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
-      "pdf": "supp_02_appworld_losses_methods_02.pdf",
-      "png": "supp_02_appworld_losses_methods_02.png",
+      "stem": "supp_03_planbench_losses_combined",
+      "title": "Training | PlanBench-XL losses across three models",
+      "note": "One panel per nonzero-loss method; each panel retains the original loss units and a shared scale for its three models. Points are three-seed means; thin intervals are sample SD. Models use fixed line styles and circle/square/diamond markers; color retains method identity. Stages have horizontal offsets -0.045/0/+0.045 solely to separate markers and intervals. The final cell preserves methods whose recorded losses are zero for all models, stages and seeds.",
+      "pdf": "supp_03_planbench_losses_combined.pdf",
+      "png": "supp_03_planbench_losses_combined.png",
       "source_groups": [
         "training_progress"
+      ],
+      "panel_count": 11,
+      "curve_count": 33,
+      "mean_point_count": 99,
+      "loss_statistics": [
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "arew",
+          "stage_k": 1,
+          "mean": -0.31701966002583504,
+          "std": 0.11526873462890204
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "arew",
+          "stage_k": 2,
+          "mean": -0.3462566728393237,
+          "std": 0.05055871720153595
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "arew",
+          "stage_k": 3,
+          "mean": -0.34349817071730887,
+          "std": 0.026499111858619112
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "arew",
+          "stage_k": 1,
+          "mean": -0.3242945988972982,
+          "std": 0.11810408975094425
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "arew",
+          "stage_k": 2,
+          "mean": -0.3797343283891678,
+          "std": 0.037888405917772885
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "arew",
+          "stage_k": 3,
+          "mean": -0.37718676924705513,
+          "std": 0.09219536344235911
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "arew",
+          "stage_k": 1,
+          "mean": -0.4354852994283041,
+          "std": 0.11371946701424539
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "arew",
+          "stage_k": 2,
+          "mean": -0.41567462583382925,
+          "std": 0.07551531939386352
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "arew",
+          "stage_k": 3,
+          "mean": -0.4054133872191111,
+          "std": 0.04164595788063575
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "gigpo",
+          "stage_k": 1,
+          "mean": -0.16528786638130744,
+          "std": 0.01474119783490583
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "gigpo",
+          "stage_k": 2,
+          "mean": -0.18273495766334236,
+          "std": 0.0163477541068887
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "gigpo",
+          "stage_k": 3,
+          "mean": -0.20383387009302775,
+          "std": 0.04628347878596409
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "gigpo",
+          "stage_k": 1,
+          "mean": -0.14329782963419954,
+          "std": 0.032479060745608496
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "gigpo",
+          "stage_k": 2,
+          "mean": -0.1969218835234642,
+          "std": 0.025980647523425056
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "gigpo",
+          "stage_k": 3,
+          "mean": -0.2106803228457769,
+          "std": 0.05502645868881698
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "gigpo",
+          "stage_k": 1,
+          "mean": -0.1403017947760721,
+          "std": 0.03677904054605144
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "gigpo",
+          "stage_k": 2,
+          "mean": -0.2054221010456483,
+          "std": 0.05248629189792631
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "gigpo",
+          "stage_k": 3,
+          "mean": -0.16636733238895735,
+          "std": 0.03685614600902561
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "infopo",
+          "stage_k": 1,
+          "mean": -0.15147242459158103,
+          "std": 0.011638640452441045
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "infopo",
+          "stage_k": 2,
+          "mean": -0.21715166792273521,
+          "std": 0.037454719888511935
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "infopo",
+          "stage_k": 3,
+          "mean": -0.16221805090705554,
+          "std": 0.007341526447503415
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "infopo",
+          "stage_k": 1,
+          "mean": -0.19516306246320406,
+          "std": 0.020885605974469958
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "infopo",
+          "stage_k": 2,
+          "mean": -0.19494228586554527,
+          "std": 0.024191558146456342
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "infopo",
+          "stage_k": 3,
+          "mean": -0.15375301626821358,
+          "std": 0.016495107051249455
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "infopo",
+          "stage_k": 1,
+          "mean": -0.159931913514932,
+          "std": 0.02639219766620221
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "infopo",
+          "stage_k": 2,
+          "mean": -0.18607848305255179,
+          "std": 0.055458327003534
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "infopo",
+          "stage_k": 3,
+          "mean": -0.1648647834857305,
+          "std": 0.035625025900103094
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 1,
+          "mean": 0.3682684501012166,
+          "std": 0.10659434223556327
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 2,
+          "mean": 0.2885079324245453,
+          "std": 0.037811635716201025
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 3,
+          "mean": 0.20309049785137176,
+          "std": 0.05429671978808895
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 1,
+          "mean": 0.3494144707918167,
+          "std": 0.1010068221985115
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 2,
+          "mean": 0.26664399007956185,
+          "std": 0.034394748578706245
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "step_dpo",
+          "stage_k": 3,
+          "mean": 0.18423042794068656,
+          "std": 0.05388033275535362
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "step_dpo",
+          "stage_k": 1,
+          "mean": 0.31044216205676395,
+          "std": 0.08021784924593028
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "step_dpo",
+          "stage_k": 2,
+          "mean": 0.22607382933298747,
+          "std": 0.04782616849447167
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "step_dpo",
+          "stage_k": 3,
+          "mean": 0.1352832507962982,
+          "std": 0.0670719344048399
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 1,
+          "mean": -0.15880679123899122,
+          "std": 0.09228944121257836
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 2,
+          "mean": -0.2127555345495542,
+          "std": 0.03605269788833435
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 3,
+          "mean": -0.2598531511922677,
+          "std": 0.07583193028584971
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 1,
+          "mean": -0.15313343331217766,
+          "std": 0.08710776997253533
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 2,
+          "mean": -0.22935186810791494,
+          "std": 0.017620046911836985
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_pg",
+          "stage_k": 3,
+          "mean": -0.24806402176618572,
+          "std": 0.09075514315801712
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_pg",
+          "stage_k": 1,
+          "mean": -0.23527661897242072,
+          "std": 0.1370112309466526
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_pg",
+          "stage_k": 2,
+          "mean": -0.2500850574423869,
+          "std": 0.1554854231063859
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_pg",
+          "stage_k": 3,
+          "mean": -0.1846071599982679,
+          "std": 0.05701174292965097
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 1,
+          "mean": -0.0587513480335474,
+          "std": 0.03516775628777314
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 2,
+          "mean": -0.12719701404372852,
+          "std": 0.01827528753970209
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 3,
+          "mean": -0.08182611968368292,
+          "std": 0.0601955843057613
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 1,
+          "mean": -0.053310515359044075,
+          "std": 0.04704023932713039
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 2,
+          "mean": -0.07968836935857931,
+          "std": 0.016256958288563054
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_value_baseline",
+          "stage_k": 3,
+          "mean": -0.10513185098146398,
+          "std": 0.08834727549409652
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_value_baseline",
+          "stage_k": 1,
+          "mean": -0.08912027602394422,
+          "std": 0.0815700190093133
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_value_baseline",
+          "stage_k": 2,
+          "mean": -0.1381183160886091,
+          "std": 0.12045571245936922
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_value_baseline",
+          "stage_k": 3,
+          "mean": -0.06455420451238751,
+          "std": 0.06039896361574871
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 1,
+          "mean": -0.20710158074895543,
+          "std": 0.014639792440830572
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 2,
+          "mean": -0.23546803204614355,
+          "std": 0.029578177800223558
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 3,
+          "mean": -0.26626737862825395,
+          "std": 0.0377387953370482
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 1,
+          "mean": -0.1711872826019923,
+          "std": 0.05174458903911986
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 2,
+          "mean": -0.24441541315366824,
+          "std": 0.033569414409417755
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "outcome_rloo",
+          "stage_k": 3,
+          "mean": -0.24125767449537916,
+          "std": 0.05633862999363822
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_rloo",
+          "stage_k": 1,
+          "mean": -0.15942980864395698,
+          "std": 0.03571322837723246
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_rloo",
+          "stage_k": 2,
+          "mean": -0.2599484701951345,
+          "std": 0.0795899095374314
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "outcome_rloo",
+          "stage_k": 3,
+          "mean": -0.19532976758976775,
+          "std": 0.0378690094392016
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 1,
+          "mean": -0.10814546775072813,
+          "std": 0.08019794764886852
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 2,
+          "mean": -0.14623073895151417,
+          "std": 0.005424432455660976
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 3,
+          "mean": -0.15367363647868237,
+          "std": 0.10360996077585052
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 1,
+          "mean": -0.1785322348276774,
+          "std": 0.12141618919350801
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 2,
+          "mean": -0.17350976256032782,
+          "std": 0.0641861534511278
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "info_rl_neighbor",
+          "stage_k": 3,
+          "mean": -0.14245575169722238,
+          "std": 0.07101272083106556
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "info_rl_neighbor",
+          "stage_k": 1,
+          "mean": -0.22626822363138974,
+          "std": 0.12149536591362041
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "info_rl_neighbor",
+          "stage_k": 2,
+          "mean": -0.1723902594608565,
+          "std": 0.09661762064879019
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "info_rl_neighbor",
+          "stage_k": 3,
+          "mean": -0.19119954220950605,
+          "std": 0.03598768870643661
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 1,
+          "mean": -0.1788319244980812,
+          "std": 0.025694998595123333
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 2,
+          "mean": -0.23024195929368338,
+          "std": 0.02502039155118966
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 3,
+          "mean": -0.2353360111514727,
+          "std": 0.031238616070052534
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 1,
+          "mean": -0.19444756458202997,
+          "std": 0.015590844351649296
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 2,
+          "mean": -0.22372246359785397,
+          "std": 0.010334158329020534
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "unstratified_2branch",
+          "stage_k": 3,
+          "mean": -0.23744981686274205,
+          "std": 0.03177903452625517
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "unstratified_2branch",
+          "stage_k": 1,
+          "mean": -0.2226096587876479,
+          "std": 0.004764753254859627
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "unstratified_2branch",
+          "stage_k": 2,
+          "mean": -0.21120863879720372,
+          "std": 0.029538833107921544
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "unstratified_2branch",
+          "stage_k": 3,
+          "mean": -0.2462642438709736,
+          "std": 0.054272588196509944
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 1,
+          "mean": -0.8994685530662535,
+          "std": 0.12313408210339234
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 2,
+          "mean": -0.6807687362035115,
+          "std": 0.12375497516569248
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 3,
+          "mean": -0.6768638730049134,
+          "std": 0.11605346727367495
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 1,
+          "mean": -0.9059232076009115,
+          "std": 0.12973890315343506
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 2,
+          "mean": -0.6850987950960796,
+          "std": 0.13245016942763485
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "ablation_unweighted",
+          "stage_k": 3,
+          "mean": -0.6415433347225189,
+          "std": 0.05376116139306092
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "ablation_unweighted",
+          "stage_k": 1,
+          "mean": -0.8659783442815145,
+          "std": 0.10044908596682357
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "ablation_unweighted",
+          "stage_k": 2,
+          "mean": -0.6717084487279257,
+          "std": 0.18205102328399866
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "ablation_unweighted",
+          "stage_k": 3,
+          "mean": -0.6063392291466395,
+          "std": 0.12474789647862147
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 1,
+          "mean": -1.2382903456687928,
+          "std": 0.18001595626738445
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 2,
+          "mean": -0.7888539652029674,
+          "std": 0.17106458596981253
+        },
+        {
+          "model": "Qwen/Qwen2.5-7B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 3,
+          "mean": -0.6333846946557363,
+          "std": 0.11880595104626392
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 1,
+          "mean": -1.195579747358958,
+          "std": 0.20847744013710667
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 2,
+          "mean": -0.7455595215161642,
+          "std": 0.12867618887759288
+        },
+        {
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "method": "prism_evolve",
+          "stage_k": 3,
+          "mean": -0.5433822810649872,
+          "std": 0.11076460133909619
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "prism_evolve",
+          "stage_k": 1,
+          "mean": -1.0583790202935537,
+          "std": 0.1630984225822858
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "prism_evolve",
+          "stage_k": 2,
+          "mean": -0.5658951938152313,
+          "std": 0.17559507709586986
+        },
+        {
+          "model": "Qwen/Qwen3.8-27B",
+          "method": "prism_evolve",
+          "stage_k": 3,
+          "mean": -0.376006339987119,
+          "std": 0.0821845181206101
+        }
+      ],
+      "zero_loss_methods": [
+        "frozen_base",
+        "worldevolver",
+        "pos_envprobe"
       ]
     },
     {
-      "stem": "supp_02_appworld_losses_methods_03",
-      "title": "Training | AppWorld loss | Outcome-RLOO, Info-RL Neighbor, Unstratified",
-      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
-      "pdf": "supp_02_appworld_losses_methods_03.pdf",
-      "png": "supp_02_appworld_losses_methods_03.png",
-      "source_groups": [
-        "training_progress"
-      ]
-    },
-    {
-      "stem": "supp_02_appworld_losses_methods_04",
-      "title": "Training | AppWorld loss | Unweighted, SPAR",
-      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
-      "pdf": "supp_02_appworld_losses_methods_04.pdf",
-      "png": "supp_02_appworld_losses_methods_04.png",
-      "source_groups": [
-        "training_progress"
-      ]
-    },
-    {
-      "stem": "supp_03_planbench_losses_methods_01",
-      "title": "Training | PlanBench-XL loss | AREW / T3, GiGPO, InfoPO",
-      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
-      "pdf": "supp_03_planbench_losses_methods_01.pdf",
-      "png": "supp_03_planbench_losses_methods_01.png",
-      "source_groups": [
-        "training_progress"
-      ]
-    },
-    {
-      "stem": "supp_03_planbench_losses_methods_02",
-      "title": "Training | PlanBench-XL loss | Step-DPO, Outcome-PG, Outcome-Value",
-      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
-      "pdf": "supp_03_planbench_losses_methods_02.pdf",
-      "png": "supp_03_planbench_losses_methods_02.png",
-      "source_groups": [
-        "training_progress"
-      ]
-    },
-    {
-      "stem": "supp_03_planbench_losses_methods_03",
-      "title": "Training | PlanBench-XL loss | Outcome-RLOO, Info-RL Neighbor, Unstratified",
-      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
-      "pdf": "supp_03_planbench_losses_methods_03.pdf",
-      "png": "supp_03_planbench_losses_methods_03.png",
-      "source_groups": [
-        "training_progress"
-      ]
-    },
-    {
-      "stem": "supp_03_planbench_losses_methods_04",
-      "title": "Training | PlanBench-XL loss | Unweighted, SPAR",
-      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
-      "pdf": "supp_03_planbench_losses_methods_04.pdf",
-      "png": "supp_03_planbench_losses_methods_04.png",
-      "source_groups": [
-        "training_progress"
-      ]
-    },
-    {
-      "stem": "supp_03_recorded_zero_losses",
-      "title": "Training | Recorded zero losses",
-      "note": "For these named benchmark/method groups, every stage and seed record has zero loss. This table records loss values only.",
-      "pdf": "supp_03_recorded_zero_losses.pdf",
-      "png": "supp_03_recorded_zero_losses.png",
-      "source_groups": [
-        "training_progress"
-      ]
-    },
-    {
-      "stem": "supp_04_work_appworld",
-      "title": "Resources | AppWorld | Training work per seed",
-      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
-      "pdf": "supp_04_work_appworld.pdf",
-      "png": "supp_04_work_appworld.png",
+      "stem": "supp_04_resources_appworld",
+      "title": "Resources | AppWorld | Complete training work and timing ledger",
+      "note": "Per-seed training totals averaged over three seeds. Panel (a) reports interaction steps, tokens, and wall-clock time; Panel (b) reports amortized model encoding, gradient update, and snapshot restore time.",
+      "pdf": "supp_04_resources_appworld.pdf",
+      "png": "supp_04_resources_appworld.png",
       "source_groups": [
         "cost_ledgers",
         "backbone_metadata"
       ]
     },
     {
-      "stem": "supp_04_work_planbench_xl",
-      "title": "Resources | PlanBench-XL | Training work per seed",
-      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
-      "pdf": "supp_04_work_planbench_xl.pdf",
-      "png": "supp_04_work_planbench_xl.png",
-      "source_groups": [
-        "cost_ledgers",
-        "backbone_metadata"
-      ]
-    },
-    {
-      "stem": "supp_05_time_model_gradient_appworld",
-      "title": "Resources | AppWorld | Model and gradient-update time per seed",
-      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
-      "pdf": "supp_05_time_model_gradient_appworld.pdf",
-      "png": "supp_05_time_model_gradient_appworld.png",
-      "source_groups": [
-        "cost_ledgers",
-        "backbone_metadata"
-      ]
-    },
-    {
-      "stem": "supp_05_time_model_gradient_planbench_xl",
-      "title": "Resources | PlanBench-XL | Model and gradient-update time per seed",
-      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
-      "pdf": "supp_05_time_model_gradient_planbench_xl.pdf",
-      "png": "supp_05_time_model_gradient_planbench_xl.png",
-      "source_groups": [
-        "cost_ledgers",
-        "backbone_metadata"
-      ]
-    },
-    {
-      "stem": "supp_05_time_wall_restore_appworld",
-      "title": "Resources | AppWorld | Wall-clock and snapshot-restore time per seed",
-      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
-      "pdf": "supp_05_time_wall_restore_appworld.pdf",
-      "png": "supp_05_time_wall_restore_appworld.png",
-      "source_groups": [
-        "cost_ledgers",
-        "backbone_metadata"
-      ]
-    },
-    {
-      "stem": "supp_05_time_wall_restore_planbench_xl",
-      "title": "Resources | PlanBench-XL | Wall-clock and snapshot-restore time per seed",
-      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
-      "pdf": "supp_05_time_wall_restore_planbench_xl.pdf",
-      "png": "supp_05_time_wall_restore_planbench_xl.png",
+      "stem": "supp_05_resources_planbench_xl",
+      "title": "Resources | PlanBench-XL | Complete training work and timing ledger",
+      "note": "Per-seed training totals averaged over three seeds. Panel (a) reports interaction steps, tokens, and wall-clock time; Panel (b) reports amortized model encoding, gradient update, and snapshot restore time.",
+      "pdf": "supp_05_resources_planbench_xl.pdf",
+      "png": "supp_05_resources_planbench_xl.png",
       "source_groups": [
         "cost_ledgers",
         "backbone_metadata"
@@ -467,5 +1710,13 @@
         "cost_ledgers"
       ]
     }
-  ]
+  ],
+  "loss_consolidation": {
+    "previous_figures": 8,
+    "figures": 2,
+    "previous_panels": 66,
+    "panels": 22,
+    "model_encoding": "fixed linestyle and marker; color retains method identity",
+    "uncertainty": "three-seed sample SD error bars"
+  }
 }
