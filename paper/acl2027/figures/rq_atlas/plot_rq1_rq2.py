@@ -1,4 +1,4 @@
-"""Compact RQ1/RQ2 figures in the existing paper's visual style."""
+"""RQ1/RQ2 views following the approved focused-comparison design."""
 
 import math
 
@@ -7,78 +7,98 @@ from matplotlib.lines import Line2D
 import numpy as np
 
 from atlas_common import (
-    BENCHMARKS, BENCH_LABELS, COLORS, FOCUS, METHODS, METHOD_COLORS,
-    METHOD_LABELS, MODEL_IDS, MODEL_LABELS, main_index, save_figure,
+    BENCHMARKS, BENCH_LABELS, COLORS, METHODS, METHOD_COLORS, METHOD_LABELS,
+    MODEL_IDS, MODEL_LABELS, main_index, save_figure,
 )
 
-GROUPS = {
-    "peer": ["frozen_base", "arew", "gigpo", "infopo", "worldevolver", "pos_envprobe",
-             "step_dpo", "ablation_unweighted", "prism_evolve"],
-    "control": ["frozen_base", "outcome_pg", "outcome_value_baseline", "outcome_rloo",
-                "info_rl_neighbor", "unstratified_2branch", "ablation_unweighted", "prism_evolve"],
-}
 MODEL_SUFFIXES = ["qwen25_7b", "llama31_8b", "qwen38_27b"]
-MODEL_XLABELS = ["Qwen2.5-7B\n(7.6B)", "Llama-3.1-8B\n(8.0B)", "Qwen3.8-27B\n(27.0B)"]
 
 
-def _grouped_figure(metrics, out_dir, field, scale, group):
+def _result_table(metrics, out_dir, field, scale, stem, title):
     index = main_index(metrics)
-    methods = GROUPS[group]
-    fig, axes = plt.subplots(1, 2, figsize=(7.6, 2.85), sharey=True,
-                             gridspec_kw={"wspace": .12})
-    fig.subplots_adjust(left=.075, right=.985, bottom=.18, top=.75)
-    x = np.arange(len(MODEL_IDS))
-    width = .84 / len(methods)
-    offsets = (np.arange(len(methods)) - (len(methods)-1)/2) * width
+    settings = [(model, benchmark) for model in MODEL_IDS for benchmark in BENCHMARKS]
     success = field == "success_rate"
-    for panel, (ax, benchmark) in enumerate(zip(axes, BENCHMARKS)):
-        for offset, method in zip(offsets, methods):
-            means = [scale * index[model, benchmark, method]["final_test"][field]["mean"]
-                     for model in MODEL_IDS]
-            stds = [scale * index[model, benchmark, method]["final_test"][field]["std"]
-                    for model in MODEL_IDS]
-            bars = ax.bar(x+offset, means, width*.90, yerr=stds, capsize=1.4,
-                          color=METHOD_COLORS[method], edgecolor="none", label=METHOD_LABELS[method],
-                          error_kw={"lw": .55, "ecolor": "#64748B", "capthick": .55}, zorder=3)
-            if method == "prism_evolve":
-                for model_index, bar in enumerate(bars):
-                    top = max(scale * (index[MODEL_IDS[model_index], benchmark, m]["final_test"][field]["mean"] +
-                                      index[MODEL_IDS[model_index], benchmark, m]["final_test"][field]["std"])
-                              for m in methods[-3:])
-                    label = f"{means[model_index]:.1f}%" if success else f"{means[model_index]:.3f}"
-                    ax.text(bar.get_x()+bar.get_width()/2, top+(2 if success else .022), label,
-                            ha="center", va="bottom", fontsize=6.5, fontweight="bold")
-        title = "(a) AppWorld Held-Out Test (168 Tasks)" if panel == 0 else "(b) PlanBench-XL Retail Test (90 Queries)"
-        ax.set_title(title)
-        ax.set_xticks(x, MODEL_XLABELS, fontsize=7.4, linespacing=1.25)
-        ax.set_ylim(0, 118 if success else .90)
-        ax.set_yticks([0, 25, 50, 75, 100] if success else [0, .2, .4, .6, .8])
-        ax.grid(axis="y")
-    axes[0].set_ylabel("Terminal Success (%) ↑" if success else r"Budget-Aware Utility $\mathbb{E}[U_B]\uparrow$")
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(.53, 1.005),
-               ncol=5 if group == "peer" else 4, fontsize=6.7,
-               columnspacing=.95, handletextpad=.35, labelspacing=.55)
-    metric_name = "test_success" if success else "test_utility"
-    number = "02" if success else "01"
-    return save_figure(
-        fig, out_dir, f"rq1_{number}_{metric_name}_{group}",
-        f"RQ1 | {group.title()} comparison: {'test success' if success else 'test utility'}",
-        "Bars show three-seed means; error bars show sample SD. Only SPAR means are directly labelled.",
-        ["metrics/main_results"],
-    )
+    precision = 2 if success else 4
+    fig = plt.figure(figsize=(7.6, 3.15))
+    ax = fig.add_axes([.03, .025, .955, .865])
+    ax.set_xlim(0, 7.5)
+    ax.set_ylim(len(METHODS)-.25, -2.65)
+    ax.axis("off")
+    ax.axhspan(len(METHODS)-1.5, len(METHODS)-.5, color="#EAF5F7", zorder=0)
+    ax.hlines([-.55, len(METHODS)-.5], 0, 7.5, color=COLORS["ink"], lw=.7)
+    ax.hlines(6.5, 0, 7.5, color="#CBD5E1", lw=.45)
+    ax.hlines(len(METHODS)-1.5, 0, 7.5, color="#94A3B8", lw=.5)
+    ax.text(.02, -1.1, "Method", ha="left", va="center", fontsize=7.4, fontweight="bold")
+    for model_index, model in enumerate(MODEL_IDS):
+        centre = 1.5 + 2*model_index + 1
+        ax.text(centre, -2.0, MODEL_LABELS[model], ha="center", va="center",
+                fontsize=8.4, fontweight="bold")
+        ax.hlines(-1.55, 1.55+2*model_index, 3.45+2*model_index,
+                  color="#94A3B8", lw=.45)
+    for column, (_, benchmark) in enumerate(settings):
+        ax.text(2+column, -1.1, BENCH_LABELS[benchmark], ha="center", va="center", fontsize=6.8)
+    best = {setting: max(index[setting[0], setting[1], method]["final_test"][field]["mean"]
+                         for method in METHODS) for setting in settings}
+    for row, method in enumerate(METHODS):
+        ax.text(.02, row, METHOD_LABELS[method], ha="left", va="center", fontsize=7,
+                fontweight="bold" if method == "prism_evolve" else "normal")
+        for column, (model, benchmark) in enumerate(settings):
+            value = index[model, benchmark, method]["final_test"][field]
+            is_best = math.isclose(value["mean"], best[model, benchmark], abs_tol=1e-12)
+            anchor = 1.98+column
+            ax.text(anchor, row, f"{scale*value['mean']:.{precision}f}", ha="right", va="center",
+                    fontsize=7.1, fontweight="bold" if is_best else "normal")
+            ax.text(anchor+.025, row, f"±{scale*value['std']:.{precision}f}",
+                    ha="left", va="center", fontsize=5.8, color="#64748B")
+    fig.text(.03, .985, title, ha="left", va="top", fontsize=8.4, fontweight="bold")
+    fig.text(.985, .985, "Mean ± sample SD (%)" if success else "Mean ± sample SD",
+             ha="right", va="top", fontsize=7.1, color="#64748B")
+    return save_figure(fig, out_dir, stem, f"RQ1 | {title}",
+                       "Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold.",
+                       ["metrics/main_results"])
 
 
-def _panel_layout(height=3.2, left=.17):
+def _model_panels(height=3.1, left=.15):
     fig, axes = plt.subplots(2, 3, figsize=(7.6, height), sharex=True, sharey=True)
-    fig.subplots_adjust(left=left, right=.985, bottom=.18, top=.80,
-                        wspace=.23, hspace=.48)
+    fig.subplots_adjust(left=left, right=.985, bottom=.17, top=.85, wspace=.23, hspace=.20)
+    for col, model in enumerate(MODEL_IDS):
+        axes[0, col].set_title(f"({chr(97+col)}) {MODEL_LABELS[model]}", pad=6.5)
     for row, benchmark in enumerate(BENCHMARKS):
-        fig.text(.017, .66 if row == 0 else .30, BENCH_LABELS[benchmark],
-                 rotation=90, ha="center", va="center", fontsize=7.2, fontweight="bold")
-        for col, model in enumerate(MODEL_IDS):
-            axes[row, col].set_title(MODEL_LABELS[model], pad=4)
+        fig.text(.012, .68 if row == 0 else .32, BENCH_LABELS[benchmark], rotation=90,
+                 ha="left", va="center", fontsize=7.3, fontweight="bold")
     return fig, axes
+
+
+def _utility_gain_overview(comparisons, out_dir):
+    roles = ["frozen", "unweighted", "strongest_named_peer"]
+    lookup = {(r["model"], r["benchmark"], r["reference_role"]): r
+              for r in comparisons["method_comparisons"]}
+    fig, axes = _model_panels(2.85, left=.15)
+    for row, benchmark in enumerate(BENCHMARKS):
+        for col, model in enumerate(MODEL_IDS):
+            ax = axes[row, col]
+            for y, role in enumerate(roles):
+                item = lookup[model, benchmark, role]
+                gain = item["utility"]["difference_pts"]
+                ax.hlines(y, 0, gain, color="#CBD5E1", lw=.8, zorder=1)
+                ax.plot(gain, y, "o", color=COLORS["spar"], ms=3.6, zorder=3)
+                label = f"+{gain:.2f}"
+                if role == "strongest_named_peer":
+                    label += f" ({METHOD_LABELS[item['reference_method']]})"
+                ax.annotate(label, (gain, y), xytext=(4, 0), textcoords="offset points",
+                            ha="left", va="center", fontsize=6.4)
+            ax.set_yticks(range(3), ["Frozen Base", "Unweighted", "Best peer"])
+            ax.tick_params(axis="y", labelsize=6.6, length=0, pad=3)
+            ax.tick_params(axis="x", labelsize=7)
+            ax.set_xlim(0, 55)
+            ax.set_xticks([0, 20, 40])
+            ax.grid(axis="x")
+    axes[0, 0].set_ylim(2.5, -.5)
+    fig.text(.985, .99, "SPAR − reference", ha="right", va="top", fontsize=7.1)
+    fig.supxlabel("Mean test utility gain (pts)", y=.035, fontsize=7.8)
+    return save_figure(fig, out_dir, "rq1_03_utility_gain_overview", "RQ1 | Focused utility gains",
+                       "Mean-based utility differences multiplied by 100. The strongest named peer is selected within each saved model/benchmark setting; its name is displayed.",
+                       ["comparisons/method_comparisons"])
 
 
 def _seed_variation(metrics, out_dir, model, suffix):
@@ -92,13 +112,13 @@ def _seed_variation(metrics, out_dir, model, suffix):
     markers = ("o", "^", "s")
     offsets = np.linspace(-.15, .15, len(seeds))
     for panel, (ax, benchmark) in enumerate(zip(axes, BENCHMARKS)):
-        ax.axhspan(len(METHODS)-1.5, len(METHODS)-.5, color="#E0F4F8", alpha=.65, zorder=0)
+        ax.axhspan(len(METHODS)-1.5, len(METHODS)-.5, color="#EAF5F7", zorder=0)
         for y, method in enumerate(METHODS):
             summary = index[model, benchmark, method]["final_test"]["mean_utility"]
             color = METHOD_COLORS[method]
             ax.errorbar(summary["mean"], y, xerr=summary["std"], fmt="|",
-                        color=color, markersize=5, capsize=1.3, capthick=.55,
-                        elinewidth=.7, zorder=2)
+                        color=color, markersize=5, capsize=1.3, capthick=.55, elinewidth=.75,
+                        linestyle="--" if method == "ablation_unweighted" else "-", zorder=2)
             for seed, marker, offset in zip(seeds, markers, offsets):
                 value = seed_index[model, benchmark, method, seed]["final_test"]["mean_utility"]
                 ax.scatter(value, y+offset, marker=marker, s=10, color=color,
@@ -110,57 +130,54 @@ def _seed_variation(metrics, out_dir, model, suffix):
         ax.tick_params(axis="y", labelsize=6.8, length=0, pad=3)
         ax.tick_params(axis="x", labelsize=7)
         ax.set_xlabel(r"Test utility $\mathbb{E}[U_B]$")
-        ax.set_title(f"({'a' if panel == 0 else 'b'}) {BENCH_LABELS[benchmark]} | {MODEL_LABELS[model]}")
+        ax.set_title(f"({'a' if panel == 0 else 'b'}) {BENCH_LABELS[benchmark]}")
     axes[0].set_ylim(len(METHODS)-.5, -.5)
     for label in axes[0].get_yticklabels():
         if label.get_text() == "SPAR":
             label.set_fontweight("bold")
     handles = [Line2D([], [], marker=marker, ls="none", color="#64748B", markersize=3.5,
                       label=f"Seed {seed}") for seed, marker in zip(seeds, markers)]
-    handles.append(Line2D([], [], marker="|", color="#64748B", lw=.7, markersize=5,
-                          label="Mean ± sample SD"))
-    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(.58, .995), ncol=4,
-               fontsize=7, columnspacing=1.2, handletextpad=.35)
-    return save_figure(
-        fig, out_dir, f"rq1_03_seed_variation_{suffix}", f"RQ1 | Individual seeds: {MODEL_LABELS[model]}",
-        "Fourteen methods, two benchmarks, three seeds. Points use fixed seed shapes; method colors match the comparison figures.",
-        ["metrics/seed_results", "metrics/main_results"],
-    )
+    handles.append(Line2D([], [], marker="|", color="#64748B", lw=.7, markersize=5, label="Mean ± SD"))
+    fig.text(.17, .99, MODEL_LABELS[model], ha="left", va="top", fontsize=8.4, fontweight="bold")
+    fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(.994, 1.005), ncol=4,
+               fontsize=7, columnspacing=1.1, handletextpad=.35)
+    return save_figure(fig, out_dir, f"rq1_04_seed_variation_{suffix}",
+                       f"RQ1 | Individual seeds: {MODEL_LABELS[model]}",
+                       "All 14 methods and three seeds; each horizontal interval is the stored sample SD around the mean. Raw seed points use fixed marker shapes.",
+                       ["metrics/seed_results", "metrics/main_results"])
 
 
 def _mechanism_controls(metrics, out_dir):
     index = main_index(metrics)
     controls = ["outcome_pg", "outcome_value_baseline", "outcome_rloo", "info_rl_neighbor",
                 "unstratified_2branch", "ablation_unweighted", "step_dpo"]
+    positions = [0, 1, 2, 3, 4, 5.65, 6.65]
     gains = {(model, benchmark): [100 * (
         index[model, benchmark, "prism_evolve"]["final_test"]["mean_utility"]["mean"] -
         index[model, benchmark, method]["final_test"]["mean_utility"]["mean"])
         for method in controls] for model in MODEL_IDS for benchmark in BENCHMARKS}
-    maximum = math.ceil(max(max(v) for v in gains.values())/5)*5
-    fig, axes = _panel_layout()
+    fig, axes = _model_panels(3.15, left=.17)
     for row, benchmark in enumerate(BENCHMARKS):
         for col, model in enumerate(MODEL_IDS):
             ax = axes[row, col]
-            values = gains[model, benchmark]
-            y = np.arange(len(controls))
-            ax.barh(y, values, height=.38, color=COLORS["spar"], zorder=3)
-            for yp, value in zip(y, values):
-                ax.text(value+.55, yp, f"{value:+.1f}", va="center", fontsize=6.6)
-            ax.set_yticks(y, [METHOD_LABELS[m] for m in controls])
-            ax.tick_params(axis="y", labelsize=6.5, length=0, pad=3)
+            ax.axhline(4.85, color="#CBD5E1", lw=.5)
+            for y, value in zip(positions, gains[model, benchmark]):
+                ax.hlines(y, 0, value, color="#CBD5E1", lw=.8, zorder=1)
+                ax.plot(value, y, "o", color=COLORS["spar"], ms=3.1, zorder=3)
+                ax.annotate(f"+{value:.1f}", (value, y), xytext=(4, 0),
+                            textcoords="offset points", va="center", fontsize=6.4)
+            ax.set_yticks(positions, [METHOD_LABELS[m] for m in controls])
+            ax.tick_params(axis="y", labelsize=6.4, length=0, pad=3)
             ax.tick_params(axis="x", labelsize=6.8)
-            ax.set_xlim(0, maximum+5)
+            ax.set_xlim(0, 40)
             ax.set_xticks([0, 20, 40])
             ax.grid(axis="x")
-            if row == 1:
-                ax.set_xlabel("SPAR gain (pts)")
-    axes[0, 0].set_ylim(len(controls)-.5, -.5)
-    fig.text(.58, .985, "SPAR minus reference mean utility", ha="center", va="top", fontsize=7.2)
-    return save_figure(
-        fig, out_dir, "rq2_01_mechanism_controls", "RQ2 | Utility gains over mechanism controls",
-        "Bars are 100 × (SPAR mean test utility − reference mean test utility); the reference method is shown on each row.",
-        ["metrics/main_results"],
-    )
+    axes[0, 0].set_ylim(7.15, -.5)
+    fig.text(.985, .99, "SPAR − control", ha="right", va="top", fontsize=7.1)
+    fig.supxlabel("Mean test utility gain (pts)", y=.035, fontsize=7.8)
+    return save_figure(fig, out_dir, "rq2_01_mechanism_controls", "RQ2 | Mechanism-control gains",
+                       "The first five rows compare return/sampling controls; the final two rows compare weighting/preference controls. Values are mean utility differences ×100.",
+                       ["metrics/main_results"])
 
 
 def _aligned_weighting(comparisons, out_dir):
@@ -168,21 +185,20 @@ def _aligned_weighting(comparisons, out_dir):
               if r["reference_role"] == "unweighted"}
     settings = [(model, benchmark) for model in MODEL_IDS for benchmark in BENCHMARKS]
     names = [f"{MODEL_LABELS[m]} / {BENCH_LABELS[b]}" for m, b in settings]
-    specs = [
-        ("(a) Test utility", "Utility gain (pts)", "utility", "difference_pts"),
-        ("(b) Interaction cost", "Cost reduction (%)", "cost", "reduction_percent"),
-        ("(c) Feedback utilization", r"$\Delta_{\mathrm{use}}$ gain (pts)", "dev_delta_use", "difference_pts"),
-    ]
-    fig, axes = plt.subplots(1, 3, figsize=(7.6, 2.8), sharey=True)
-    fig.subplots_adjust(left=.25, right=.985, bottom=.22, top=.77, wspace=.20)
+    specs = [("(a) Test utility", "Utility gain (pts)", "utility", "difference_pts"),
+             ("(b) Interaction cost", "Cost reduction (%)", "cost", "reduction_percent"),
+             ("(c) Feedback utilization", r"$\Delta_{\mathrm{use}}$ gain (pts)", "dev_delta_use", "difference_pts")]
+    fig, axes = plt.subplots(1, 3, figsize=(7.6, 2.65), sharey=True)
+    fig.subplots_adjust(left=.25, right=.985, bottom=.21, top=.79, wspace=.20)
     y = np.arange(len(settings))
     for ax, (title, xlabel, key, field) in zip(axes, specs):
         values = [lookup[setting][key][field] for setting in settings]
-        ax.barh(y, values, height=.43, color=COLORS["spar"], zorder=3)
+        ax.hlines(y, 0, values, color="#CBD5E1", lw=.85, zorder=1)
+        ax.plot(values, y, "o", color=COLORS["spar"], ms=3.6, zorder=3)
         for yp, value in zip(y, values):
-            text = f"{value:.2f}%" if key == "cost" else f"{value:+.2f}"
-            ax.text(value+max(values)*.035, yp, text, va="center", fontsize=6.8)
-        ax.set_xlim(0, max(values)*1.34)
+            label = f"{value:.2f}%" if key == "cost" else f"+{value:.2f}"
+            ax.text(value+max(values)*.04, yp, label, va="center", fontsize=6.6)
+        ax.set_xlim(0, max(values)*1.37)
         ax.set_title(title)
         ax.set_xlabel(xlabel)
         ax.set_yticks(y, names)
@@ -191,62 +207,59 @@ def _aligned_weighting(comparisons, out_dir):
         ax.locator_params(axis="x", nbins=4)
         ax.grid(axis="x")
     axes[0].set_ylim(len(settings)-.5, -.5)
-    fig.text(.62, .97, "SPAR vs. Unweighted", ha="center", va="top", fontsize=7.4, fontweight="bold")
-    return save_figure(
-        fig, out_dir, "rq2_02_aligned_weighting", "RQ2 | Aligned weighting versus unweighted branching",
-        "Contrasts of saved means. Cost reduction uses Unweighted as denominator; Δuse uses the fixed 24-task development diagnostic.",
-        ["comparisons/method_comparisons/reference_role=unweighted"],
-    )
+    fig.text(.62, .985, "SPAR vs. Unweighted", ha="center", va="top", fontsize=7.4, fontweight="bold")
+    return save_figure(fig, out_dir, "rq2_02_aligned_weighting", "RQ2 | Aligned weighting versus Unweighted",
+                       "Mean-based contrasts. Relative cost reduction uses Unweighted as denominator; feedback values use the fixed 24-task development diagnostic.",
+                       ["comparisons/method_comparisons/reference_role=unweighted"])
 
 
 def _cost_utility(metrics, out_dir):
     index = main_index(metrics)
-    points = [(r["final_test"]["mean_cumulative_cost"]["mean"],
-               r["final_test"]["mean_utility"]["mean"]) for r in metrics["main_results"]]
-    xmin = max(0, math.floor((min(x for x, _ in points)-.06)*20)/20)
-    xmax = math.ceil((max(x for x, _ in points)+.04)*20)/20
+    points = [(r["final_test"]["mean_cumulative_cost"]["mean"], r["final_test"]["mean_utility"]["mean"])
+              for r in metrics["main_results"]]
+    xmin = max(0, math.floor((min(x for x, _ in points)-.05)*20)/20)
+    xmax = math.ceil((max(x for x, _ in points)+.035)*20)/20
     ymin = max(0, math.floor((min(y for _, y in points)-.04)*10)/10)
-    ymax = math.ceil((max(y for _, y in points)+.08)*10)/10
-    fig, axes = _panel_layout(left=.11)
+    ymax = math.ceil((max(y for _, y in points)+.075)*10)/10
+    fig, axes = _model_panels(3.1, left=.10)
+    selected = ["step_dpo", "ablation_unweighted", "prism_evolve"]
     markers = {"prism_evolve": "o", "ablation_unweighted": "^", "step_dpo": "s"}
     for row, benchmark in enumerate(BENCHMARKS):
         for col, model in enumerate(MODEL_IDS):
             ax = axes[row, col]
-            for method in [m for m in METHODS if m not in FOCUS]+["step_dpo", "ablation_unweighted", "prism_evolve"]:
-                data = index[model, benchmark, method]["final_test"]
-                x, y = data["mean_cumulative_cost"]["mean"], data["mean_utility"]["mean"]
-                highlighted = method in FOCUS
-                ax.scatter(x, y, s=23 if method == "prism_evolve" else (21 if highlighted else 9),
-                           color=METHOD_COLORS[method] if highlighted else COLORS["context"],
-                           marker=markers.get(method, "o"), edgecolor="white", linewidth=.35,
-                           alpha=1 if highlighted else .8, zorder=4 if highlighted else 2)
+            for method in [m for m in METHODS if m not in selected]+selected:
+                values = index[model, benchmark, method]["final_test"]
+                focused = method in selected
+                ax.scatter(values["mean_cumulative_cost"]["mean"], values["mean_utility"]["mean"],
+                           s=24 if method == "prism_evolve" else (21 if focused else 8),
+                           color=METHOD_COLORS[method] if focused else "#CBD5E1",
+                           marker=markers.get(method, "o"), edgecolor="white", linewidth=.4,
+                           zorder=5 if method == "prism_evolve" else (4 if focused else 2))
             ax.set_xlim(xmin, xmax)
             ax.set_ylim(ymin, ymax)
             ax.set_xticks([.2, .35, .5])
             ax.set_yticks([.2, .4, .6, .8])
-            ax.tick_params(labelsize=6.8)
-            ax.grid(True)
-            if row == 1:
-                ax.set_xlabel("Mean macro-action cost")
+            ax.tick_params(labelsize=7)
+            ax.grid(axis="y")
             if col == 0:
-                ax.set_ylabel(r"Test utility $\mathbb{E}[U_B]$")
+                ax.set_ylabel("Test utility")
     handles = [Line2D([], [], marker=markers[m], ls="none", color=METHOD_COLORS[m],
-                      markersize=4, label=METHOD_LABELS[m]) for m in FOCUS]
-    handles.append(Line2D([], [], marker="o", ls="none", color=COLORS["context"],
-                          markersize=3, label="Other methods"))
-    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(.57, 1.005), ncol=4,
-               fontsize=6.8, columnspacing=1.0, handletextpad=.3)
-    return save_figure(
-        fig, out_dir, "rq2_03_cost_utility", "RQ2 | Test utility and interaction cost",
-        "Each point is one method's three-seed mean. The six panels share axes; colors and marker shapes identify the highlighted methods.",
-        ["metrics/main_results"],
-    )
+                      markersize=4, label=METHOD_LABELS[m]) for m in reversed(selected)]
+    handles.append(Line2D([], [], marker="o", ls="none", color="#CBD5E1", markersize=3, label="Other methods"))
+    fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(.994, 1.005), ncol=4,
+               fontsize=7.1, columnspacing=1.1, handletextpad=.35)
+    fig.supxlabel("Mean macro-action cost", y=.035, fontsize=7.8)
+    return save_figure(fig, out_dir, "rq2_03_cost_utility", "RQ2 | Utility and interaction cost",
+                       "Each point is one method's three-seed mean; panels share the cost and utility scales. SPAR, Unweighted and Step-DPO are highlighted.",
+                       ["metrics/main_results"])
 
 
 def build(metrics, comparisons, out_dir):
-    figures = [_grouped_figure(metrics, out_dir, field, scale, group)
-               for field, scale in (("mean_utility", 1), ("success_rate", 100))
-               for group in ("peer", "control")]
+    figures = [
+        _result_table(metrics, out_dir, "mean_utility", 1, "rq1_01_test_utility_full", "Test utility"),
+        _result_table(metrics, out_dir, "success_rate", 100, "rq1_02_test_success_full", "Test success (%)"),
+        _utility_gain_overview(comparisons, out_dir),
+    ]
     figures.extend(_seed_variation(metrics, out_dir, model, suffix)
                    for model, suffix in zip(MODEL_IDS, MODEL_SUFFIXES))
     figures.extend([_mechanism_controls(metrics, out_dir), _aligned_weighting(comparisons, out_dir),

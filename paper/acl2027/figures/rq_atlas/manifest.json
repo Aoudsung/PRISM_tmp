@@ -1,79 +1,71 @@
 {
-  "backup_tag": "backup/acl-rq-atlas-20261104",
-  "figure_count": 32,
+  "backup_tag": "backup/acl-approved-style-20261104",
+  "figure_count": 45,
+  "style_reference": "paper/acl2027/figures/reference_guided/rq5_budget_response_example.png",
+  "in_figure_explanatory_footers": false,
   "source_files": [
     "paper/acl2027/evidence/data/metrics.json",
     "paper/acl2027/evidence/data/comparisons.json"
   ],
   "figures": [
     {
-      "stem": "rq1_01_test_utility_peer",
-      "title": "RQ1 | Peer comparison: test utility",
-      "note": "Bars show three-seed means; error bars show sample SD. Only SPAR means are directly labelled.",
-      "pdf": "rq1_01_test_utility_peer.pdf",
-      "png": "rq1_01_test_utility_peer.png",
+      "stem": "rq1_01_test_utility_full",
+      "title": "RQ1 | Test utility",
+      "note": "Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold.",
+      "pdf": "rq1_01_test_utility_full.pdf",
+      "png": "rq1_01_test_utility_full.png",
       "source_groups": [
         "metrics/main_results"
       ]
     },
     {
-      "stem": "rq1_01_test_utility_control",
-      "title": "RQ1 | Control comparison: test utility",
-      "note": "Bars show three-seed means; error bars show sample SD. Only SPAR means are directly labelled.",
-      "pdf": "rq1_01_test_utility_control.pdf",
-      "png": "rq1_01_test_utility_control.png",
+      "stem": "rq1_02_test_success_full",
+      "title": "RQ1 | Test success (%)",
+      "note": "Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold.",
+      "pdf": "rq1_02_test_success_full.pdf",
+      "png": "rq1_02_test_success_full.png",
       "source_groups": [
         "metrics/main_results"
       ]
     },
     {
-      "stem": "rq1_02_test_success_peer",
-      "title": "RQ1 | Peer comparison: test success",
-      "note": "Bars show three-seed means; error bars show sample SD. Only SPAR means are directly labelled.",
-      "pdf": "rq1_02_test_success_peer.pdf",
-      "png": "rq1_02_test_success_peer.png",
+      "stem": "rq1_03_utility_gain_overview",
+      "title": "RQ1 | Focused utility gains",
+      "note": "Mean-based utility differences multiplied by 100. The strongest named peer is selected within each saved model/benchmark setting; its name is displayed.",
+      "pdf": "rq1_03_utility_gain_overview.pdf",
+      "png": "rq1_03_utility_gain_overview.png",
       "source_groups": [
-        "metrics/main_results"
+        "comparisons/method_comparisons"
       ]
     },
     {
-      "stem": "rq1_02_test_success_control",
-      "title": "RQ1 | Control comparison: test success",
-      "note": "Bars show three-seed means; error bars show sample SD. Only SPAR means are directly labelled.",
-      "pdf": "rq1_02_test_success_control.pdf",
-      "png": "rq1_02_test_success_control.png",
-      "source_groups": [
-        "metrics/main_results"
-      ]
-    },
-    {
-      "stem": "rq1_03_seed_variation_qwen25_7b",
+      "stem": "rq1_04_seed_variation_qwen25_7b",
       "title": "RQ1 | Individual seeds: Qwen2.5-7B",
-      "note": "Fourteen methods, two benchmarks, three seeds. Points use fixed seed shapes; method colors match the comparison figures.",
-      "pdf": "rq1_03_seed_variation_qwen25_7b.pdf",
-      "png": "rq1_03_seed_variation_qwen25_7b.png",
+      "note": "All 14 methods and three seeds; each horizontal interval is the stored sample SD around the mean. Raw seed points use fixed marker shapes.",
+      "pdf": "rq1_04_seed_variation_qwen25_7b.pdf",
+      "png": "rq1_04_seed_variation_qwen25_7b.png",
       "source_groups": [
         "metrics/seed_results",
         "metrics/main_results"
       ]
     },
     {
-      "stem": "rq1_03_seed_variation_llama31_8b",
+      "stem": "rq1_04_seed_variation_llama31_8b",
       "title": "RQ1 | Individual seeds: Llama-3.1-8B",
-      "note": "Fourteen methods, two benchmarks, three seeds. Points use fixed seed shapes; method colors match the comparison figures.",
-      "pdf": "rq1_03_seed_variation_llama31_8b.pdf",
-      "png": "rq1_03_seed_variation_llama31_8b.png",
+      "note": "All 14 methods and three seeds; each horizontal interval is the stored sample SD around the mean. Raw seed points use fixed marker shapes.",
+      "pdf": "rq1_04_seed_variation_llama31_8b.pdf",
+      "png": "rq1_04_seed_variation_llama31_8b.png",
       "source_groups": [
         "metrics/seed_results",
         "metrics/main_results"
       ]
     },
     {
-      "stem": "rq1_03_seed_variation_qwen38_27b",
+      "stem": "rq1_04_seed_variation_qwen38_27b",
       "title": "RQ1 | Individual seeds: Qwen3.8-27B",
-      "note": "Fourteen methods, two benchmarks, three seeds. Points use fixed seed shapes; method colors match the comparison figures.",
-      "pdf": "rq1_03_seed_variation_qwen38_27b.pdf",
-      "png": "rq1_03_seed_variation_qwen38_27b.png",
+      "note": "All 14 methods and three seeds; each horizontal interval is the stored sample SD around the mean. Raw seed points use fixed marker shapes.",
+      "pdf": "rq1_04_seed_variation_qwen38_27b.pdf",
+      "png": "rq1_04_seed_variation_qwen38_27b.png",
       "source_groups": [
         "metrics/seed_results",
         "metrics/main_results"
@@ -81,8 +73,8 @@
     },
     {
       "stem": "rq2_01_mechanism_controls",
-      "title": "RQ2 | Utility gains over mechanism controls",
-      "note": "Bars are 100 × (SPAR mean test utility − reference mean test utility); the reference method is shown on each row.",
+      "title": "RQ2 | Mechanism-control gains",
+      "note": "The first five rows compare return/sampling controls; the final two rows compare weighting/preference controls. Values are mean utility differences ×100.",
       "pdf": "rq2_01_mechanism_controls.pdf",
       "png": "rq2_01_mechanism_controls.png",
       "source_groups": [
@@ -91,8 +83,8 @@
     },
     {
       "stem": "rq2_02_aligned_weighting",
-      "title": "RQ2 | Aligned weighting versus unweighted branching",
-      "note": "Contrasts of saved means. Cost reduction uses Unweighted as denominator; Δuse uses the fixed 24-task development diagnostic.",
+      "title": "RQ2 | Aligned weighting versus Unweighted",
+      "note": "Mean-based contrasts. Relative cost reduction uses Unweighted as denominator; feedback values use the fixed 24-task development diagnostic.",
       "pdf": "rq2_02_aligned_weighting.pdf",
       "png": "rq2_02_aligned_weighting.png",
       "source_groups": [
@@ -101,8 +93,8 @@
     },
     {
       "stem": "rq2_03_cost_utility",
-      "title": "RQ2 | Test utility and interaction cost",
-      "note": "Each point is one method's three-seed mean. The six panels share axes; colors and marker shapes identify the highlighted methods.",
+      "title": "RQ2 | Utility and interaction cost",
+      "note": "Each point is one method's three-seed mean; panels share the cost and utility scales. SPAR, Unweighted and Step-DPO are highlighted.",
       "pdf": "rq2_03_cost_utility.pdf",
       "png": "rq2_03_cost_utility.png",
       "source_groups": [
@@ -131,8 +123,8 @@
     },
     {
       "stem": "rq4_01_stage_evolution_appworld",
-      "title": "RQ4 | AppWorld utility across stages",
-      "note": "All 14 methods; three-seed mean utility. SPAR band shows sample SD.",
+      "title": "RQ4 | AppWorld utility evolution",
+      "note": "Three-seed means; SPAR band is sample SD. All methods also appear in complete stage-value tables.",
       "pdf": "rq4_01_stage_evolution_appworld.pdf",
       "png": "rq4_01_stage_evolution_appworld.png",
       "source_groups": [
@@ -141,8 +133,8 @@
     },
     {
       "stem": "rq4_01_stage_evolution_planbench_xl",
-      "title": "RQ4 | PlanBench-XL utility across stages",
-      "note": "All 14 methods; three-seed mean utility. SPAR band shows sample SD.",
+      "title": "RQ4 | PlanBench-XL utility evolution",
+      "note": "Three-seed means; SPAR band is sample SD. All methods also appear in complete stage-value tables.",
       "pdf": "rq4_01_stage_evolution_planbench_xl.pdf",
       "png": "rq4_01_stage_evolution_planbench_xl.png",
       "source_groups": [
@@ -150,19 +142,79 @@
       ]
     },
     {
-      "stem": "rq4_02_feedback_utilization",
-      "title": "RQ4 | Masked-feedback utilization",
-      "note": "Fixed 24-task development diagnostic; three-seed means for all methods. Lines span the three model values.",
-      "pdf": "rq4_02_feedback_utilization.pdf",
-      "png": "rq4_02_feedback_utilization.png",
+      "stem": "rq4_01_stage_values_appworld_0_1",
+      "title": "RQ4 | AppWorld complete stages (0, 1)",
+      "note": "Mean +/- sample SD over three seeds. Column maxima are bold where values differ.",
+      "pdf": "rq4_01_stage_values_appworld_0_1.pdf",
+      "png": "rq4_01_stage_values_appworld_0_1.png",
+      "source_groups": [
+        "metrics.stage_results"
+      ]
+    },
+    {
+      "stem": "rq4_01_stage_values_appworld_2_3",
+      "title": "RQ4 | AppWorld complete stages (2, 3)",
+      "note": "Mean +/- sample SD over three seeds. Column maxima are bold where values differ.",
+      "pdf": "rq4_01_stage_values_appworld_2_3.pdf",
+      "png": "rq4_01_stage_values_appworld_2_3.png",
+      "source_groups": [
+        "metrics.stage_results"
+      ]
+    },
+    {
+      "stem": "rq4_01_stage_values_planbench_xl_0_1",
+      "title": "RQ4 | PlanBench-XL complete stages (0, 1)",
+      "note": "Mean +/- sample SD over three seeds. Column maxima are bold where values differ.",
+      "pdf": "rq4_01_stage_values_planbench_xl_0_1.pdf",
+      "png": "rq4_01_stage_values_planbench_xl_0_1.png",
+      "source_groups": [
+        "metrics.stage_results"
+      ]
+    },
+    {
+      "stem": "rq4_01_stage_values_planbench_xl_2_3",
+      "title": "RQ4 | PlanBench-XL complete stages (2, 3)",
+      "note": "Mean +/- sample SD over three seeds. Column maxima are bold where values differ.",
+      "pdf": "rq4_01_stage_values_planbench_xl_2_3.pdf",
+      "png": "rq4_01_stage_values_planbench_xl_2_3.png",
+      "source_groups": [
+        "metrics.stage_results"
+      ]
+    },
+    {
+      "stem": "rq4_02_feedback_utilization_appworld",
+      "title": "RQ4 | AppWorld feedback",
+      "note": "Fixed 24-task diagnostic; points are means and whiskers sample SD over three seeds.",
+      "pdf": "rq4_02_feedback_utilization_appworld.pdf",
+      "png": "rq4_02_feedback_utilization_appworld.png",
+      "source_groups": [
+        "metrics.main_results.final_dev.delta_use"
+      ]
+    },
+    {
+      "stem": "rq4_02_feedback_utilization_planbench_xl",
+      "title": "RQ4 | PlanBench-XL feedback",
+      "note": "Fixed 24-task diagnostic; points are means and whiskers sample SD over three seeds.",
+      "pdf": "rq4_02_feedback_utilization_planbench_xl.pdf",
+      "png": "rq4_02_feedback_utilization_planbench_xl.png",
+      "source_groups": [
+        "metrics.main_results.final_dev.delta_use"
+      ]
+    },
+    {
+      "stem": "rq4_02_feedback_values",
+      "title": "RQ4 | Complete feedback values",
+      "note": "Fixed 24-task diagnostic; mean +/- sample SD over three seeds. Highest means per column are bold.",
+      "pdf": "rq4_02_feedback_values.pdf",
+      "png": "rq4_02_feedback_values.png",
       "source_groups": [
         "metrics.main_results.final_dev.delta_use"
       ]
     },
     {
       "stem": "rq4_02_feedback_stage_change",
-      "title": "RQ4 | SPAR feedback utilization, stage 0 to 3",
-      "note": "Fixed 24-task development diagnostic; endpoints are three-seed means.",
+      "title": "RQ4 | Feedback stage endpoints",
+      "note": "Fixed 24-task diagnostic; three-seed mean endpoints.",
       "pdf": "rq4_02_feedback_stage_change.pdf",
       "png": "rq4_02_feedback_stage_change.png",
       "source_groups": [
@@ -172,7 +224,7 @@
     {
       "stem": "rq4_03_trajectory_outcomes_appworld",
       "title": "RQ4 | AppWorld trajectory outcomes",
-      "note": "Counts pooled over three seeds. Success / no failure means successful evaluation without a recorded intermediate failure.",
+      "note": "Three-seed pooled counts; successful evaluations without a recorded failure, recovered successes, and final failures.",
       "pdf": "rq4_03_trajectory_outcomes_appworld.pdf",
       "png": "rq4_03_trajectory_outcomes_appworld.png",
       "source_groups": [
@@ -182,7 +234,7 @@
     {
       "stem": "rq4_03_trajectory_outcomes_planbench_xl",
       "title": "RQ4 | PlanBench-XL trajectory outcomes",
-      "note": "Counts pooled over three seeds. Success / no failure means successful evaluation without a recorded intermediate failure.",
+      "note": "Three-seed pooled counts; successful evaluations without a recorded failure, recovered successes, and final failures.",
       "pdf": "rq4_03_trajectory_outcomes_planbench_xl.pdf",
       "png": "rq4_03_trajectory_outcomes_planbench_xl.png",
       "source_groups": [
@@ -191,8 +243,8 @@
     },
     {
       "stem": "rq4_04_conditional_recovery",
-      "title": "RQ4 | Recovery conditional on an intermediate failure",
-      "note": "Cells show recovered successes / evaluations with recorded failure, pooled over seeds; dash is zero denominator.",
+      "title": "RQ4 | Conditional recovery counts",
+      "note": "Recovered successes / evaluations with recorded failure; highest pooled conditional rates are bold.",
       "pdf": "rq4_04_conditional_recovery.pdf",
       "png": "rq4_04_conditional_recovery.png",
       "source_groups": [
@@ -200,31 +252,31 @@
       ]
     },
     {
-      "stem": "rq5_01_budget_scaling_utility",
-      "title": "RQ5 | AppWorld budget utility",
-      "note": "All 14 methods; saved three-seed means over development tasks.",
-      "pdf": "rq5_01_budget_scaling_utility.pdf",
-      "png": "rq5_01_budget_scaling_utility.png",
+      "stem": "rq5_01_budget_response",
+      "title": "RQ5 | Budget response: focused comparison",
+      "note": "AppWorld means; the vertical line is default budget. Tight-budget labels are SPAR minus Unweighted utility x100.",
+      "pdf": "rq5_01_budget_response.pdf",
+      "png": "rq5_01_budget_response.png",
       "source_groups": [
         "metrics.budgets"
       ]
     },
     {
-      "stem": "rq5_01_budget_scaling_success",
-      "title": "RQ5 | AppWorld budget success",
-      "note": "All 14 methods; saved three-seed means over development tasks.",
-      "pdf": "rq5_01_budget_scaling_success.pdf",
-      "png": "rq5_01_budget_scaling_success.png",
+      "stem": "rq5_02_budget_values_utility",
+      "title": "RQ5 | Complete budget utility values",
+      "note": "All 14 methods and three budgets; three-seed means. Highest values per column are bold.",
+      "pdf": "rq5_02_budget_values_utility.pdf",
+      "png": "rq5_02_budget_values_utility.png",
       "source_groups": [
         "metrics.budgets"
       ]
     },
     {
-      "stem": "rq5_02_budget_matrix",
-      "title": "RQ5 | Complete AppWorld budget utility matrix",
-      "note": "AppWorld development set; 3 backbones x 14 methods x 3 budgets. Cells are three-seed mean utility.",
-      "pdf": "rq5_02_budget_matrix.pdf",
-      "png": "rq5_02_budget_matrix.png",
+      "stem": "rq5_02_budget_values_success",
+      "title": "RQ5 | Complete budget success values",
+      "note": "All 14 methods and three budgets; three-seed means. Highest values per column are bold.",
+      "pdf": "rq5_02_budget_values_success.pdf",
+      "png": "rq5_02_budget_values_success.png",
       "source_groups": [
         "metrics.budgets"
       ]
@@ -232,7 +284,7 @@
     {
       "stem": "rq5_03_split_schedule",
       "title": "RQ5 | Training split location",
-      "note": "AppWorld; mean +/- sample SD over three seeds. Uniform schedules sample split location T from the displayed set.",
+      "note": "AppWorld; point = mean, whisker = sample SD over three seeds. Uniform schedules sample T from the displayed set.",
       "pdf": "rq5_03_split_schedule.pdf",
       "png": "rq5_03_split_schedule.png",
       "source_groups": [
@@ -241,8 +293,8 @@
     },
     {
       "stem": "supp_01_training_returns",
-      "title": "Training | Batch returns across stages",
-      "note": "Lines are three-seed means; bands show sample SD for highlighted methods. Recorded zero-update values are retained.",
+      "title": "Training | Batch returns",
+      "note": "All 14 methods retained. Lines are seed means; bands are sample SD across seeds 42, 43, 44.",
       "pdf": "supp_01_training_returns.pdf",
       "png": "supp_01_training_returns.png",
       "source_groups": [
@@ -250,51 +302,156 @@
       ]
     },
     {
-      "stem": "supp_02_appworld_losses_peers",
-      "title": "Training | AppWorld loss trajectories | peers",
-      "note": "Points and bands show mean and sample SD across seeds 42, 43, 44. Each method uses its own loss scale.",
-      "pdf": "supp_02_appworld_losses_peers.pdf",
-      "png": "supp_02_appworld_losses_peers.png",
+      "stem": "supp_02_appworld_losses_methods_01",
+      "title": "Training | AppWorld loss | AREW / T3, GiGPO, InfoPO",
+      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
+      "pdf": "supp_02_appworld_losses_methods_01.pdf",
+      "png": "supp_02_appworld_losses_methods_01.png",
       "source_groups": [
         "training_progress"
       ]
     },
     {
-      "stem": "supp_02_appworld_losses_controls",
-      "title": "Training | AppWorld loss trajectories | controls",
-      "note": "Points and bands show mean and sample SD across seeds 42, 43, 44. Each method uses its own loss scale.",
-      "pdf": "supp_02_appworld_losses_controls.pdf",
-      "png": "supp_02_appworld_losses_controls.png",
+      "stem": "supp_02_appworld_losses_methods_02",
+      "title": "Training | AppWorld loss | Step-DPO, Outcome-PG, Outcome-Value",
+      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
+      "pdf": "supp_02_appworld_losses_methods_02.pdf",
+      "png": "supp_02_appworld_losses_methods_02.png",
       "source_groups": [
         "training_progress"
       ]
     },
     {
-      "stem": "supp_03_planbench_losses_peers",
-      "title": "Training | PlanBench-XL loss trajectories | peers",
-      "note": "Points and bands show mean and sample SD across seeds 42, 43, 44. Each method uses its own loss scale.",
-      "pdf": "supp_03_planbench_losses_peers.pdf",
-      "png": "supp_03_planbench_losses_peers.png",
+      "stem": "supp_02_appworld_losses_methods_03",
+      "title": "Training | AppWorld loss | Outcome-RLOO, Info-RL Neighbor, Unstratified",
+      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
+      "pdf": "supp_02_appworld_losses_methods_03.pdf",
+      "png": "supp_02_appworld_losses_methods_03.png",
       "source_groups": [
         "training_progress"
       ]
     },
     {
-      "stem": "supp_03_planbench_losses_controls",
-      "title": "Training | PlanBench-XL loss trajectories | controls",
-      "note": "Points and bands show mean and sample SD across seeds 42, 43, 44. Each method uses its own loss scale.",
-      "pdf": "supp_03_planbench_losses_controls.pdf",
-      "png": "supp_03_planbench_losses_controls.png",
+      "stem": "supp_02_appworld_losses_methods_04",
+      "title": "Training | AppWorld loss | Unweighted, SPAR",
+      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
+      "pdf": "supp_02_appworld_losses_methods_04.pdf",
+      "png": "supp_02_appworld_losses_methods_04.png",
       "source_groups": [
         "training_progress"
       ]
     },
     {
-      "stem": "supp_04_resource_work_table",
-      "title": "Resources | Environment steps and accounted tokens",
-      "note": "Training totals per seed, averaged across seeds 42, 43, 44. Model time includes cached encoding amortization.",
-      "pdf": "supp_04_resource_work_table.pdf",
-      "png": "supp_04_resource_work_table.png",
+      "stem": "supp_03_planbench_losses_methods_01",
+      "title": "Training | PlanBench-XL loss | AREW / T3, GiGPO, InfoPO",
+      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
+      "pdf": "supp_03_planbench_losses_methods_01.pdf",
+      "png": "supp_03_planbench_losses_methods_01.png",
+      "source_groups": [
+        "training_progress"
+      ]
+    },
+    {
+      "stem": "supp_03_planbench_losses_methods_02",
+      "title": "Training | PlanBench-XL loss | Step-DPO, Outcome-PG, Outcome-Value",
+      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
+      "pdf": "supp_03_planbench_losses_methods_02.pdf",
+      "png": "supp_03_planbench_losses_methods_02.png",
+      "source_groups": [
+        "training_progress"
+      ]
+    },
+    {
+      "stem": "supp_03_planbench_losses_methods_03",
+      "title": "Training | PlanBench-XL loss | Outcome-RLOO, Info-RL Neighbor, Unstratified",
+      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
+      "pdf": "supp_03_planbench_losses_methods_03.pdf",
+      "png": "supp_03_planbench_losses_methods_03.png",
+      "source_groups": [
+        "training_progress"
+      ]
+    },
+    {
+      "stem": "supp_03_planbench_losses_methods_04",
+      "title": "Training | PlanBench-XL loss | Unweighted, SPAR",
+      "note": "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
+      "pdf": "supp_03_planbench_losses_methods_04.pdf",
+      "png": "supp_03_planbench_losses_methods_04.png",
+      "source_groups": [
+        "training_progress"
+      ]
+    },
+    {
+      "stem": "supp_03_recorded_zero_losses",
+      "title": "Training | Recorded zero losses",
+      "note": "For these named benchmark/method groups, every stage and seed record has zero loss. This table records loss values only.",
+      "pdf": "supp_03_recorded_zero_losses.pdf",
+      "png": "supp_03_recorded_zero_losses.png",
+      "source_groups": [
+        "training_progress"
+      ]
+    },
+    {
+      "stem": "supp_04_work_appworld",
+      "title": "Resources | AppWorld | Training work per seed",
+      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
+      "pdf": "supp_04_work_appworld.pdf",
+      "png": "supp_04_work_appworld.png",
+      "source_groups": [
+        "cost_ledgers",
+        "backbone_metadata"
+      ]
+    },
+    {
+      "stem": "supp_04_work_planbench_xl",
+      "title": "Resources | PlanBench-XL | Training work per seed",
+      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
+      "pdf": "supp_04_work_planbench_xl.pdf",
+      "png": "supp_04_work_planbench_xl.png",
+      "source_groups": [
+        "cost_ledgers",
+        "backbone_metadata"
+      ]
+    },
+    {
+      "stem": "supp_05_time_model_gradient_appworld",
+      "title": "Resources | AppWorld | Model and gradient-update time per seed",
+      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
+      "pdf": "supp_05_time_model_gradient_appworld.pdf",
+      "png": "supp_05_time_model_gradient_appworld.png",
+      "source_groups": [
+        "cost_ledgers",
+        "backbone_metadata"
+      ]
+    },
+    {
+      "stem": "supp_05_time_model_gradient_planbench_xl",
+      "title": "Resources | PlanBench-XL | Model and gradient-update time per seed",
+      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
+      "pdf": "supp_05_time_model_gradient_planbench_xl.pdf",
+      "png": "supp_05_time_model_gradient_planbench_xl.png",
+      "source_groups": [
+        "cost_ledgers",
+        "backbone_metadata"
+      ]
+    },
+    {
+      "stem": "supp_05_time_wall_restore_appworld",
+      "title": "Resources | AppWorld | Wall-clock and snapshot-restore time per seed",
+      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
+      "pdf": "supp_05_time_wall_restore_appworld.pdf",
+      "png": "supp_05_time_wall_restore_appworld.png",
+      "source_groups": [
+        "cost_ledgers",
+        "backbone_metadata"
+      ]
+    },
+    {
+      "stem": "supp_05_time_wall_restore_planbench_xl",
+      "title": "Resources | PlanBench-XL | Wall-clock and snapshot-restore time per seed",
+      "note": "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
+      "pdf": "supp_05_time_wall_restore_planbench_xl.pdf",
+      "png": "supp_05_time_wall_restore_planbench_xl.png",
       "source_groups": [
         "cost_ledgers",
         "backbone_metadata"
@@ -308,28 +465,6 @@
       "png": "supp_04_resource_work_counts.png",
       "source_groups": [
         "cost_ledgers"
-      ]
-    },
-    {
-      "stem": "supp_05_resource_time_model_gradient",
-      "title": "Resources | Model and gradient-update time",
-      "note": "Training totals per seed, averaged across seeds 42, 43, 44. Model time includes cached encoding amortization.",
-      "pdf": "supp_05_resource_time_model_gradient.pdf",
-      "png": "supp_05_resource_time_model_gradient.png",
-      "source_groups": [
-        "cost_ledgers",
-        "backbone_metadata"
-      ]
-    },
-    {
-      "stem": "supp_05_resource_time_wall_restore",
-      "title": "Resources | Wall-clock and snapshot-restore time",
-      "note": "Training totals per seed, averaged across seeds 42, 43, 44. Model time includes cached encoding amortization.",
-      "pdf": "supp_05_resource_time_wall_restore.pdf",
-      "png": "supp_05_resource_time_wall_restore.png",
-      "source_groups": [
-        "cost_ledgers",
-        "backbone_metadata"
       ]
     }
   ]

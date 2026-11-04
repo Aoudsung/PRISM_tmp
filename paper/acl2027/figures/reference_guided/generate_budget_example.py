@@ -42,7 +42,7 @@ def main():
     metrics_to_plot = [("mean_utility", 1, "Dev utility"), ("success_rate", 100, "Dev success (%)")]
 
     fig, axes = plt.subplots(2, 3, figsize=(7.6, 3.1), sharex=True, sharey="row")
-    fig.subplots_adjust(left=.075, right=.985, bottom=.17, top=.85, wspace=.18, hspace=.19)
+    fig.subplots_adjust(left=.075, right=.985, bottom=.14, top=.85, wspace=.18, hspace=.19)
     plotted, tight_gains = [], {}
     for col, model in enumerate(MODEL_IDS):
         for row, (field, scale, ylabel) in enumerate(metrics_to_plot):
@@ -79,9 +79,7 @@ def main():
     handles.append(Line2D([], [], color="#CBD5E1", ls=(0, (2, 3)), lw=.8, label="Default budget"))
     fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(.994, .999),
                ncol=4, fontsize=7.1, columnspacing=1.2, handletextpad=.4)
-    fig.supxlabel(r"Budget multiplier $B/B_0$", y=.06, fontsize=7.8)
-    fig.text(.075, .015, "Tight-budget labels: SPAR − Unweighted utility at 0.6× budget (×100).",
-             ha="left", fontsize=6.6, color="#475569")
+    fig.supxlabel(r"Budget multiplier $B/B_0$", y=.025, fontsize=7.8)
     note = ("AppWorld development results; saved three-seed means. Columns identify backbones; "
             "rows show utility and success with shared scales within each metric. "
             "Labels report SPAR minus Unweighted utility at the lowest budget, multiplied by 100. "

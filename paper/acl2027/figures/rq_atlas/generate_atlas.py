@@ -32,10 +32,23 @@ def assemble(directory, records):
     fig.suptitle("RQ1–RQ5  |  Complete visual atlas", fontsize=15, fontweight="bold", x=.02, ha="left")
     fig.savefig(directory/"contact_sheet.png", dpi=160)
     plt.close(fig)
-    manifest = {"backup_tag": "backup/acl-rq-atlas-20261104", "figure_count": len(records),
+    manifest = {"backup_tag": "backup/acl-approved-style-20261104", "figure_count": len(records),
+                "style_reference": "paper/acl2027/figures/reference_guided/rq5_budget_response_example.png",
+                "in_figure_explanatory_footers": False,
                 "source_files": ["paper/acl2027/evidence/data/metrics.json", "paper/acl2027/evidence/data/comparisons.json"],
                 "figures": records}
     (directory/"manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2)+"\n")
+    index_lines = ["# RQ1–RQ5 完整图集", "", "按认可样张统一绘制；图内不放解释性页脚。", "",
+                   "| PDF 页码 | 图表 | 图件 |", "|---|---|---|"]
+    for page, record in enumerate(records, 1):
+        title = record["title"].replace("|", "·")
+        index_lines.append(f"| {page} | {title} | [PDF](plots/{record['pdf']}) · [PNG](plots/{record['png']}) |")
+    index_lines.extend(["", "## 数据口径", ""])
+    for page, record in enumerate(records, 1):
+        index_lines.extend([f"<details><summary>{page}. {record['title']}</summary>", "",
+                            record["note"], "", "来源：" + ", ".join(record["source_groups"]),
+                            "", "</details>", ""])
+    (directory/"INDEX.md").write_text("\n".join(index_lines)+"\n")
     print(f"Assembled {len(records)} figures: {directory / 'rq1_rq5_complete_atlas.pdf'}")
 
 

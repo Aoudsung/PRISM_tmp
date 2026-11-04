@@ -19,14 +19,13 @@ METHOD_LABELS = dict(zip(METHODS, ["Frozen Base", "AREW / T3", "GiGPO", "InfoPO"
     "PoS / EnvProbe", "Step-DPO", "Outcome-PG", "Outcome-Value", "Outcome-RLOO", "Info-RL Neighbor",
     "Unstratified", "Unweighted", "SPAR"]))
 FOCUS = ["prism_evolve", "ablation_unweighted", "step_dpo"]
-COLORS = {"spar": "#005F73", "unweighted": "#C83E4D", "reference": "#6D597A",
+COLORS = {"spar": "#005F73", "unweighted": "#CA3E47", "reference": "#64748B",
+          "probe": "#0088A8", "execute": "#D97706",
           "context": "#94A3B8", "ink": "#0F172A", "muted": "#334155", "grid": "#E2E8EE"}
-METHOD_COLORS = {"prism_evolve": "#005F73", "ablation_unweighted": "#C83E4D",
-    "step_dpo": "#6D597A", "pos_envprobe": "#4D7C6F", "infopo": "#6BA3BE",
-    "worldevolver": "#3B7097", "gigpo": "#64748B", "arew": "#94A3B8",
-    "frozen_base": "#CBD5E1", "outcome_pg": "#94A3B8", "outcome_value_baseline": "#64748B",
-    "outcome_rloo": "#7C8E9B", "info_rl_neighbor": "#6BA3BE", "unstratified_2branch": "#9B8DA5"}
-MODEL_COLORS = dict(zip(MODEL_IDS, ["#6BA3BE", "#D97706", "#005F73"]))
+METHOD_COLORS = {method: "#94A3B8" for method in METHODS}
+METHOD_COLORS.update(prism_evolve=COLORS["spar"], ablation_unweighted=COLORS["unweighted"],
+                     step_dpo="#64748B", pos_envprobe="#7C8E9B", frozen_base="#94A3B8")
+MODEL_COLORS = dict(zip(MODEL_IDS, ["#005F73", "#64748B", "#94A3B8"]))
 SEQUENTIAL = LinearSegmentedColormap.from_list("atlas_teal", ["#FFFFFF", "#EEF5F7", "#D7E9EC", "#A9CDD3"])
 
 mpl.rcParams.update({
