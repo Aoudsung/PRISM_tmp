@@ -1,0 +1,214 @@
+{
+  "backup_tag": "backup/acl-rq-atlas-20261104",
+  "figure_count": 20,
+  "source_files": [
+    "paper/acl2027/evidence/data/metrics.json",
+    "paper/acl2027/evidence/data/comparisons.json"
+  ],
+  "figures": [
+    {
+      "stem": "rq1_01_test_utility",
+      "title": "RQ1 | Test utility across all methods",
+      "note": "Mean $\\mathbb{E}[U_B]$. Test split; mean across seeds 42, 43, 44. AppWorld: 168 tasks; PlanBench-XL: 90 queries.",
+      "pdf": "rq1_01_test_utility.pdf",
+      "png": "rq1_01_test_utility.png",
+      "source_groups": [
+        "metrics/main_results"
+      ]
+    },
+    {
+      "stem": "rq1_02_test_success",
+      "title": "RQ1 | Test success across all methods",
+      "note": "Mean success rate (%). Test split; mean across seeds 42, 43, 44. AppWorld: 168 tasks; PlanBench-XL: 90 queries.",
+      "pdf": "rq1_02_test_success.pdf",
+      "png": "rq1_02_test_success.png",
+      "source_groups": [
+        "metrics/main_results"
+      ]
+    },
+    {
+      "stem": "rq1_03_seed_variation",
+      "title": "RQ1 | Individual seeds and test-utility variation",
+      "note": "All 252 seed-level results. Points show individual seeds; horizontal intervals show the stored three-seed sample SD. SPAR is highlighted.",
+      "pdf": "rq1_03_seed_variation.pdf",
+      "png": "rq1_03_seed_variation.png",
+      "source_groups": [
+        "metrics/seed_results",
+        "metrics/main_results"
+      ]
+    },
+    {
+      "stem": "rq2_01_mechanism_controls",
+      "title": "RQ2 | Utility gains over mechanism controls",
+      "note": "Each bar is 100 × (SPAR mean test utility − reference mean test utility). All contrasts use the same saved model and benchmark setting.",
+      "pdf": "rq2_01_mechanism_controls.pdf",
+      "png": "rq2_01_mechanism_controls.png",
+      "source_groups": [
+        "metrics/main_results"
+      ]
+    },
+    {
+      "stem": "rq2_02_aligned_weighting",
+      "title": "RQ2 | Aligned weighting versus unweighted branching",
+      "note": "Contrasts of saved means. Cost reduction uses Unweighted as the denominator; feedback gain uses the fixed 24-task development diagnostic.",
+      "pdf": "rq2_02_aligned_weighting.pdf",
+      "png": "rq2_02_aligned_weighting.png",
+      "source_groups": [
+        "comparisons/method_comparisons/reference_role=unweighted"
+      ]
+    },
+    {
+      "stem": "rq2_03_cost_utility",
+      "title": "RQ2 | Test utility and interaction cost",
+      "note": "Each point is one method's three-seed mean. The six panels share axes; higher utility and lower macro-action cost are preferred.",
+      "pdf": "rq2_03_cost_utility.pdf",
+      "png": "rq2_03_cost_utility.png",
+      "source_groups": [
+        "metrics/main_results"
+      ]
+    },
+    {
+      "stem": "rq3_01_coverage_and_gradients",
+      "title": "RQ3  |  Sampling coverage and gradient agreement",
+      "note": "Exact two-stage setting. MC: 10,000 episodes. Gradient coordinates follow the stored parameter-vector order.",
+      "pdf": "rq3_01_coverage_and_gradients.pdf",
+      "png": "rq3_01_coverage_and_gradients.png",
+      "source_groups": [
+        "metrics/exact_verification"
+      ]
+    },
+    {
+      "stem": "rq3_02_variance_cost",
+      "title": "RQ3  |  Exact and Monte Carlo variance–cost comparison",
+      "note": "Percentages compare stratified with RLOO (Exact / Monte Carlo); MC uses 10,000 episodes.",
+      "pdf": "rq3_02_variance_cost.pdf",
+      "png": "rq3_02_variance_cost.png",
+      "source_groups": [
+        "metrics/exact_verification"
+      ]
+    },
+    {
+      "stem": "rq4_01_stage_evolution",
+      "title": "RQ4 | Utility across training stages",
+      "note": "All 14 methods; curves are three-seed means. Bands show sample SD for SPAR, Unweighted and Step-DPO.",
+      "pdf": "rq4_01_stage_evolution.pdf",
+      "png": "rq4_01_stage_evolution.png",
+      "source_groups": [
+        "metrics.stage_results"
+      ]
+    },
+    {
+      "stem": "rq4_02_feedback_utilization",
+      "title": "RQ4 | Masked-feedback utilization",
+      "note": "Fixed 24-task development diagnostic; first information feedback is masked. Top: three-seed means. Bottom: SPAR stage endpoints.",
+      "pdf": "rq4_02_feedback_utilization.pdf",
+      "png": "rq4_02_feedback_utilization.png",
+      "source_groups": [
+        "metrics.main_results.final_dev.delta_use",
+        "comparisons.stage_changes"
+      ]
+    },
+    {
+      "stem": "rq4_03_trajectory_outcomes",
+      "title": "RQ4 | Trajectory outcomes across all methods",
+      "note": "Counts pooled over three seeds. Success / no failure means success without a recorded intermediate failure; recovered success follows a failure.",
+      "pdf": "rq4_03_trajectory_outcomes.pdf",
+      "png": "rq4_03_trajectory_outcomes.png",
+      "source_groups": [
+        "comparisons.trajectory_outcomes"
+      ]
+    },
+    {
+      "stem": "rq4_04_conditional_recovery",
+      "title": "RQ4 | Recovery conditional on an intermediate failure",
+      "note": "Each cell is recovered successes / evaluations with a recorded failure, pooled across seeds. Color encodes the ratio; dash means a zero denominator.",
+      "pdf": "rq4_04_conditional_recovery.pdf",
+      "png": "rq4_04_conditional_recovery.png",
+      "source_groups": [
+        "comparisons.trajectory_outcomes"
+      ]
+    },
+    {
+      "stem": "rq5_01_budget_scaling",
+      "title": "RQ5 | Utility and success across available budgets",
+      "note": "AppWorld development set; all 14 methods. Values are three-seed means from the saved budget sweep.",
+      "pdf": "rq5_01_budget_scaling.pdf",
+      "png": "rq5_01_budget_scaling.png",
+      "source_groups": [
+        "metrics.budgets"
+      ]
+    },
+    {
+      "stem": "rq5_02_budget_matrix",
+      "title": "RQ5 | Complete budget utility matrix",
+      "note": "AppWorld development set; 3 backbones x 14 methods x 3 budgets. Cells are three-seed mean utility.",
+      "pdf": "rq5_02_budget_matrix.pdf",
+      "png": "rq5_02_budget_matrix.png",
+      "source_groups": [
+        "metrics.budgets"
+      ]
+    },
+    {
+      "stem": "rq5_03_split_schedule",
+      "title": "RQ5 | Where to split the training trajectory",
+      "note": "AppWorld; bar heights are three-seed means with sample SD. Uniform schedules sample the split location T from the displayed set.",
+      "pdf": "rq5_03_split_schedule.pdf",
+      "png": "rq5_03_split_schedule.png",
+      "source_groups": [
+        "metrics.split_steps"
+      ]
+    },
+    {
+      "stem": "supp_01_training_returns",
+      "title": "Training | Batch returns across stages",
+      "note": "Lines are three-seed means; bands show sample SD for highlighted methods. Recorded zero-update values are retained.",
+      "pdf": "supp_01_training_returns.pdf",
+      "png": "supp_01_training_returns.png",
+      "source_groups": [
+        "training_progress"
+      ]
+    },
+    {
+      "stem": "supp_02_appworld_losses",
+      "title": "Training | AppWorld loss trajectories",
+      "note": "Points and bands show mean and sample SD across seeds 42, 43, 44. Each method uses its own loss scale.",
+      "pdf": "supp_02_appworld_losses.pdf",
+      "png": "supp_02_appworld_losses.png",
+      "source_groups": [
+        "training_progress"
+      ]
+    },
+    {
+      "stem": "supp_03_planbench_losses",
+      "title": "Training | PlanBench-XL loss trajectories",
+      "note": "Points and bands show mean and sample SD across seeds 42, 43, 44. Each method uses its own loss scale.",
+      "pdf": "supp_03_planbench_losses.pdf",
+      "png": "supp_03_planbench_losses.png",
+      "source_groups": [
+        "training_progress"
+      ]
+    },
+    {
+      "stem": "supp_04_resource_work",
+      "title": "Resources | Interaction and update counts",
+      "note": "Per-seed means (3 seeds). Lower panels: counts shared by all six settings. Q7/L8/Q27: Qwen2.5-7B/Llama-3.1-8B/Qwen3.8-27B; AW/PB: AppWorld/PlanBench-XL.",
+      "pdf": "supp_04_resource_work.pdf",
+      "png": "supp_04_resource_work.png",
+      "source_groups": [
+        "cost_ledgers",
+        "backbone_metadata"
+      ]
+    },
+    {
+      "stem": "supp_05_resource_time",
+      "title": "Resources | Recorded training time",
+      "note": "Per-seed means over 3 seeds. Model time includes cached encoding amortization. AW/PB: AppWorld/PlanBench-XL; Q7/L8/Q27: the three backbones.",
+      "pdf": "supp_05_resource_time.pdf",
+      "png": "supp_05_resource_time.png",
+      "source_groups": [
+        "cost_ledgers",
+        "backbone_metadata"
+      ]
+    }
+  ]
+}
