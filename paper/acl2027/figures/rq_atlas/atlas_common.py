@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import json
-import textwrap
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -22,8 +21,11 @@ METHOD_LABELS = dict(zip(METHODS, ["Frozen Base", "AREW / T3", "GiGPO", "InfoPO"
 FOCUS = ["prism_evolve", "ablation_unweighted", "step_dpo"]
 COLORS = {"spar": "#005F73", "unweighted": "#C83E4D", "reference": "#6D597A",
           "context": "#94A3B8", "ink": "#0F172A", "muted": "#334155", "grid": "#E2E8EE"}
-METHOD_COLORS = {"prism_evolve": COLORS["spar"], "ablation_unweighted": COLORS["unweighted"],
-                 "step_dpo": COLORS["reference"]}
+METHOD_COLORS = {"prism_evolve": "#005F73", "ablation_unweighted": "#C83E4D",
+    "step_dpo": "#6D597A", "pos_envprobe": "#4D7C6F", "infopo": "#6BA3BE",
+    "worldevolver": "#3B7097", "gigpo": "#64748B", "arew": "#94A3B8",
+    "frozen_base": "#CBD5E1", "outcome_pg": "#94A3B8", "outcome_value_baseline": "#64748B",
+    "outcome_rloo": "#7C8E9B", "info_rl_neighbor": "#6BA3BE", "unstratified_2branch": "#9B8DA5"}
 MODEL_COLORS = dict(zip(MODEL_IDS, ["#6BA3BE", "#D97706", "#005F73"]))
 SEQUENTIAL = LinearSegmentedColormap.from_list("atlas_teal", ["#FFFFFF", "#EEF5F7", "#D7E9EC", "#A9CDD3"])
 
@@ -90,16 +92,13 @@ def colorbar(fig, im, ax, label, *, fraction=.028, pad=.025):
 
 
 def save_figure(fig, out_dir, stem, title, note, sources):
-    """Axes reserve top <= .87 and bottom >= .12 for the title and footnote."""
+    """Match the existing paper figures; title/notes stay in PDF metadata and the index."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     for ax in fig.axes:
         ax.title.set_fontsize(8.4)
         ax.xaxis.label.set_fontsize(7.8)
         ax.yaxis.label.set_fontsize(7.8)
-    fig.text(.035, .965, title, ha="left", va="top", fontsize=9.5, fontweight="bold")
-    fig.text(.035, .025, textwrap.fill(note, 145), ha="left", va="bottom",
-             fontsize=7.0, color="#64748B", linespacing=1.35)
     pdf, png = out_dir / f"{stem}.pdf", out_dir / f"{stem}.png"
     fig.savefig(pdf, bbox_inches="tight", pad_inches=.04, metadata={"Title": title, "Subject": note})
     fig.savefig(png, dpi=300, bbox_inches="tight", pad_inches=.04)

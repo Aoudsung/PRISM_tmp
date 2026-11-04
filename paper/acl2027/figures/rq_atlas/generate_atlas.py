@@ -16,12 +16,12 @@ MODULES = ["plot_rq1_rq2", "plot_rq3", "plot_rq4_rq5", "plot_training_resources"
 
 def assemble(directory, records):
     directory = Path(directory)
-    records = sorted(records, key=lambda r: r["stem"])
+    records = list(records)
     subprocess.run(["pdfunite", *[str(directory/"plots"/r["pdf"]) for r in records],
                     str(directory/"rq1_rq5_complete_atlas.pdf")], check=True)
     columns = 4
     rows = (len(records)+columns-1)//columns
-    fig, axes = plt.subplots(rows, columns, figsize=(13, rows*2.8), squeeze=False)
+    fig, axes = plt.subplots(rows, columns, figsize=(13, rows*1.8), squeeze=False)
     fig.subplots_adjust(left=.015, right=.985, bottom=.015, top=.93, wspace=.08, hspace=.26)
     for index, ax in enumerate(axes.flat):
         ax.axis("off")
