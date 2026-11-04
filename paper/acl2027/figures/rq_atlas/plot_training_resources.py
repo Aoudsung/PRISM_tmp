@@ -93,10 +93,13 @@ def _is_zero_loss(index, stages, benchmark, method):
                for v in index[(model, benchmark, method, stage)])
 
 
-def _loss_page(index, stages, benchmark, methods, page, out_dir):
+def _loss_page(index, stages, benchmark, methods, page, out_dir, zero_methods=None):
     rows = len(methods)
-    fig, axes = plt.subplots(rows, 3, figsize=(7.6, 1.08+.90*rows), squeeze=False, sharex=True)
-    fig.subplots_adjust(left=.10, right=.99, bottom=.14, top=.85, wspace=.23, hspace=.42)
+    has_zero = bool(zero_methods)
+    fig_h = 3.65 if has_zero else (1.08 + .90 * rows)
+    fig, axes = plt.subplots(rows, 3, figsize=(7.6, fig_h), squeeze=False, sharex=True)
+    fig.subplots_adjust(left=.10, right=.99, bottom=.33 if has_zero else .14,
+                        top=.86 if has_zero else .85, wspace=.23, hspace=.42)
     for row, method in enumerate(methods):
         bounds = []
         style = _loss_style(method)
@@ -123,6 +126,26 @@ def _loss_page(index, stages, benchmark, methods, page, out_dir):
         pad = max((max(bounds)-min(bounds))*.09, abs(max(bounds))*.045, .001)
         for ax in axes[row]:
             ax.set_ylim(min(bounds)-pad, max(bounds)+pad)
+    if has_zero:
+        ax_z = fig.add_axes([.10, .02, .89, .20])
+        ax_z.axis("off")
+        ax_z.set_xlim(0, 1)
+        ax_z.set_ylim(0, 1)
+        ax_z.text(.0, .96, f"Recorded zero-loss methods across stages {stages[0]}–{stages[-1]} (mean ± SD)",
+                  fontsize=7.1, fontweight="bold", va="top", color=COLORS["ink"])
+        ax_z.plot([.0, 1.0], [.78, .78], lw=.6, color=COLORS["ink"])
+        ax_z.text(.01, .66, "Method", ha="left", va="center", fontsize=6.7, fontweight="bold")
+        model_xs = [.36, .63, .90]
+        for x, model in zip(model_xs, MODEL_IDS):
+            ax_z.text(x, .66, MODEL_LABELS[model], ha="center", va="center", fontsize=6.7, fontweight="bold")
+        ax_z.plot([.0, 1.0], [.54, .54], lw=.45, color=COLORS["ink"])
+        for y, zm in zip(np.linspace(.41, .11, len(zero_methods)), zero_methods):
+            ax_z.text(.01, y, METHOD_LABELS[zm], ha="left", va="center", fontsize=6.6, color=COLORS["ink"])
+            for x, model in zip(model_xs, MODEL_IDS):
+                avg, sd = _stats(index, stages, model, benchmark, zm, "mean_loss")
+                assert np.all(avg == 0) and np.all(sd == 0)
+                ax_z.text(x, y, "0.0000 ± 0.0000", ha="center", va="center", fontsize=6.5, color="#475569")
+        ax_z.plot([.0, 1.0], [.01, .01], lw=.6, color=COLORS["ink"])
     fig.text(.10, .98, BENCH_LABELS[benchmark], fontsize=8.4, fontweight="bold", va="top")
     lead_color = _loss_style(methods[-1])["color"]
     handles = [Line2D([], [], color=lead_color, marker="o", lw=1.35, ms=3.2, label="Mean (3 seeds)"),
@@ -130,38 +153,11 @@ def _loss_page(index, stages, benchmark, methods, page, out_dir):
     fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(.995, 1.015), ncol=2,
                fontsize=7.2, handletextpad=.4, columnspacing=1.2)
     prefix = "supp_02_appworld_losses" if benchmark == "appworld" else "supp_03_planbench_losses"
+    extra_title = f" + zero-loss methods ({', '.join(METHOD_LABELS[m] for m in zero_methods)})" if has_zero else ""
+    extra_note = " Non-updating / search-only methods with identically zero recorded loss across all stages and seeds are tabulated at the bottom." if has_zero else ""
     return save_figure(fig, out_dir, f"{prefix}_methods_{page:02d}",
-        f"Training | {BENCH_LABELS[benchmark]} loss | {', '.join(METHOD_LABELS[m] for m in methods)}",
-        "Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.",
-        ["training_progress"])
-
-
-def _zero_loss_table(index, stages, zero_methods, out_dir):
-    rows = [(benchmark, method) for benchmark in BENCHMARKS for method in zero_methods[benchmark]]
-    fig = plt.figure(figsize=(7.6, 1.5))
-    ax = fig.add_axes([.025, .05, .95, .9])
-    ax.axis("off")
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.text(.01, .98, f"Recorded loss at training stages {stages[0]}-{stages[-1]} (mean ± SD)",
-            fontsize=7.6, fontweight="bold", va="top")
-    ax.plot([.01, .99], [.84, .84], lw=.65, color=COLORS["ink"])
-    centers = [.08, .31, .54, .735, .93]
-    headers = ["Benchmark", "Method"] + [MODEL_LABELS[m] for m in MODEL_IDS]
-    for x, label in zip(centers, headers):
-        ax.text(x, .75, label, ha="center", va="center", fontsize=7.2, fontweight="bold")
-    ax.plot([.01, .99], [.67, .67], lw=.5, color=COLORS["ink"])
-    ys = np.linspace(.59, .075, len(rows))
-    for y, (benchmark, method) in zip(ys, rows):
-        ax.text(centers[0], y, BENCH_LABELS[benchmark], ha="center", va="center", fontsize=7.1)
-        ax.text(centers[1], y, METHOD_LABELS[method], ha="center", va="center", fontsize=7.1)
-        for x, model in zip(centers[2:], MODEL_IDS):
-            avg, sd = _stats(index, stages, model, benchmark, method, "mean_loss")
-            assert np.all(avg == 0) and np.all(sd == 0)
-            ax.text(x, y, "0.0000 ± 0.0000", ha="center", va="center", fontsize=7.1)
-    ax.plot([.01, .99], [.02, .02], lw=.65, color=COLORS["ink"])
-    return save_figure(fig, out_dir, "supp_03_recorded_zero_losses", "Training | Recorded zero losses",
-        "For these named benchmark/method groups, every stage and seed record has zero loss. This table records loss values only.",
+        f"Training | {BENCH_LABELS[benchmark]} loss | {', '.join(METHOD_LABELS[m] for m in methods)}{extra_title}",
+        f"Each method has an independent y-scale shared across its three model panels. Means and sample SD use three seeds.{extra_note}",
         ["training_progress"])
 
 
@@ -181,34 +177,23 @@ def _number(value, digits):
     return f"<{threshold:.{digits}f}" if value < threshold else f"{value:.{digits}f}"
 
 
-def _resource_table(metrics, benchmark, kind, out_dir):
-    index = _ledger_index(metrics)
-    if kind == "work":
-        fields = [("env_steps", 1, "Env. steps", 1), ("total_tokens", 1000, "Tokens (k)", 1)]
-        family, title = "supp_04_work", "Training work per seed"
-    elif kind == "model_gradient":
-        fields = [("model_inference_sec", 1, "Model (s)", 1), ("gradient_update_sec", 1, "Gradient (s)", 2)]
-        family, title = "supp_05_time_model_gradient", "Model and gradient-update time per seed"
-    else:
-        fields = [("wall_clock_sec", 1, "Wall (s)", 2), ("snapshot_restore_sec", 1, "Restore (s)", 3)]
-        family, title = "supp_05_time_wall_restore", "Wall-clock and snapshot-restore time per seed"
-    fig = plt.figure(figsize=(7.6, 2.85))
-    ax = fig.add_axes([.025, .025, .95, .95])
+def _draw_resource_panel(ax, index, benchmark, fields, panel_title):
     ax.axis("off")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    ax.text(.01, .99, BENCH_LABELS[benchmark], fontsize=8.4, fontweight="bold", va="top")
-    ax.text(.99, .99, title, fontsize=7.4, va="top", ha="right")
-    ax.plot([.01, .99], [.94, .94], lw=.7, color=COLORS["ink"])
-    centers = [.29, .41, .56, .68, .83, .95]
-    for x, model in zip([.35, .62, .89], MODEL_IDS):
-        ax.text(x, .888, MODEL_LABELS[model], ha="center", va="center", fontsize=7.3, fontweight="bold")
-    ax.text(.01, .82, "Method", fontsize=7.1, fontweight="bold", va="center")
-    for x, (_, _, label, _) in zip(centers, fields*3):
-        ax.text(x, .82, label, ha="center", va="center", fontsize=6.9)
-    ax.plot([.01, .99], [.782, .782], lw=.5, color=COLORS["ink"])
-    ys = np.linspace(.745, .05, len(METHODS))
-    spacing = ys[0]-ys[1]
+    ax.text(.01, .988, panel_title, fontsize=7.8, fontweight="bold", va="top", color=COLORS["ink"])
+    ax.plot([.01, .99], [.932, .932], lw=.7, color=COLORS["ink"])
+    group_centers = [.312, .582, .852]
+    centers = [.225, .312, .399, .495, .582, .669, .765, .852, .939]
+    for x, model in zip(group_centers, MODEL_IDS):
+        ax.text(x, .885, MODEL_LABELS[model], ha="center", va="center", fontsize=7.1, fontweight="bold")
+        ax.plot([x-.115, x+.115], [.848, .848], lw=.4, color="#94A3B8")
+    ax.text(.01, .810, "Method", fontsize=6.7, fontweight="bold", va="center")
+    for x, (_, _, label, _) in zip(centers, fields * 3):
+        ax.text(x, .810, label, ha="center", va="center", fontsize=6.35, fontweight="bold", color="#334155")
+    ax.plot([.01, .99], [.772, .772], lw=.5, color=COLORS["ink"])
+    ys = np.linspace(.736, .048, len(METHODS))
+    spacing = ys[0] - ys[1]
     for row_idx, (y, method) in enumerate(zip(ys, METHODS)):
         bold = method == "prism_evolve"
         if row_idx in (0, 6):
@@ -220,16 +205,45 @@ def _resource_table(metrics, benchmark, kind, out_dir):
             ax.plot([.01, .99], [y+spacing/2, y+spacing/2], color="#94A3B8", lw=.5)
         weight = "bold" if bold else "normal"
         txt_col = COLORS["spar"] if bold else COLORS["ink"]
-        ax.text(.01, y, METHOD_LABELS[method], fontsize=7.0, va="center", fontweight=weight, color=txt_col)
+        ax.text(.01, y, METHOD_LABELS[method], fontsize=6.65, va="center", fontweight=weight, color=txt_col)
         for col, model in enumerate(MODEL_IDS):
             for field_index, (field, scale, _, digits) in enumerate(fields):
-                value = index[(model, benchmark, method)][field]/scale
-                ax.text(centers[col*2+field_index]+.035, y, _number(value, digits), ha="right", va="center",
-                        fontsize=7.0, fontweight=weight, color=txt_col)
+                value = index[(model, benchmark, method)][field] / scale
+                ax.text(centers[col*3 + field_index] + .028, y, _number(value, digits),
+                        ha="right", va="center", fontsize=6.5, fontweight=weight, color=txt_col)
     ax.plot([.01, .99], [ys[-1]-spacing/2, ys[-1]-spacing/2], lw=.7, color=COLORS["ink"])
-    return save_figure(fig, out_dir, f"{family}_{benchmark}", f"Resources | {BENCH_LABELS[benchmark]} | {title}",
-        "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
-        ["cost_ledgers", "backbone_metadata"])
+
+
+def _resource_table_combined(metrics, benchmark, out_dir):
+    index = _ledger_index(metrics)
+    fields_a = [
+        ("env_steps", 1, "Env. steps", 1),
+        ("total_tokens", 1000, "Tokens (k)", 1),
+        ("wall_clock_sec", 1, "Wall (s)", 2),
+    ]
+    fields_b = [
+        ("model_inference_sec", 1, "Model (s)", 1),
+        ("gradient_update_sec", 1, "Grad. (s)", 2),
+        ("snapshot_restore_sec", 1, "Restore (s)", 3),
+    ]
+    fig = plt.figure(figsize=(7.6, 5.55))
+    ax_a = fig.add_axes([.025, .515, .95, .455])
+    ax_b = fig.add_axes([.025, .025, .95, .455])
+    _draw_resource_panel(
+        ax_a, index, benchmark, fields_a,
+        f"(a) {BENCH_LABELS[benchmark]} — Training interaction work and total wall-clock time per seed",
+    )
+    _draw_resource_panel(
+        ax_b, index, benchmark, fields_b,
+        f"(b) {BENCH_LABELS[benchmark]} — Model encoding, gradient-update, and snapshot-restore time per seed",
+    )
+    stem = "supp_04_resources_appworld" if benchmark == "appworld" else "supp_05_resources_planbench_xl"
+    return save_figure(
+        fig, out_dir, stem,
+        f"Resources | {BENCH_LABELS[benchmark]} | Complete training work and timing ledger",
+        "Per-seed training totals averaged over three seeds. Panel (a) reports interaction steps, tokens, and wall-clock time; Panel (b) reports amortized model encoding, gradient update, and snapshot restore time.",
+        ["cost_ledgers", "backbone_metadata"],
+    )
 
 
 def _bar_color(method):
@@ -297,11 +311,12 @@ def build(metrics, comparisons, out_dir):
         zero_methods[benchmark] = [m for m in METHODS if _is_zero_loss(index, stages, benchmark, m)]
         methods = [m for m in METHODS if m not in zero_methods[benchmark]]
         for start in range(0, len(methods), 3):
-            records.append(_loss_page(index, stages, benchmark, methods[start:start+3], start//3+1, out_dir))
-    if any(zero_methods.values()):
-        records.append(_zero_loss_table(index, stages, zero_methods, out_dir))
-    for kind in ["work", "model_gradient", "wall_restore"]:
-        for benchmark in BENCHMARKS:
-            records.append(_resource_table(metrics, benchmark, kind, out_dir))
+            is_last = (start + 3) >= len(methods)
+            records.append(_loss_page(
+                index, stages, benchmark, methods[start:start+3], start//3 + 1, out_dir,
+                zero_methods=zero_methods[benchmark] if is_last else None,
+            ))
+    for benchmark in BENCHMARKS:
+        records.append(_resource_table_combined(metrics, benchmark, out_dir))
     records.append(_resource_counts(metrics, out_dir))
     return records
