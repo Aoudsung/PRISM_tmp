@@ -13,6 +13,9 @@ from atlas_common import (
     MODEL_IDS, MODEL_LABELS, save_figure,
 )
 
+INTERNAL_CONTROLS = {"outcome_pg", "outcome_value_baseline", "outcome_rloo",
+                     "info_rl_neighbor", "unstratified_2branch"}
+
 
 def _training_index(metrics):
     index = defaultdict(list)
@@ -34,9 +37,19 @@ def _style(method):
     return {"color": COLORS["context"], "marker": "s", "ls": ":", "lw": 1.0}
 
 
+def _loss_style(method):
+    if method == "prism_evolve":
+        return {"color": COLORS["spar"], "marker": "o", "ls": "-", "lw": 1.75}
+    if method == "ablation_unweighted":
+        return {"color": COLORS["unweighted"], "marker": "^", "ls": "--", "lw": 1.45}
+    if method in INTERNAL_CONTROLS:
+        return {"color": COLORS["probe"], "marker": "D", "ls": "-", "lw": 1.4}
+    return {"color": "#334155", "marker": "s", "ls": "-", "lw": 1.35}
+
+
 def _returns(index, stages, out_dir):
-    fig, axes = plt.subplots(2, 3, figsize=(7.6, 3.2), sharex=True, sharey=True)
-    fig.subplots_adjust(left=.085, right=.99, bottom=.13, top=.83, wspace=.23, hspace=.30)
+    fig, axes = plt.subplots(2, 3, figsize=(7.6, 3.25), sharex=True, sharey=True)
+    fig.subplots_adjust(left=.085, right=.99, bottom=.14, top=.83, wspace=.23, hspace=.30)
     focus = ["prism_evolve", "ablation_unweighted", "frozen_base"]
     order = [m for m in METHODS if m not in focus] + list(reversed(focus))
     limits = []
@@ -49,7 +62,7 @@ def _returns(index, stages, out_dir):
                 if method in focus:
                     style = _style(method)
                     ax.fill_between(stages, avg-sd, avg+sd, color=style["color"], alpha=.09, linewidth=0)
-                    ax.plot(stages, avg, ms=3.0, zorder=4, **style)
+                    ax.plot(stages, avg, ms=3.2, markeredgecolor="white", markeredgewidth=.3, zorder=4, **style)
                 else:
                     ax.fill_between(stages, avg-sd, avg+sd, color=COLORS["context"], alpha=.018, linewidth=0)
                     ax.plot(stages, avg, color=COLORS["context"], lw=.55, alpha=.5, zorder=1)
@@ -65,9 +78,9 @@ def _returns(index, stages, out_dir):
             if row == 1:
                 ax.set_xlabel("Training stage")
     axes[0, 0].set_ylim(min(0, min(limits))-.015, max(limits)+.035)
-    handles = [Line2D([], [], ms=3, label=METHOD_LABELS[m], **_style(m)) for m in focus]
+    handles = [Line2D([], [], ms=3.2, label=METHOD_LABELS[m], **_style(m)) for m in focus]
     handles += [Line2D([], [], color=COLORS["context"], lw=.6, label="Other methods"),
-                Patch(facecolor=COLORS["context"], alpha=.12, edgecolor="none", label="± SD")]
+                Patch(facecolor=COLORS["context"], alpha=.14, edgecolor="none", label="± SD")]
     fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(.53, 1.015), ncol=5,
                fontsize=7.0, handletextpad=.4, columnspacing=1.0)
     return save_figure(fig, out_dir, "supp_01_training_returns", "Training | Batch returns",
@@ -82,17 +95,17 @@ def _is_zero_loss(index, stages, benchmark, method):
 
 def _loss_page(index, stages, benchmark, methods, page, out_dir):
     rows = len(methods)
-    fig, axes = plt.subplots(rows, 3, figsize=(7.6, 1.05+.90*rows), squeeze=False, sharex=True)
-    fig.subplots_adjust(left=.10, right=.99, bottom=.13, top=.85, wspace=.23, hspace=.42)
+    fig, axes = plt.subplots(rows, 3, figsize=(7.6, 1.08+.90*rows), squeeze=False, sharex=True)
+    fig.subplots_adjust(left=.10, right=.99, bottom=.14, top=.85, wspace=.23, hspace=.42)
     for row, method in enumerate(methods):
         bounds = []
+        style = _loss_style(method)
         for col, model in enumerate(MODEL_IDS):
             ax = axes[row, col]
             avg, sd = _stats(index, stages, model, benchmark, method, "mean_loss")
             bounds.extend([float((avg-sd).min()), float((avg+sd).max())])
-            style = _style(method)
-            ax.fill_between(stages, avg-sd, avg+sd, color=style["color"], alpha=.11, linewidth=0)
-            ax.plot(stages, avg, ms=3, **style)
+            ax.fill_between(stages, avg-sd, avg+sd, color=style["color"], alpha=.12, linewidth=0)
+            ax.plot(stages, avg, ms=3.2, markeredgecolor="white", markeredgewidth=.3, **style)
             if row == 0:
                 ax.set_title(f"({chr(97+col)}) {MODEL_LABELS[model]}", pad=6)
             ax.set_xticks(stages)
@@ -107,12 +120,13 @@ def _loss_page(index, stages, benchmark, methods, page, out_dir):
                 ax.tick_params(labelleft=False)
             if row == rows-1:
                 ax.set_xlabel("Training stage")
-        pad = max((max(bounds)-min(bounds))*.08, abs(max(bounds))*.04, .001)
+        pad = max((max(bounds)-min(bounds))*.09, abs(max(bounds))*.045, .001)
         for ax in axes[row]:
             ax.set_ylim(min(bounds)-pad, max(bounds)+pad)
     fig.text(.10, .98, BENCH_LABELS[benchmark], fontsize=8.4, fontweight="bold", va="top")
-    handles = [Line2D([], [], color=COLORS["context"], marker="s", lw=1, ms=3, label="Mean"),
-               Patch(facecolor=COLORS["context"], alpha=.15, edgecolor="none", label="± SD (3 seeds)")]
+    lead_color = _loss_style(methods[-1])["color"]
+    handles = [Line2D([], [], color=lead_color, marker="o", lw=1.35, ms=3.2, label="Mean (3 seeds)"),
+               Patch(facecolor=lead_color, alpha=.16, edgecolor="none", label="± SD")]
     fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(.995, 1.015), ncol=2,
                fontsize=7.2, handletextpad=.4, columnspacing=1.2)
     prefix = "supp_02_appworld_losses" if benchmark == "appworld" else "supp_03_planbench_losses"
@@ -178,7 +192,7 @@ def _resource_table(metrics, benchmark, kind, out_dir):
     else:
         fields = [("wall_clock_sec", 1, "Wall (s)", 2), ("snapshot_restore_sec", 1, "Restore (s)", 3)]
         family, title = "supp_05_time_wall_restore", "Wall-clock and snapshot-restore time per seed"
-    fig = plt.figure(figsize=(7.6, 2.8))
+    fig = plt.figure(figsize=(7.6, 2.85))
     ax = fig.add_axes([.025, .025, .95, .95])
     ax.axis("off")
     ax.set_xlim(0, 1)
@@ -195,48 +209,81 @@ def _resource_table(metrics, benchmark, kind, out_dir):
     ax.plot([.01, .99], [.782, .782], lw=.5, color=COLORS["ink"])
     ys = np.linspace(.745, .05, len(METHODS))
     spacing = ys[0]-ys[1]
-    for y, method in zip(ys, METHODS):
+    for row_idx, (y, method) in enumerate(zip(ys, METHODS)):
         bold = method == "prism_evolve"
+        if row_idx in (0, 6):
+            ax.plot([.01, .99], [y-spacing/2, y-spacing/2], color="#CBD5E1", lw=.45,
+                    ls="--" if row_idx == 0 else "-")
         if bold:
             ax.add_patch(Rectangle((.005, y-spacing/2), .99, spacing,
-                                   facecolor="#E9F3F5", edgecolor="none"))
+                                   facecolor="#E6F3F6", edgecolor="none"))
             ax.plot([.01, .99], [y+spacing/2, y+spacing/2], color="#94A3B8", lw=.5)
         weight = "bold" if bold else "normal"
-        ax.text(.01, y, METHOD_LABELS[method], fontsize=7.0, va="center", fontweight=weight)
+        txt_col = COLORS["spar"] if bold else COLORS["ink"]
+        ax.text(.01, y, METHOD_LABELS[method], fontsize=7.0, va="center", fontweight=weight, color=txt_col)
         for col, model in enumerate(MODEL_IDS):
             for field_index, (field, scale, _, digits) in enumerate(fields):
                 value = index[(model, benchmark, method)][field]/scale
                 ax.text(centers[col*2+field_index]+.035, y, _number(value, digits), ha="right", va="center",
-                        fontsize=7.0, fontweight=weight)
+                        fontsize=7.0, fontweight=weight, color=txt_col)
     ax.plot([.01, .99], [ys[-1]-spacing/2, ys[-1]-spacing/2], lw=.7, color=COLORS["ink"])
     return save_figure(fig, out_dir, f"{family}_{benchmark}", f"Resources | {BENCH_LABELS[benchmark]} | {title}",
         "Per-seed training totals, averaged over three seeds. Model time is the recorded amortized encoding measure; timing fields remain separate.",
         ["cost_ledgers", "backbone_metadata"])
 
 
+def _bar_color(method):
+    if method == "prism_evolve":
+        return COLORS["spar"]
+    if method == "ablation_unweighted":
+        return COLORS["unweighted"]
+    if method in INTERNAL_CONTROLS:
+        return COLORS["probe"]
+    if method == "frozen_base":
+        return "#CBD5E1"
+    return "#64748B"
+
+
 def _resource_counts(metrics, out_dir):
     index = _ledger_index(metrics)
     assert all(v["snapshot_saves"] == v["snapshot_restores"] for v in index.values())
-    fig, axes = plt.subplots(1, 2, figsize=(7.6, 2.9))
-    fig.subplots_adjust(left=.14, right=.99, bottom=.15, top=.87, wspace=.45)
+    fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.0))
+    fig.subplots_adjust(left=.14, right=.99, bottom=.16, top=.83, wspace=.45)
     for panel, (ax, field, title) in enumerate(zip(axes, ["gradient_steps", "snapshot_saves"],
                                                 ["Gradient updates", "Snapshot pairs"])):
         matrix = _ledger_matrix(index, field)
         assert np.all(matrix == matrix[:, :1]), "Counts in this view are shared across all six settings."
         values = matrix[:, 0]
         y = np.arange(len(METHODS))
-        ax.barh(y, values, height=.5, color=[_style(m)["color"] for m in METHODS])
+        for y_div, ls_div in [(.5, ":"), (6.5, "--"), (12.5, "-")]:
+            ax.axhline(y_div, color="#CBD5E1", lw=.45, ls=ls_div, zorder=0)
+        ax.barh(y, values, height=.54, color=[_bar_color(m) for m in METHODS], zorder=2)
         ax.set_yticks(y, [METHOD_LABELS[m] for m in METHODS])
         ax.invert_yaxis()
         maximum = float(values.max())
-        ax.set_xlim(0, maximum*1.17)
+        ax.set_xlim(0, maximum*1.19)
         ax.set_xticks(np.linspace(0, maximum, 4))
         ax.set_xlabel("Per-seed count")
         ax.set_title(f"({chr(97+panel)}) {title}", pad=6)
         ax.tick_params(labelsize=6.8, pad=2)
         ax.grid(axis="x")
-        for row, value in enumerate(values):
-            ax.text(value+maximum*.025, row, f"{value:.0f}", va="center", fontsize=6.8)
+        for row, (method, value) in enumerate(zip(METHODS, values)):
+            is_spar = method == "prism_evolve"
+            ax.text(value+maximum*.025, row, f"{value:.0f}", va="center", fontsize=6.7,
+                    fontweight="bold" if is_spar else "normal",
+                    color=COLORS["spar"] if is_spar else COLORS["ink"])
+        for label in ax.get_yticklabels():
+            if label.get_text() == "SPAR":
+                label.set_fontweight("bold")
+                label.set_color(COLORS["spar"])
+    handles = [
+        Patch(facecolor="#64748B", label="External baselines"),
+        Patch(facecolor=COLORS["probe"], label="Sampling / credit controls"),
+        Patch(facecolor=COLORS["unweighted"], label="Unweighted"),
+        Patch(facecolor=COLORS["spar"], label="SPAR"),
+    ]
+    fig.legend(handles=handles, loc="upper right", bbox_to_anchor=(.992, 1.005), ncol=4,
+               fontsize=6.9, columnspacing=1.0, handletextpad=.35)
     return save_figure(fig, out_dir, "supp_04_resource_work_counts", "Resources | Update and snapshot counts",
         "Counts are identical across all six model/benchmark settings. Snapshot saves equal restores.",
         ["cost_ledgers"])

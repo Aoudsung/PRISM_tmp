@@ -11,7 +11,7 @@
     {
       "stem": "rq1_01_test_utility_full",
       "title": "RQ1 | Test utility",
-      "note": "Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold.",
+      "note": "Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold and second-best underlined.",
       "pdf": "rq1_01_test_utility_full.pdf",
       "png": "rq1_01_test_utility_full.png",
       "source_groups": [
@@ -21,7 +21,7 @@
     {
       "stem": "rq1_02_test_success_full",
       "title": "RQ1 | Test success (%)",
-      "note": "Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold.",
+      "note": "Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold and second-best underlined.",
       "pdf": "rq1_02_test_success_full.pdf",
       "png": "rq1_02_test_success_full.png",
       "source_groups": [
@@ -94,7 +94,7 @@
     {
       "stem": "rq2_03_cost_utility",
       "title": "RQ2 | Utility and interaction cost",
-      "note": "Each point is one method's three-seed mean; panels share the cost and utility scales. SPAR, Unweighted and Step-DPO are highlighted.",
+      "note": "Each point is one method's three-seed mean with SD error crosshairs on focused methods; dashed arrows show the Unweighted-to-SPAR shift.",
       "pdf": "rq2_03_cost_utility.pdf",
       "png": "rq2_03_cost_utility.png",
       "source_groups": [
@@ -124,7 +124,7 @@
     {
       "stem": "rq4_01_stage_evolution_appworld",
       "title": "RQ4 | AppWorld utility evolution",
-      "note": "Three-seed means; SPAR band is sample SD. All methods also appear in complete stage-value tables.",
+      "note": "Three-seed means; SPAR and Unweighted bands are sample SD. All methods also appear in complete stage-value tables.",
       "pdf": "rq4_01_stage_evolution_appworld.pdf",
       "png": "rq4_01_stage_evolution_appworld.png",
       "source_groups": [
@@ -134,7 +134,7 @@
     {
       "stem": "rq4_01_stage_evolution_planbench_xl",
       "title": "RQ4 | PlanBench-XL utility evolution",
-      "note": "Three-seed means; SPAR band is sample SD. All methods also appear in complete stage-value tables.",
+      "note": "Three-seed means; SPAR and Unweighted bands are sample SD. All methods also appear in complete stage-value tables.",
       "pdf": "rq4_01_stage_evolution_planbench_xl.pdf",
       "png": "rq4_01_stage_evolution_planbench_xl.png",
       "source_groups": [

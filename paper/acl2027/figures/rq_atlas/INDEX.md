@@ -54,7 +54,7 @@
 
 <details><summary>1. RQ1 | Test utility</summary>
 
-Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold.
+Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold and second-best underlined.
 
 来源：metrics/main_results
 
@@ -62,7 +62,7 @@ Complete 14-method table with three-seed means and sample SD. Model blocks each 
 
 <details><summary>2. RQ1 | Test success (%)</summary>
 
-Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold.
+Complete 14-method table with three-seed means and sample SD. Model blocks each contain AppWorld and PlanBench-XL; best means are bold and second-best underlined.
 
 来源：metrics/main_results
 
@@ -118,7 +118,7 @@ Mean-based contrasts. Relative cost reduction uses Unweighted as denominator; fe
 
 <details><summary>9. RQ2 | Utility and interaction cost</summary>
 
-Each point is one method's three-seed mean; panels share the cost and utility scales. SPAR, Unweighted and Step-DPO are highlighted.
+Each point is one method's three-seed mean with SD error crosshairs on focused methods; dashed arrows show the Unweighted-to-SPAR shift.
 
 来源：metrics/main_results
 
@@ -142,7 +142,7 @@ Percentages compare stratified with RLOO (Exact / Monte Carlo); MC uses 10,000 e
 
 <details><summary>12. RQ4 | AppWorld utility evolution</summary>
 
-Three-seed means; SPAR band is sample SD. All methods also appear in complete stage-value tables.
+Three-seed means; SPAR and Unweighted bands are sample SD. All methods also appear in complete stage-value tables.
 
 来源：metrics.stage_results
 
@@ -150,7 +150,7 @@ Three-seed means; SPAR band is sample SD. All methods also appear in complete st
 
 <details><summary>13. RQ4 | PlanBench-XL utility evolution</summary>
 
-Three-seed means; SPAR band is sample SD. All methods also appear in complete stage-value tables.
+Three-seed means; SPAR and Unweighted bands are sample SD. All methods also appear in complete stage-value tables.
 
 来源：metrics.stage_results
 

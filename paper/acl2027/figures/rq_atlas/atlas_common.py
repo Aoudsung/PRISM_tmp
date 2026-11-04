@@ -20,11 +20,11 @@ METHOD_LABELS = dict(zip(METHODS, ["Frozen Base", "AREW / T3", "GiGPO", "InfoPO"
     "Unstratified", "Unweighted", "SPAR"]))
 FOCUS = ["prism_evolve", "ablation_unweighted", "step_dpo"]
 COLORS = {"spar": "#005F73", "unweighted": "#CA3E47", "reference": "#64748B",
-          "probe": "#0088A8", "execute": "#D97706",
+          "probe": "#0088A8", "execute": "#D97706", "peer": "#6D597A",
           "context": "#94A3B8", "ink": "#0F172A", "muted": "#334155", "grid": "#E2E8EE"}
 METHOD_COLORS = {method: "#94A3B8" for method in METHODS}
 METHOD_COLORS.update(prism_evolve=COLORS["spar"], ablation_unweighted=COLORS["unweighted"],
-                     step_dpo="#64748B", pos_envprobe="#7C8E9B", frozen_base="#94A3B8")
+                     step_dpo="#6D597A", pos_envprobe=COLORS["probe"], frozen_base="#64748B")
 MODEL_COLORS = dict(zip(MODEL_IDS, ["#005F73", "#64748B", "#94A3B8"]))
 SEQUENTIAL = LinearSegmentedColormap.from_list("atlas_teal", ["#FFFFFF", "#EEF5F7", "#D7E9EC", "#A9CDD3"])
 
@@ -33,7 +33,7 @@ mpl.rcParams.update({
     "font.family": "serif", "font.serif": ["Times New Roman", "Nimbus Roman", "Times", "DejaVu Serif"],
     "mathtext.fontset": "stix", "font.size": 8.2,
     "axes.titlesize": 8.4, "axes.titleweight": "bold", "axes.titlepad": 7.5,
-    "axes.labelsize": 7.8, "axes.labelpad": 5.5,
+    "axes.labelsize": 7.8, "axes.labelpad": 6.8,
     "axes.spines.top": False, "axes.spines.right": False,
     "axes.edgecolor": "#94A3B8", "axes.linewidth": 0.6, "axes.axisbelow": True,
     "axes.labelcolor": COLORS["ink"], "text.color": COLORS["ink"],
@@ -98,6 +98,9 @@ def save_figure(fig, out_dir, stem, title, note, sources):
         ax.title.set_fontsize(8.4)
         ax.xaxis.label.set_fontsize(7.8)
         ax.yaxis.label.set_fontsize(7.8)
+        for lbl in list(ax.get_xticklabels()) + list(ax.get_yticklabels()):
+            if "\n" in lbl.get_text():
+                lbl.set_linespacing(1.85)
     pdf, png = out_dir / f"{stem}.pdf", out_dir / f"{stem}.png"
     fig.savefig(pdf, bbox_inches="tight", pad_inches=.04, metadata={"Title": title, "Subject": note})
     fig.savefig(png, dpi=300, bbox_inches="tight", pad_inches=.04)
