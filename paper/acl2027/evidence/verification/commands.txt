@@ -1,0 +1,7 @@
+host: mgt01
+cwd: /apps/users/adminuser/prism-exact-reproduction
+export command: .venv-prism-evolve/bin/python outputs/acl2027_evidence_collection_20261104/export/collect_prism_evolve_evidence.py --input outputs/prism_evolve_experiments/prism_evolve_full_results.json --output-dir outputs/acl2027_evidence_collection_20261104/export/data
+export exit code: 0
+verification command: .venv-prism-evolve/bin/python outputs/acl2027_evidence_collection_20261104/export/verify_export.py
+verification exit code: 0
+stdout logs: export.log, verification.log

@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "collection_date": "2026-11-04",
+  "timezone": "Asia/Taipei",
+  "repository_revision_at_collection": "44ade00",
+  "canonical_results": {
+    "host": "mgt01",
+    "remote_path": "/apps/users/adminuser/prism-exact-reproduction/outputs/prism_evolve_experiments/prism_evolve_full_results.json",
+    "repository_path": "outputs/prism_evolve_experiments/prism_evolve_full_results.json",
+    "bytes": 3759497,
+    "selection": "完整三模型汇总；与三份backbone文件逐对象一致；沿用用户确认的三模型报告版本。",
+    "record_root": "/backbones",
+    "exclude_duplicate_root_aliases": ["part2_appworld", "part3_diagnostics", "part4_planbench_xl"],
+    "root_alias_model": "Qwen/Qwen2.5-7B-Instruct"
+  },
+  "snapshots": [
+    {
+      "host": "mgt01",
+      "remote_root": "/apps/users/adminuser/prism-exact-reproduction",
+      "archive": "sources/prism-evolve-mgt01-evidence-20261104.tar.gz",
+      "bytes": 620934,
+      "contents": ["outputs/prism_evolve_experiments/*.json", "outputs/prism_evolve_experiments/prism_evolve_report.md", "results/prism_evolve/prism_evolve_full_results.json", "src/prism_evolve/*.py", "scripts/run_prism_evolve_experiments.py"],
+      "contains": "完整汇总、3个模型原始结果、2份编码元数据、报告、历史单模型结果及收集时源码"
+    },
+    {
+      "host": "ubuntu",
+      "remote_root": "/home/chenxiangwei/workspace/long-horizon-decision",
+      "archive": "sources/prism-evolve-ubuntu27b-evidence-20261104.tar.gz",
+      "bytes": 285320,
+      "contents": ["outputs/prism_evolve_experiments/*.json", "outputs/prism_evolve_experiments/prism_evolve_report.md", "src/prism_evolve/*.py", "scripts/run_prism_evolve_experiments.py"],
+      "contains": "27B原始结果、当地汇总与报告、27B编码元数据及收集时源码"
+    }
+  ],
+  "alignment": {
+    "mgt01_current_source_equals_local_source": true,
+    "ubuntu_current_source_equals_local_source": true,
+    "source_comparison_scope": ["src/prism_evolve/**/*.py", "scripts/run_prism_evolve_experiments.py"],
+    "mgt01_backbone_files_equal_canonical_model_objects": true,
+    "ubuntu27b_file_equals_mgt01_copy": true,
+    "ubuntu27b_aggregate_equals_canonical_model_object": true,
+    "checks": "静态diff/cmp与服务器JSON对象比较；未添加文件哈希。",
+    "source_revision_at_experiment_execution": null,
+    "execution_version_note": "结果文件未写入执行时源码revision；本包保存收集时相同的两端源码及原始结果，方便后续追溯。"
+  },
+  "historical_and_duplicate_sources": [
+    {
+      "path": "results/prism_evolve/prism_evolve_full_results.json",
+      "bytes": 875202,
+      "status": "historical_single_backbone",
+      "use": "归档保留；新统计从canonical_results读取。"
+    },
+    {
+      "path": "outputs/prism_evolve_experiments/results_backbone_*.json",
+      "status": "per_model_mirrors",
+      "use": "追溯模型来源；不重复计入样本数。"
+    },
+    {
+      "path": "ubuntu:outputs/prism_evolve_experiments/prism_evolve_full_results.json",
+      "bytes": 1831693,
+      "status": "single_model_27b_with_root_aliases",
+      "use": "27B运行来源；归入同一27B结果。"
+    }
+  ],
+  "large_assets_left_on_servers": [
+    "outputs/prism_evolve_experiments/*_embed_cache.pt",
+    "原始模型权重与基准数据"
+  ]
+}

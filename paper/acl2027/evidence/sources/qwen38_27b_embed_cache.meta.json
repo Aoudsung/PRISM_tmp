@@ -1,0 +1,17 @@
+{
+  "model_id": "Qwen/Qwen3.8-27B",
+  "resolved_model_path": "/home/chenxiangwei/models/Qwen3.8-27B",
+  "hostname": "ubuntu",
+  "hidden_size": 5120,
+  "num_hidden_layers": 64,
+  "vocab_size": 248320,
+  "lora_adapter_dim": 512,
+  "lora_rank": 16,
+  "lora_alpha": 32.0,
+  "gpu_device": "cuda:1",
+  "gpu_name": "NVIDIA RTX 6000D",
+  "num_texts": 4200,
+  "total_encoded_tokens": 448919,
+  "gpu_elapsed_sec": 285.05467370100087,
+  "total_subprocess_sec": 293.99672568100505
+}

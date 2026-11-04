@@ -17,6 +17,7 @@
 - [`scripts/run_prism_evolve_experiments.py`](scripts/run_prism_evolve_experiments.py)：端到端定理核验、多基座训练评测、消融分析与报告生成主入口。
 - [`outputs/prism_evolve_experiments/`](outputs/prism_evolve_experiments) & [`results/prism_evolve/`](results/prism_evolve)：三大基座模型完整实验数据（JSON）与评测报告（Markdown / LaTeX）。
 - [`paper/acl2027/`](paper/acl2027)：ACL 论文 LaTeX 源码工程。
+- [`paper/acl2027/evidence/`](paper/acl2027/evidence/)：三模型实验原始快照、统一指标、数值对比与可直接用于论文的 claim 素材索引。
 
 ## 远程服务器实验执行
 

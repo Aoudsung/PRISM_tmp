@@ -1,0 +1,15 @@
+PASS: 3 models × 2 benchmarks × 14 methods × 3 seeds; exported counts complete.
+PASS: six sampled source-pointer/value round trips; Qwen7 AppWorld utility/cost contrasts match raw means.
+PASS: three trajectory categories sum to 32,508 seed-task evaluations.
+PEER meta-llama/Llama-3.1-8B-Instruct appworld step_dpo utility_gain_pts=4.079365
+PEER meta-llama/Llama-3.1-8B-Instruct planbench_xl pos_envprobe utility_gain_pts=10.503704
+PEER Qwen/Qwen2.5-7B-Instruct appworld step_dpo utility_gain_pts=5.472222
+PEER Qwen/Qwen2.5-7B-Instruct planbench_xl step_dpo utility_gain_pts=8.866667
+PEER Qwen/Qwen3.8-27B appworld step_dpo utility_gain_pts=1.773810
+PEER Qwen/Qwen3.8-27B planbench_xl step_dpo utility_gain_pts=2.044444
+TRAJECTORY meta-llama/Llama-3.1-8B-Instruct appworld {'seed_task_evaluations': 504, 'success_without_recorded_failure': 433, 'recovered_success': 22, 'final_failure': 49, 'evaluations_with_recorded_failure': 71, 'pooled_recovery_rate': 0.30985915492957744}
+TRAJECTORY meta-llama/Llama-3.1-8B-Instruct planbench_xl {'seed_task_evaluations': 270, 'success_without_recorded_failure': 222, 'recovered_success': 43, 'final_failure': 5, 'evaluations_with_recorded_failure': 48, 'pooled_recovery_rate': 0.8958333333333334}
+TRAJECTORY Qwen/Qwen2.5-7B-Instruct appworld {'seed_task_evaluations': 504, 'success_without_recorded_failure': 409, 'recovered_success': 37, 'final_failure': 58, 'evaluations_with_recorded_failure': 95, 'pooled_recovery_rate': 0.3894736842105263}
+TRAJECTORY Qwen/Qwen2.5-7B-Instruct planbench_xl {'seed_task_evaluations': 270, 'success_without_recorded_failure': 208, 'recovered_success': 39, 'final_failure': 23, 'evaluations_with_recorded_failure': 62, 'pooled_recovery_rate': 0.6290322580645161}
+TRAJECTORY Qwen/Qwen3.8-27B appworld {'seed_task_evaluations': 504, 'success_without_recorded_failure': 492, 'recovered_success': 10, 'final_failure': 2, 'evaluations_with_recorded_failure': 12, 'pooled_recovery_rate': 0.8333333333333334}
+TRAJECTORY Qwen/Qwen3.8-27B planbench_xl {'seed_task_evaluations': 270, 'success_without_recorded_failure': 264, 'recovered_success': 0, 'final_failure': 6, 'evaluations_with_recorded_failure': 6, 'pooled_recovery_rate': 0.0}
