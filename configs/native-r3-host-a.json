@@ -1,0 +1,127 @@
+{
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "seed": 43,
+  "dtype": "bfloat16",
+  "cpu_threads": 4,
+  "split_seed": 20261105,
+  "groups_per_update": 1,
+  "training_budget": {
+    "max_env_steps": 2000,
+    "max_model_tokens": 96000000,
+    "max_wall_seconds": 28800
+  },
+  "dev_budget": {
+    "max_env_steps": 200,
+    "max_model_tokens": 16000000,
+    "max_wall_seconds": 4000
+  },
+  "episode_max_steps": 100,
+  "episode_max_model_tokens": 8000000,
+  "episode_max_wall_seconds": 1800,
+  "max_new_tokens": 768,
+  "max_context_tokens": 32768,
+  "temperature": 1.0,
+  "evaluation_greedy": true,
+  "chat_template_kwargs": {},
+  "activation_offload_cpu": true,
+  "activation_offload_min_bytes": 1048576,
+  "lora_rank": 16,
+  "lora_alpha": 32.0,
+  "weight_decay": 0.0,
+  "grad_clip_norm": 1.0,
+  "appworld_code_timeout_seconds": 10,
+  "planbench_run_config": null,
+  "execution_policy": {
+    "unit_tests": false,
+    "standalone_validation": false,
+    "formal_only": true
+  },
+  "site_id": "host_a",
+  "external_root": "/apps/users/adminuser/prism-exact-external",
+  "model_path": "/apps/users/adminuser/models/Qwen2.5-7B-Instruct",
+  "appworld_data_root": "/apps/users/adminuser/prism-exact-external/appworld-root",
+  "planbench_repo_root": "/apps/users/adminuser/prism-exact-external/pbxl-repo",
+  "protocol": "native-r3",
+  "protocol_version": "native-r3",
+  "implementation_revision": "native-r3.4-official-alignment",
+  "experiment_id": "prism-native-r3.4-official-alignment-20261108",
+  "arms": [
+    "R",
+    "W",
+    "P"
+  ],
+  "tasks": {
+    "appworld": {
+      "train": [
+        {
+          "task_id": "34d9492_2",
+          "scenario_id": "34d9492",
+          "split": "train",
+          "environment_seed": 43000129
+        },
+        {
+          "task_id": "ccb4494_1",
+          "scenario_id": "ccb4494",
+          "split": "train",
+          "environment_seed": 43000130
+        }
+      ],
+      "development": [
+        {
+          "task_id": "0d8a4ee_2",
+          "scenario_id": "0d8a4ee",
+          "split": "dev",
+          "original_index": 1,
+          "environment_seed": 43000130
+        },
+        {
+          "task_id": "37a8675_1",
+          "scenario_id": "37a8675",
+          "split": "dev",
+          "original_index": 6,
+          "environment_seed": 43000135
+        }
+      ]
+    },
+    "planbench_xl": {
+      "train": [
+        {
+          "task_id": "retail_query_0205",
+          "scenario_id": "retail_task_0205",
+          "split": "train",
+          "environment_seed": 43000129
+        },
+        {
+          "task_id": "retail_query_0290",
+          "scenario_id": "retail_task_0290",
+          "split": "train",
+          "environment_seed": 43000130
+        }
+      ],
+      "development": [
+        {
+          "task_id": "retail_query_0003",
+          "scenario_id": "retail_task_0003",
+          "split": "dev",
+          "original_index": 1,
+          "environment_seed": 43000130
+        },
+        {
+          "task_id": "retail_query_0023",
+          "scenario_id": "retail_task_0023",
+          "split": "dev",
+          "original_index": 6,
+          "environment_seed": 43000135
+        }
+      ]
+    }
+  },
+  "warmstart_epochs": 4,
+  "warmstart_lr": 0.0001,
+  "prism_groups": 4,
+  "prism_lr": 1e-06,
+  "branch_anchor": "first_public_feasible_frontier",
+  "teacher_reference_timeout_seconds": 1800,
+  "reference_visibility": "train_only",
+  "training_objective": "U_B=Y*max(0,1-C/B)"
+}

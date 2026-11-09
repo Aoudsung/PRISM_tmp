@@ -1,0 +1,147 @@
+{
+  "results": [
+    {
+      "env": "ObjectStateWorld",
+      "stress_label": "pilot_low",
+      "seed": 42,
+      "task_success": 1,
+      "n_steps": 4,
+      "world_state_accuracy_mean": 0.9999999999999999,
+      "world_state_accuracy_last_third": 0.9999999999999999,
+      "action_validity": 1.0,
+      "self_check_accuracy": 1.0,
+      "dependency_accuracy_mean": 1.0,
+      "false_belief_commitment": 0,
+      "invalid_actions": 0
+    },
+    {
+      "env": "ObjectStateWorld",
+      "stress_label": "pilot_low",
+      "seed": 123,
+      "task_success": 1,
+      "n_steps": 5,
+      "world_state_accuracy_mean": 0.9999999999999998,
+      "world_state_accuracy_last_third": 0.9999999999999999,
+      "action_validity": 1.0,
+      "self_check_accuracy": 1.0,
+      "dependency_accuracy_mean": 1.0,
+      "false_belief_commitment": 0,
+      "invalid_actions": 0
+    },
+    {
+      "env": "ObjectStateWorld",
+      "stress_label": "pilot_low",
+      "seed": 456,
+      "task_success": 1,
+      "n_steps": 1,
+      "world_state_accuracy_mean": 0.9999999999999999,
+      "world_state_accuracy_last_third": 0.9999999999999999,
+      "action_validity": 1.0,
+      "self_check_accuracy": 1.0,
+      "dependency_accuracy_mean": 1.0,
+      "false_belief_commitment": 0,
+      "invalid_actions": 0
+    },
+    {
+      "env": "ToolDAGWorld",
+      "stress_label": "pilot_low",
+      "seed": 42,
+      "task_success": 1,
+      "n_steps": 5,
+      "world_state_accuracy_mean": 1.0,
+      "world_state_accuracy_last_third": 1.0,
+      "action_validity": 1.0,
+      "self_check_accuracy": 1.0,
+      "dependency_accuracy_mean": 1.0,
+      "false_belief_commitment": 0,
+      "invalid_actions": 0
+    },
+    {
+      "env": "ToolDAGWorld",
+      "stress_label": "pilot_low",
+      "seed": 123,
+      "task_success": 1,
+      "n_steps": 5,
+      "world_state_accuracy_mean": 1.0,
+      "world_state_accuracy_last_third": 1.0,
+      "action_validity": 1.0,
+      "self_check_accuracy": 1.0,
+      "dependency_accuracy_mean": 1.0,
+      "false_belief_commitment": 0,
+      "invalid_actions": 0
+    },
+    {
+      "env": "ToolDAGWorld",
+      "stress_label": "pilot_low",
+      "seed": 456,
+      "task_success": 1,
+      "n_steps": 5,
+      "world_state_accuracy_mean": 1.0,
+      "world_state_accuracy_last_third": 1.0,
+      "action_validity": 1.0,
+      "self_check_accuracy": 1.0,
+      "dependency_accuracy_mean": 1.0,
+      "false_belief_commitment": 0,
+      "invalid_actions": 0
+    },
+    {
+      "env": "GraphNavWorld",
+      "stress_label": "pilot_low",
+      "seed": 42,
+      "task_success": 1,
+      "n_steps": 1,
+      "world_state_accuracy_mean": 1.0,
+      "world_state_accuracy_last_third": 1.0,
+      "action_validity": 1.0,
+      "self_check_accuracy": 1.0,
+      "dependency_accuracy_mean": 1.0,
+      "false_belief_commitment": 0,
+      "invalid_actions": 0
+    },
+    {
+      "env": "GraphNavWorld",
+      "stress_label": "pilot_low",
+      "seed": 123,
+      "task_success": 1,
+      "n_steps": 4,
+      "world_state_accuracy_mean": 1.0,
+      "world_state_accuracy_last_third": 1.0,
+      "action_validity": 1.0,
+      "self_check_accuracy": 1.0,
+      "dependency_accuracy_mean": 1.0,
+      "false_belief_commitment": 0,
+      "invalid_actions": 0
+    },
+    {
+      "env": "GraphNavWorld",
+      "stress_label": "pilot_low",
+      "seed": 456,
+      "task_success": 1,
+      "n_steps": 4,
+      "world_state_accuracy_mean": 1.0,
+      "world_state_accuracy_last_third": 1.0,
+      "action_validity": 1.0,
+      "self_check_accuracy": 1.0,
+      "dependency_accuracy_mean": 1.0,
+      "false_belief_commitment": 0,
+      "invalid_actions": 0
+    }
+  ],
+  "checks": {
+    "world_state_accuracy_mean": {
+      "min": 0.9999999999999998,
+      "mean": 1.0,
+      "pass": true
+    },
+    "self_check_accuracy": {
+      "min": 1.0,
+      "mean": 1.0,
+      "pass": true
+    },
+    "action_validity": {
+      "min": 1.0,
+      "mean": 1.0,
+      "pass": true
+    }
+  }
+}

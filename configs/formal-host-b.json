@@ -1,0 +1,58 @@
+{
+  "protocol_version": "native-r2",
+  "experiment_id": "prism-native-formal-20261106",
+  "model_id": "Qwen/Qwen2.5-7B-Instruct",
+  "seed": 43,
+  "dtype": "bfloat16",
+  "cpu_threads": 4,
+  "train_num_tasks": 16,
+  "dev_num_tasks": 24,
+  "dev_selection_seed": 20261105,
+  "split_seed": 20261105,
+  "training_task_selection": "registered_order",
+  "checkpoint_selection": "budget_terminal",
+  "max_train_groups": 16,
+  "max_updates": null,
+  "groups_per_update": 1,
+  "training_budget": {
+    "max_env_steps": 4000,
+    "max_model_tokens": 64000000,
+    "max_wall_seconds": 14400
+  },
+  "dev_budget": {
+    "max_env_steps": 2400,
+    "max_model_tokens": 192000000,
+    "max_wall_seconds": 44640
+  },
+  "episode_max_steps": 100,
+  "episode_max_model_tokens": 8000000,
+  "episode_max_wall_seconds": 1800,
+  "max_new_tokens": 768,
+  "max_context_tokens": 32768,
+  "temperature": 1.0,
+  "evaluation_greedy": true,
+  "chat_template_kwargs": {},
+  "activation_offload_cpu": true,
+  "activation_offload_min_bytes": 1048576,
+  "lora_rank": 16,
+  "lora_alpha": 32.0,
+  "learning_rate": 1e-06,
+  "weight_decay": 0.0,
+  "grad_clip_norm": 1.0,
+  "split_steps": [
+    2
+  ],
+  "stagnation_repeat_limit": 0,
+  "appworld_code_timeout_seconds": 10,
+  "planbench_run_config": null,
+  "execution_policy": {
+    "unit_tests": false,
+    "standalone_validation": false,
+    "formal_only": true
+  },
+  "site_id": "host_b",
+  "external_root": "/home/chenxiangwei/workspace/prism-native-external",
+  "model_path": "/home/chenxiangwei/models/Qwen2.5-7B-Instruct",
+  "appworld_data_root": "/home/chenxiangwei/workspace/external/appworld-root",
+  "planbench_repo_root": "/home/chenxiangwei/workspace/prism-native-external/pbxl-repo"
+}

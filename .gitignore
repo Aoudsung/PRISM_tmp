@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.deps/
+.venv/
+.research/
+.external/
+.DS_Store
+SSH_Document.md
+*apiKey*.csv
+.ssh-askpass-*.sh

@@ -1,0 +1,509 @@
+{
+  "per_env": {
+    "ObjectStateWorld": {
+      "trajs": [
+        {
+          "seed": 1000,
+          "action_seed": 5000,
+          "hash_1": "708e3562aa952df0",
+          "hash_2": "708e3562aa952df0",
+          "n_steps": 15,
+          "match": true
+        },
+        {
+          "seed": 1001,
+          "action_seed": 5001,
+          "hash_1": "6508a94c1a193a81",
+          "hash_2": "6508a94c1a193a81",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1002,
+          "action_seed": 5002,
+          "hash_1": "f59d15f7e4ffcb8f",
+          "hash_2": "f59d15f7e4ffcb8f",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1003,
+          "action_seed": 5003,
+          "hash_1": "ba6c9d14ad0a6c03",
+          "hash_2": "ba6c9d14ad0a6c03",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1004,
+          "action_seed": 5004,
+          "hash_1": "1483a7eb5391c1c6",
+          "hash_2": "1483a7eb5391c1c6",
+          "n_steps": 19,
+          "match": true
+        },
+        {
+          "seed": 1005,
+          "action_seed": 5005,
+          "hash_1": "bd45befe4bd23fec",
+          "hash_2": "bd45befe4bd23fec",
+          "n_steps": 4,
+          "match": true
+        },
+        {
+          "seed": 1006,
+          "action_seed": 5006,
+          "hash_1": "a399d3cf5378ea88",
+          "hash_2": "a399d3cf5378ea88",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1007,
+          "action_seed": 5007,
+          "hash_1": "e8bb2b437c40697a",
+          "hash_2": "e8bb2b437c40697a",
+          "n_steps": 19,
+          "match": true
+        },
+        {
+          "seed": 1008,
+          "action_seed": 5008,
+          "hash_1": "7f816ddb8a0f206a",
+          "hash_2": "7f816ddb8a0f206a",
+          "n_steps": 7,
+          "match": true
+        },
+        {
+          "seed": 1009,
+          "action_seed": 5009,
+          "hash_1": "a6d397047bbc32ca",
+          "hash_2": "a6d397047bbc32ca",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1010,
+          "action_seed": 5010,
+          "hash_1": "f7c9586e96667253",
+          "hash_2": "f7c9586e96667253",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1011,
+          "action_seed": 5011,
+          "hash_1": "c4428ab10072f5ca",
+          "hash_2": "c4428ab10072f5ca",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1012,
+          "action_seed": 5012,
+          "hash_1": "1fb1a9880317ac2b",
+          "hash_2": "1fb1a9880317ac2b",
+          "n_steps": 5,
+          "match": true
+        },
+        {
+          "seed": 1013,
+          "action_seed": 5013,
+          "hash_1": "d6922fb456b30c10",
+          "hash_2": "d6922fb456b30c10",
+          "n_steps": 4,
+          "match": true
+        },
+        {
+          "seed": 1014,
+          "action_seed": 5014,
+          "hash_1": "1114aee0f47da35f",
+          "hash_2": "1114aee0f47da35f",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1015,
+          "action_seed": 5015,
+          "hash_1": "ba353771eea375fb",
+          "hash_2": "ba353771eea375fb",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1016,
+          "action_seed": 5016,
+          "hash_1": "846902ab93b46e03",
+          "hash_2": "846902ab93b46e03",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1017,
+          "action_seed": 5017,
+          "hash_1": "43ffcc734b4c0f49",
+          "hash_2": "43ffcc734b4c0f49",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1018,
+          "action_seed": 5018,
+          "hash_1": "30e7af2ff4de5f94",
+          "hash_2": "30e7af2ff4de5f94",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1019,
+          "action_seed": 5019,
+          "hash_1": "772baf717c3f816d",
+          "hash_2": "772baf717c3f816d",
+          "n_steps": 12,
+          "match": true
+        }
+      ],
+      "matched": 20,
+      "total": 20,
+      "match_rate": 1.0
+    },
+    "ToolDAGWorld": {
+      "trajs": [
+        {
+          "seed": 1000,
+          "action_seed": 5000,
+          "hash_1": "33653f1cc6c47c1d",
+          "hash_2": "33653f1cc6c47c1d",
+          "n_steps": 12,
+          "match": true
+        },
+        {
+          "seed": 1001,
+          "action_seed": 5001,
+          "hash_1": "562c7925bdc97bf2",
+          "hash_2": "562c7925bdc97bf2",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1002,
+          "action_seed": 5002,
+          "hash_1": "be838a2d91039335",
+          "hash_2": "be838a2d91039335",
+          "n_steps": 18,
+          "match": true
+        },
+        {
+          "seed": 1003,
+          "action_seed": 5003,
+          "hash_1": "42f316edcadbb2ed",
+          "hash_2": "42f316edcadbb2ed",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1004,
+          "action_seed": 5004,
+          "hash_1": "8965c87b29241efc",
+          "hash_2": "8965c87b29241efc",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1005,
+          "action_seed": 5005,
+          "hash_1": "03a3bd765966cbe7",
+          "hash_2": "03a3bd765966cbe7",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1006,
+          "action_seed": 5006,
+          "hash_1": "ed4ba96e77360989",
+          "hash_2": "ed4ba96e77360989",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1007,
+          "action_seed": 5007,
+          "hash_1": "a2becd7acfe5dc3c",
+          "hash_2": "a2becd7acfe5dc3c",
+          "n_steps": 14,
+          "match": true
+        },
+        {
+          "seed": 1008,
+          "action_seed": 5008,
+          "hash_1": "d166b9b8eafdab05",
+          "hash_2": "d166b9b8eafdab05",
+          "n_steps": 2,
+          "match": true
+        },
+        {
+          "seed": 1009,
+          "action_seed": 5009,
+          "hash_1": "3502b9d515d11751",
+          "hash_2": "3502b9d515d11751",
+          "n_steps": 17,
+          "match": true
+        },
+        {
+          "seed": 1010,
+          "action_seed": 5010,
+          "hash_1": "35026bfa1509e616",
+          "hash_2": "35026bfa1509e616",
+          "n_steps": 10,
+          "match": true
+        },
+        {
+          "seed": 1011,
+          "action_seed": 5011,
+          "hash_1": "2c5d4bde1860b9c6",
+          "hash_2": "2c5d4bde1860b9c6",
+          "n_steps": 16,
+          "match": true
+        },
+        {
+          "seed": 1012,
+          "action_seed": 5012,
+          "hash_1": "bbbadca4ab7c794a",
+          "hash_2": "bbbadca4ab7c794a",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1013,
+          "action_seed": 5013,
+          "hash_1": "9acb0a68c92f2b3b",
+          "hash_2": "9acb0a68c92f2b3b",
+          "n_steps": 15,
+          "match": true
+        },
+        {
+          "seed": 1014,
+          "action_seed": 5014,
+          "hash_1": "71fdbcb2824db931",
+          "hash_2": "71fdbcb2824db931",
+          "n_steps": 17,
+          "match": true
+        },
+        {
+          "seed": 1015,
+          "action_seed": 5015,
+          "hash_1": "579a13c57bf2d7fb",
+          "hash_2": "579a13c57bf2d7fb",
+          "n_steps": 16,
+          "match": true
+        },
+        {
+          "seed": 1016,
+          "action_seed": 5016,
+          "hash_1": "a800f97506e676f8",
+          "hash_2": "a800f97506e676f8",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1017,
+          "action_seed": 5017,
+          "hash_1": "6635973a9a2d08b4",
+          "hash_2": "6635973a9a2d08b4",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1018,
+          "action_seed": 5018,
+          "hash_1": "c360e29864086da1",
+          "hash_2": "c360e29864086da1",
+          "n_steps": 4,
+          "match": true
+        },
+        {
+          "seed": 1019,
+          "action_seed": 5019,
+          "hash_1": "b603766a5e5af83b",
+          "hash_2": "b603766a5e5af83b",
+          "n_steps": 6,
+          "match": true
+        }
+      ],
+      "matched": 20,
+      "total": 20,
+      "match_rate": 1.0
+    },
+    "GraphNavWorld": {
+      "trajs": [
+        {
+          "seed": 1000,
+          "action_seed": 5000,
+          "hash_1": "6f8e1abbea8f9cbe",
+          "hash_2": "6f8e1abbea8f9cbe",
+          "n_steps": 11,
+          "match": true
+        },
+        {
+          "seed": 1001,
+          "action_seed": 5001,
+          "hash_1": "52c75898750af00e",
+          "hash_2": "52c75898750af00e",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1002,
+          "action_seed": 5002,
+          "hash_1": "02c7818676e4dc34",
+          "hash_2": "02c7818676e4dc34",
+          "n_steps": 15,
+          "match": true
+        },
+        {
+          "seed": 1003,
+          "action_seed": 5003,
+          "hash_1": "d6b4073979f69a12",
+          "hash_2": "d6b4073979f69a12",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1004,
+          "action_seed": 5004,
+          "hash_1": "df506e17b800d43d",
+          "hash_2": "df506e17b800d43d",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1005,
+          "action_seed": 5005,
+          "hash_1": "6c8190465686efeb",
+          "hash_2": "6c8190465686efeb",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1006,
+          "action_seed": 5006,
+          "hash_1": "cd9efb9296ef1448",
+          "hash_2": "cd9efb9296ef1448",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1007,
+          "action_seed": 5007,
+          "hash_1": "1cf9aa6301889884",
+          "hash_2": "1cf9aa6301889884",
+          "n_steps": 5,
+          "match": true
+        },
+        {
+          "seed": 1008,
+          "action_seed": 5008,
+          "hash_1": "f477013c3844b41c",
+          "hash_2": "f477013c3844b41c",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1009,
+          "action_seed": 5009,
+          "hash_1": "2469211c8f5ae6dd",
+          "hash_2": "2469211c8f5ae6dd",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1010,
+          "action_seed": 5010,
+          "hash_1": "9d78b3bcfc131dd8",
+          "hash_2": "9d78b3bcfc131dd8",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1011,
+          "action_seed": 5011,
+          "hash_1": "b7e98f507e12b5cf",
+          "hash_2": "b7e98f507e12b5cf",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1012,
+          "action_seed": 5012,
+          "hash_1": "6f50b8a0b14977aa",
+          "hash_2": "6f50b8a0b14977aa",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1013,
+          "action_seed": 5013,
+          "hash_1": "769e59080cc97b09",
+          "hash_2": "769e59080cc97b09",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1014,
+          "action_seed": 5014,
+          "hash_1": "1a2a1f96a359f748",
+          "hash_2": "1a2a1f96a359f748",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1015,
+          "action_seed": 5015,
+          "hash_1": "5e5e361443480c00",
+          "hash_2": "5e5e361443480c00",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1016,
+          "action_seed": 5016,
+          "hash_1": "918e100c589fa0f1",
+          "hash_2": "918e100c589fa0f1",
+          "n_steps": 12,
+          "match": true
+        },
+        {
+          "seed": 1017,
+          "action_seed": 5017,
+          "hash_1": "315fe6a6f32bde29",
+          "hash_2": "315fe6a6f32bde29",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1018,
+          "action_seed": 5018,
+          "hash_1": "4acfd9bbc56bd595",
+          "hash_2": "4acfd9bbc56bd595",
+          "n_steps": 20,
+          "match": true
+        },
+        {
+          "seed": 1019,
+          "action_seed": 5019,
+          "hash_1": "14ec2898a921a169",
+          "hash_2": "14ec2898a921a169",
+          "n_steps": 20,
+          "match": true
+        }
+      ],
+      "matched": 20,
+      "total": 20,
+      "match_rate": 1.0
+    }
+  },
+  "n_trajs_per_env": 20,
+  "total_hashes": 120,
+  "matched": 120,
+  "overall_match_rate": 1.0
+}

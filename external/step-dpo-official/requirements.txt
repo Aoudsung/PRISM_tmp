@@ -1,0 +1,9 @@
+jsonlines
+trl==0.12.2
+alignment-handbook @ git+https://github.com/huggingface/alignment-handbook
+wandb
+deepspeed
+accelerate
+flash_attn
+vllm
+antlr4-python3-runtime==4.11

@@ -1,0 +1,24 @@
+model_id: gateway_deepseek
+provider: openai
+api_style: chat_completions
+model_name: workbuddy/deepseek-v4.1-flash
+
+auth:
+  api_key_env: OPENAI_API_KEY
+  base_url_env: OPENAI_BASE_URL
+  organization_env: OPENAI_ORG_ID
+
+request:
+  temperature: 0.0
+  max_tokens: 2048
+  timeout_seconds: 120
+  max_retries: 2
+  reasoning_effort: null
+
+limits:
+  max_concurrent_requests: 4
+
+capabilities:
+  tool_calling: false
+  json_mode: false
+  reasoning: false
