@@ -161,7 +161,7 @@
   "dcc_continuation_steps": 50,
   "dcc_full_tail_rollout": true,
   "dcc_proposal_budget": 3,
-  "dcc_learning_rate": 0.005,
+  "dcc_learning_rate": 0.001,
   "completed_training_imports": {},
   "reuse_completed_paired_evaluations": false,
   "completed_evaluation_imports": {},

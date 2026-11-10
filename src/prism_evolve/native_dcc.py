@@ -1959,13 +1959,14 @@ class ControlledResponseEnsemble(nn.Module):
         )
         self.member_step_outcome_bias = nn.Parameter(torch.zeros(self.ensemble_size))
 
-        # Dedicated amortized fixed-tail head H_{phi,m}^{pi_0}(Y, C_tail | Y=1, h, g, beta) (fixes F02, F11)
+        # Dedicated amortized fixed-tail head H_{phi,m}^{pi_0}(Y, C_tail | Y=1, s_m, field_slots, c_tail)
+        tail_in_dim = member_in_dim + (NUM_FIELD_SLOTS * NUM_SLOT_VALUES)
         self.tail_pi0_success_weight = nn.Parameter(
-            torch.zeros(self.ensemble_size, member_in_dim)
+            torch.zeros(self.ensemble_size, tail_in_dim)
         )
         self.tail_pi0_success_bias = nn.Parameter(torch.zeros(self.ensemble_size))
         self.tail_pi0_cost_bins_weight = nn.Parameter(
-            torch.zeros(self.ensemble_size, member_in_dim, TAIL_COST_BINS)
+            torch.zeros(self.ensemble_size, tail_in_dim, TAIL_COST_BINS)
         )
         self.tail_pi0_cost_bins_bias = nn.Parameter(
             torch.zeros(self.ensemble_size, TAIL_COST_BINS)
@@ -2278,7 +2279,7 @@ class ControlledResponseEnsemble(nn.Module):
 
         out_in = torch.cat([member_in, outcome_probs], dim=-1)  # (M, S + C + O)
         y_res = (out_in * self.member_step_outcome_weight).sum(dim=-1) + self.member_step_outcome_bias  # (M,)
-        y_prob = torch.sigmoid(float(prior_success_logit) + y_res)  # (M,)
+        y_prob = torch.sigmoid(-2.0 + float(prior_success_logit) + y_res)  # (M,) conservative base success rate ~0.12
 
         return {
             "h_ctx": h_ctx,
@@ -2292,28 +2293,43 @@ class ControlledResponseEnsemble(nn.Module):
             "terminal_success_prob": y_prob,         # (M,)
         }
 
+    @staticmethod
+    def _one_hot_field_slots(
+        public_fields: Mapping[str, str],
+        ensemble_size: int,
+        device: torch.device,
+        dtype: torch.dtype = torch.float32,
+    ) -> torch.Tensor:
+        slots = PublicBenchmarkBinder.encode_typed_field_slots(public_fields)
+        oh = torch.zeros((1, NUM_FIELD_SLOTS, NUM_SLOT_VALUES), device=device, dtype=dtype)
+        for s_i, v_i in enumerate(slots):
+            oh[0, s_i, int(v_i) % NUM_SLOT_VALUES] = 1.0
+        return oh.expand(ensemble_size, -1, -1).clone()
+
     def predict_tail_pi0(
         self,
         belief: torch.Tensor,
         h_ctx: torch.Tensor,
         spent_seconds_ratio: torch.Tensor,
         *,
+        field_slot_probs: torch.Tensor | None = None,
+        public_fields: Mapping[str, str] | None = None,
         prior_success_logit: float = 0.0,
     ) -> dict[str, torch.Tensor]:
-        """Evaluate fixed-tail response distribution H_{phi,m}^{pi_0}(Y, C_tail | Y=1, h, g, beta) per member.
-
-        Fixes F02, F11, F13:
-          - Predicts per-member P_m^{pi_0}(Y = 1 | h, g, beta) and conditional 8-bin tail time-cost
-            distribution P_m^{pi_0}(C_tail in bin_k | Y = 1, h, g, beta).
-          - Computes exact truncated expected utility:
-            E_m[U_B] = P_m(Y=1) * sum_k P_m(bin_k | Y=1) * max(0, 1 - spent_m - center_k),
-            preserving Cov(Y, C_tail) and respecting the budget ceiling B_seconds.
-        """
+        """Evaluate fixed-tail response distribution H_{phi,m}^{pi_0}(Y, C_tail | Y=1, b_m, z_fields, c_tail) per member."""
         ctx_expanded = h_ctx.unsqueeze(0).expand(self.ensemble_size, -1)
-        member_in = torch.cat([belief, ctx_expanded], dim=-1)  # (M, S + C)
+        if field_slot_probs is None:
+            slot_feat = self._one_hot_field_slots(
+                public_fields or {}, self.ensemble_size, belief.device, belief.dtype
+            ).reshape(self.ensemble_size, -1)
+        else:
+            slot_feat = field_slot_probs.to(device=belief.device, dtype=belief.dtype).reshape(
+                self.ensemble_size, NUM_FIELD_SLOTS * NUM_SLOT_VALUES
+            )
+        member_in = torch.cat([belief, ctx_expanded, slot_feat], dim=-1)  # (M, S + C + 16)
 
         y_logit = (member_in * self.tail_pi0_success_weight).sum(dim=-1) + self.tail_pi0_success_bias
-        y_prob = torch.sigmoid(float(prior_success_logit) + y_logit)  # (M,)
+        y_prob = torch.sigmoid(-2.0 + float(prior_success_logit) + y_logit)  # (M,) conservative base tail success rate ~0.12
 
         bin_logits = (
             torch.einsum("md,mdk->mk", member_in, self.tail_pi0_cost_bins_weight)
@@ -2467,6 +2483,7 @@ class ControlledResponseEnsemble(nn.Module):
             cur_b: torch.Tensor,
             cur_spent: torch.Tensor,
             cur_alive: torch.Tensor,
+            cur_slot_probs_s: torch.Tensor | None,
             cur_fields: Mapping[str, str],
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             rem_mean = float((1.0 - cur_spent).clamp(min=0.0, max=1.0).mean().item())
@@ -2480,8 +2497,20 @@ class ControlledResponseEnsemble(nn.Module):
                 frozen_tail_action_vec=frozen_tail_action_vec,
                 device=device,
             )
+            if cur_slot_probs_s is not None:
+                leaf_field_probs = torch.einsum("ms,mskv->mkv", cur_b, cur_slot_probs_s).clamp(min=1e-8)
+                leaf_field_probs = leaf_field_probs / leaf_field_probs.sum(dim=-1, keepdim=True)
+            else:
+                leaf_field_probs = self._one_hot_field_slots(
+                    cur_fields, self.ensemble_size, device, cur_b.dtype
+                )
             tail_out = self.predict_tail_pi0(
-                cur_b, tail_h_ctx, cur_spent, prior_success_logit=prior_success_logit
+                cur_b,
+                tail_h_ctx,
+                cur_spent,
+                field_slot_probs=leaf_field_probs,
+                public_fields=cur_fields,
+                prior_success_logit=prior_success_logit,
             )
             leaf_u = cur_alive * tail_out["expected_tail_utility"]
             leaf_cost = (cur_spent + cur_alive * tail_out["expected_cond_tail_cost"]).clamp(max=1.0)
@@ -2545,12 +2574,12 @@ class ControlledResponseEnsemble(nn.Module):
             calls_used: int,
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
             if not nodes or calls_used >= DEFAULT_MAX_PROBE_STEPS + 1:
-                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_fields)
+                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_slot_probs_s, cur_fields)
 
             head = nodes[0]
             rest = nodes[1:]
             if head.op == "Stop":
-                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_fields)
+                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_slot_probs_s, cur_fields)
 
             if head.op == "Seq":
                 return _eval_ast_sequence(
@@ -2650,7 +2679,11 @@ class ControlledResponseEnsemble(nn.Module):
             m_idx = int(member_index) % self.ensemble_size
             q_scalar = float(q_members[m_idx].item())
         else:
-            q_scalar = float(q_members.mean().item())
+            # Pessimistic ensemble lower-confidence bound at deployment prevents out-of-support
+            # overestimation on unvisited actions while equaling q_mean at phi_0 where std == 0.
+            q_mean_t = q_members.mean()
+            q_std_t = q_members.std(unbiased=False) if self.ensemble_size > 1 else torch.zeros_like(q_mean_t)
+            q_scalar = float((q_mean_t - 0.5 * q_std_t).clamp(min=0.0).item())
 
         return {
             "q_mean": float(q_members.mean().item()),
@@ -2861,7 +2894,16 @@ class ControlledResponseEnsemble(nn.Module):
                 tex_belief = root_belief
             else:
                 tex_belief = belief_by_node.get(str(tex.prefix_node_id), root_belief)
-            tail_preds = self.predict_tail_pi0(tex_belief, h_ctx_t, spent_vec)
+            obs_slot_oh = self._one_hot_field_slots(
+                tex.pre_public_fields, self.ensemble_size, device, tex_belief.dtype
+            )
+            tail_preds = self.predict_tail_pi0(
+                tex_belief,
+                h_ctx_t,
+                spent_vec,
+                field_slot_probs=obs_slot_oh,
+                public_fields=tex.pre_public_fields,
+            )
             p_y = tail_preds["tail_y_prob"].clamp(min=1e-6, max=1.0 - 1e-6)
             y_target = 1.0 if tex.observed_y else 0.0
             t_loss = -(y_target * torch.log(p_y) + (1.0 - y_target) * torch.log(1.0 - p_y))
