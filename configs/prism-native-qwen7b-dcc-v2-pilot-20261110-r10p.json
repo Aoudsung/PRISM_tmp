@@ -1,0 +1,253 @@
+{
+  "protocol_version": "native-v1",
+  "action_contract_version": "prism-native-text-v1",
+  "dcc_contract_version": "prism-dcc-v2-unified-r3",
+  "experiment_id": "prism-qwen7b-dcc-v2-pilot-s42-20261110-r10p",
+  "site_id": "host_b",
+  "workload_plan": [
+    {
+      "site_id": "host_b",
+      "backbone": "Qwen/Qwen2.5-7B-Instruct",
+      "seed": 42,
+      "benchmarks": [
+        "alfworld"
+      ],
+      "gpu": 0
+    },
+    {
+      "site_id": "host_b",
+      "backbone": "Qwen/Qwen2.5-7B-Instruct",
+      "seed": 42,
+      "benchmarks": [
+        "webshop"
+      ],
+      "gpu": 1
+    },
+    {
+      "site_id": "host_b",
+      "backbone": "Qwen/Qwen2.5-7B-Instruct",
+      "seed": 42,
+      "benchmarks": [
+        "loca"
+      ],
+      "gpu": 2
+    }
+  ],
+  "global_backbone_ids": [
+    "Qwen/Qwen2.5-7B-Instruct"
+  ],
+  "defer_global_statistics": true,
+  "coordination": {
+    "enabled": true,
+    "protocol": "native-cohort-claims-v1",
+    "session_id": "prism-qwen7b-dcc-v2-pilot-s42-20261110-r10p",
+    "registry_root": "/apps/users/adminuser/prism-exact-reproduction/coordination"
+  },
+  "execution_policy": {
+    "unit_tests": false,
+    "standalone_validation": false,
+    "formal_only": true
+  },
+  "execution_host": "ubuntu",
+  "project_root": "/home/chenxiangwei/workspace/long-horizon-decision",
+  "python_executable": "/home/chenxiangwei/env/prism-native-v1/bin/python",
+  "external_root": "/home/chenxiangwei/workspace/prism-native-external",
+  "appworld_data_root": "/home/chenxiangwei/workspace/external/appworld-root-v020",
+  "planbench_repo_root": "/home/chenxiangwei/workspace/prism-native-external/pbxl-repo",
+  "alfworld_data_root": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/alfworld",
+  "alfworld_python_executable": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/venv-alfworld/bin/python",
+  "webshop_repo_root": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/webshop",
+  "webshop_python_executable": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/venv-webshop/bin/python",
+  "webshop_use_small": true,
+  "webshop_human_goals": false,
+  "loca_pos_repo_root": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/pos-source",
+  "loca_python_executable": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/venv-loca/bin/python",
+  "loca_runtime_paths": [
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/venv-loca/bin",
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/node24/bin",
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/npm/node_modules/.bin",
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/uv-bin"
+  ],
+  "loca_runtime_roots": [
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/venv-loca",
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/python311",
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/python312",
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/node24",
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/npm",
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/uv-tools",
+    "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/uv-bin"
+  ],
+  "loca_bwrap_executable": "bwrap",
+  "loca_vm": {
+    "enabled": true,
+    "qemu_dir": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/qemu",
+    "vm_dir": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/loca-vm",
+    "boot_snapshot_tag": "boot_ready",
+    "memory_mb": 2048,
+    "smp": 2
+  },
+  "loca_environment_length": "8k",
+  "loca_train_seeds": [
+    10001,
+    10002,
+    10003,
+    10004
+  ],
+  "loca_dev_seeds": [
+    20001
+  ],
+  "loca_test_seeds": [
+    42
+  ],
+  "output_root": "outputs/prism_evolve_pos_benchmarks",
+  "seeds": [
+    42
+  ],
+  "split_seed": 20261105,
+  "backbones": [
+    {
+      "id": "Qwen/Qwen2.5-7B-Instruct",
+      "slug": "qwen25_7b",
+      "model_path": "/home/chenxiangwei/models/Qwen2.5-7B-Instruct",
+      "params_b": 7.6
+    }
+  ],
+  "benchmarks": [
+    "alfworld",
+    "webshop",
+    "loca"
+  ],
+  "benchmark_episode_steps": {
+    "alfworld": 50,
+    "webshop": 15,
+    "loca": 100
+  },
+  "benchmark_max_new_tokens": {
+    "alfworld": 512,
+    "webshop": 512,
+    "loca": 4096
+  },
+  "appworld_test_splits": [
+    "test_normal",
+    "test_challenge"
+  ],
+  "methods": [
+    "frozen_base",
+    "prism_evolve",
+    "dcc_k0_planner",
+    "dcc_no_program_growth",
+    "dcc_reset_parameters",
+    "dcc_fixed_d_shuffled",
+    "dcc_label_shuffled",
+    "dcc_pre_first_success"
+  ],
+  "main_methods": [
+    "frozen_base",
+    "prism_evolve"
+  ],
+  "mechanism_backbone": "Qwen/Qwen2.5-7B-Instruct",
+  "ablation_methods": [
+    "dcc_k0_planner",
+    "dcc_no_program_growth",
+    "dcc_reset_parameters",
+    "dcc_fixed_d_shuffled",
+    "dcc_label_shuffled",
+    "dcc_pre_first_success"
+  ],
+  "checkpoint_selection": "budget_terminal",
+  "max_train_groups": 4,
+  "dcc_ensemble_size": 8,
+  "dcc_max_probe_steps": 3,
+  "dcc_continuation_steps": 50,
+  "dcc_full_tail_rollout": true,
+  "dcc_proposal_budget": 3,
+  "dcc_learning_rate": 0.005,
+  "completed_training_imports": {},
+  "reuse_completed_paired_evaluations": false,
+  "completed_evaluation_imports": {},
+  "allow_expanded_method_evaluation_reuse": false,
+  "feedback_diagnostic": {
+    "enabled": false,
+    "backbone": "Qwen/Qwen2.5-7B-Instruct",
+    "num_tasks": 24,
+    "selection_seed": 20261105,
+    "checkpoints": [
+      "initial",
+      "final"
+    ],
+    "claim": "change_in_feedback_use_on_fixed_initial_policy_anchors"
+  },
+  "training_budget": {
+    "max_env_steps": 600,
+    "max_model_tokens": 500000,
+    "max_wall_seconds": 1800
+  },
+  "training_objective": "U_B=Y*max(0,1-C/B)",
+  "dev_budget": {
+    "max_env_steps": 1200,
+    "max_model_tokens": 2000000,
+    "max_wall_seconds": 3600
+  },
+  "formal_feedback_budget": {
+    "max_env_steps": 9600,
+    "max_model_tokens": 25165824,
+    "max_wall_seconds": 172800
+  },
+  "episode_max_steps": 100,
+  "episode_max_model_tokens": 262144,
+  "episode_max_wall_seconds": 1800,
+  "max_new_tokens": 512,
+  "max_json_retries": 0,
+  "max_context_tokens": 32768,
+  "evaluation_greedy": false,
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  },
+  "activation_offload_cpu": true,
+  "activation_offload_min_bytes": 1048576,
+  "lora_rank": 16,
+  "lora_alpha": 32.0,
+  "num_stages": 3,
+  "groups_per_update": 1,
+  "learning_rate": 1e-06,
+  "weight_decay": 0.0,
+  "grad_clip_norm": 1.0,
+  "ppo_epochs": 1,
+  "ppo_clip": 0.2,
+  "ppo_dual_clip": 3.0,
+  "reference_kl_coef": 0.01,
+  "split_steps": [
+    0
+  ],
+  "official_repos": {
+    "gigpo": "gigpo-official",
+    "infopo": "infopo-official",
+    "arew": "arew-official",
+    "t3": "arew-official",
+    "step_dpo": "step-dpo-official",
+    "worldevolver": "worldevolver-official",
+    "pos": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/pos-source",
+    "envprobe_simple": "envprobe-official",
+    "envprobe_judge": "envprobe-official"
+  },
+  "scheduler": {
+    "allowed_gpu_ids": [
+      0,
+      1,
+      2
+    ],
+    "max_workers": 3,
+    "max_workers_per_gpu": 1,
+    "poll_seconds": 15,
+    "cpu_threads_per_lane": 4,
+    "share_occupied_gpus": true,
+    "memory_fraction": 0.45
+  },
+  "statistics": {
+    "reference_method": "prism_evolve",
+    "seed": 20261105,
+    "num_bootstrap": 10000,
+    "num_permutations": 20000,
+    "alpha": 0.05
+  }
+}

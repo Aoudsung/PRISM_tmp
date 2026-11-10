@@ -1650,11 +1650,10 @@ class NativeCausalPolicy(nn.Module):
         view = self.get_active_dcc_model_view()
         self.dcc_active_belief = view.reset_intra_task_belief(device=self.device)
         self.dcc_active_program_state = None
-        if member_index is not None:
-            self.dcc_active_member_index = member_index
+        # Always assign `member_index` unconditionally (including None during deployment/evaluation, fixes A)
+        self.dcc_active_member_index = member_index
         self.dcc_episode_events = []
-        if task_instruction:
-            self.dcc_task_instruction = str(task_instruction)
+        self.dcc_task_instruction = str(task_instruction)
         self.dcc_remaining_budget_ratio = 1.0
         self._dcc_context_cache_key: str | None = None
         self._dcc_context_cache_vec: tuple[float, ...] = ()
@@ -2062,11 +2061,12 @@ class NativeCausalPolicy(nn.Module):
             frozen_ctx_vec = self.extract_frozen_semantic_context(goal_text, public_fields)
 
             # Build unified candidate pool E(h) = {admissible native actions} U {executable condition programs}
-            # No fake candidate-origin logprobs (-0.5/-1.0/-1.5) are injected (fixes F10).
-            candidates: list[tuple[str, str, ExecutableProgram | None]] = []
+            # Each entry carries `(candidate_id, concrete_action, program_or_None, advanced_ExecutionFrame_or_None)`
+            # so selecting a residual or library program continues its live ExecutionFrame directly (fixes E).
+            candidates: list[tuple[str, str, ExecutableProgram | None, ProgramExecutionState | None]] = []
             seen_actions: set[str] = set()
 
-            # 1. Residual program from previous step (if still active and bindable)
+            # 1. Residual program from previous step (preserving `local_env`, return bindings, and `node_stack`)
             if self.dcc_active_program_state is not None and not forced_program_failed:
                 res_prog = self.dcc_active_program_state.residual_program()
                 if res_prog is not None:
@@ -2074,7 +2074,9 @@ class NativeCausalPolicy(nn.Module):
                         self.dcc_active_program_state, action_schema, goal_text, hist_events
                     )
                     if res_step.status == "Action" and res_step.concrete_action:
-                        candidates.append((res_prog.program_id, res_step.concrete_action, res_prog))
+                        candidates.append(
+                            (res_prog.program_id, res_step.concrete_action, res_prog, res_step.frame)
+                        )
                         seen_actions.add(res_step.concrete_action)
 
             # 2. Active library programs bound in current public state
@@ -2087,14 +2089,14 @@ class NativeCausalPolicy(nn.Module):
                 if step_res.status == "Action" and step_res.concrete_action and (
                     step_res.concrete_action not in seen_actions or prog.origin != "starter"
                 ):
-                    candidates.append((prog.program_id, step_res.concrete_action, prog))
+                    candidates.append((prog.program_id, step_res.concrete_action, prog, step_res.frame))
                     seen_actions.add(step_res.concrete_action)
 
             # 3. Prior-proposed concrete action (always included)
             if prior_action_text:
                 candidates.insert(
                     0,
-                    (f"native_prior:{_short_hash(prior_action_text)}", prior_action_text, None),
+                    (f"native_prior:{_short_hash(prior_action_text)}", prior_action_text, None, None),
                 )
                 seen_actions.add(prior_action_text)
 
@@ -2103,16 +2105,22 @@ class NativeCausalPolicy(nn.Module):
                 benchmark, action_schema, goal_text, role_bindings
             )[:32]:
                 if adm_act not in seen_actions:
-                    candidates.append((f"native_atomic:{_short_hash(adm_act)}", adm_act, None))
+                    candidates.append((f"native_atomic:{_short_hash(adm_act)}", adm_act, None, None))
                     seen_actions.add(adm_act)
 
             cand_action_texts = [c[1] for c in candidates]
-            cand_action_vecs = self.extract_frozen_action_embeddings(cand_action_texts)
-            active_view = self.get_active_dcc_model_view()
+            all_embed_queries = [*cand_action_texts, TAIL_POLICY_VERSION]
+            all_embed_vecs = self.extract_frozen_action_embeddings(all_embed_queries)
+            cand_action_vecs = all_embed_vecs[:-1]
+            tail_action_vec = all_embed_vecs[-1]
+            embed_cache: dict[str, tuple[float, ...]] = dict(zip(all_embed_queries, all_embed_vecs))
 
-            # Compute semantic prior success logit from frozen goal-action embedding alignment (fixes F01)
-            goal_only_vec = np.asarray(frozen_ctx_vec[:16], dtype=np.float32)
-            goal_norm = float(np.linalg.norm(goal_only_vec))
+            def _lookup_action_embed(a_str: str) -> tuple[float, ...]:
+                if a_str not in embed_cache:
+                    embed_cache[a_str] = self.extract_frozen_action_embeddings([a_str])[0]
+                return embed_cache[a_str]
+
+            active_view = self.get_active_dcc_model_view()
 
             best_idx = 0
             best_q = -1e9
@@ -2121,16 +2129,7 @@ class NativeCausalPolicy(nn.Module):
             cand_qs: list[float] = []
             cand_member_qs: list[tuple[float, ...]] = []
 
-            for idx, ((cid, c_act, c_prog), act_vec) in enumerate(zip(candidates, cand_action_vecs)):
-                act_arr = np.asarray(act_vec[:16], dtype=np.float32)
-                act_norm = float(np.linalg.norm(act_arr))
-                sem_cos = (
-                    float(np.dot(goal_only_vec, act_arr) / (goal_norm * act_norm))
-                    if (goal_norm > 1e-6 and act_norm > 1e-6)
-                    else 0.0
-                )
-                prior_succ_logit = 0.5 * sem_cos
-
+            for idx, ((cid, c_act, c_prog, _), act_vec) in enumerate(zip(candidates, cand_action_vecs)):
                 q_eval = active_view.evaluate_candidate_q(
                     goal_text=goal_text,
                     public_fields=public_fields,
@@ -2140,7 +2139,9 @@ class NativeCausalPolicy(nn.Module):
                     remaining_budget_ratio=rem_ratio,
                     frozen_context_vec=frozen_ctx_vec,
                     frozen_action_vec=act_vec,
-                    prior_success_logit=prior_succ_logit,
+                    frozen_tail_action_vec=tail_action_vec,
+                    action_embedder=_lookup_action_embed,
+                    prior_success_logit=0.0,
                     member_index=self.dcc_active_member_index,
                     use_initial_params=False,
                 )
@@ -2153,15 +2154,9 @@ class NativeCausalPolicy(nn.Module):
                     best_q = q_score
                     best_idx = idx
 
-            sel_id, sel_act, sel_prog = candidates[best_idx]
-            if sel_prog is not None:
-                step_res = PublicBenchmarkBinder.step_ast_frame(
-                    ProgramExecutionState(program=sel_prog, bound_variables=dict(role_bindings)),
-                    action_schema,
-                    goal_text,
-                    hist_events,
-                )
-                self.dcc_active_program_state = step_res.frame if not step_res.frame.completed else None
+            sel_id, sel_act, sel_prog, sel_next_frame = candidates[best_idx]
+            if sel_next_frame is not None and not sel_next_frame.completed and not sel_next_frame.binding_failed:
+                self.dcc_active_program_state = sel_next_frame
             else:
                 self.dcc_active_program_state = None
 
@@ -2611,6 +2606,13 @@ class NativeCausalPolicy(nn.Module):
                 lib = ProgramLibrary(name)
                 lib.load_dict(payload)
                 self.dcc_libraries[name] = lib
+        # Clear intra-task DCC state whenever switching checkpoints so resident evaluation never leaks across cells (fixes A)
+        self.dcc_active_belief = None
+        self.dcc_active_program_state = None
+        self.dcc_active_member_index = None
+        self.dcc_episode_events = []
+        self._dcc_context_cache_key = None
+        self._dcc_context_cache_vec = ()
         metadata = json.loads((source / "native_policy.json").read_text(encoding="utf-8"))
         has_reference = metadata["has_warmstart_reference"]
         if not isinstance(has_reference, bool):

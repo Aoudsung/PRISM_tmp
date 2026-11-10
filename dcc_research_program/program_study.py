@@ -1144,8 +1144,14 @@ def main():
             **check_exhaustive_proposer_equivalence(),
         }
         growth_payload = {
-            "scope": "Bounded-budget program discovery study with strictly paid field access, candidate check budgets, unified active-pool policy support, unknown-K conditional evaluation, and multi-step sequential hidden-state delayed-goal evaluation.",
+            "scope": (
+                "Bounded-budget program discovery study with strictly paid field access, candidate check budgets, "
+                "unified active-pool policy support, unknown-K conditional evaluation, and multi-step sequential "
+                "hidden-state delayed-goal evaluation. Note: sequential_multistep_delayed_goal_study evaluates "
+                "explicit two-stage K_ready + H_tail composition rather than invoking native_dcc.py's production AST interpreter."
+            ),
             "date": "2026-11-10",
+            "configured_seeds": int(args.seeds),
             "checks": growth_checks,
             "program_growth_runs": [],
             "unknown_k_delayed_goal_runs": [],
@@ -1162,7 +1168,7 @@ def main():
             growth_payload["program_growth_runs"].append(g_run)
             u_run = unknown_k_delayed_goal_study(
                 num_fields=g_fields,
-                seeds=min(args.seeds, 256),
+                seeds=args.seeds,
                 max_blocks=args.growth_blocks,
                 proposal_budget=args.proposal_budget,
                 max_candidate_checks=args.max_candidate_checks,
@@ -1170,7 +1176,7 @@ def main():
             growth_payload["unknown_k_delayed_goal_runs"].append(u_run)
             seq_run = sequential_multistep_delayed_goal_study(
                 num_fields=g_fields,
-                seeds=min(args.seeds, 256),
+                seeds=args.seeds,
                 max_blocks=args.growth_blocks,
                 proposal_budget=args.proposal_budget,
                 max_candidate_checks=args.max_candidate_checks,

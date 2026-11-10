@@ -128,9 +128,9 @@ Q_m^\rho(g,h,\beta)
 \bigl[U_B(Y,C_{\mathrm{spent}}+C_{\mathrm{future}})\bigr].
 \]
 
-每个集成成员 \(m\) 维护各自独立的私有状态、字段分布与资源轨迹（共享冻结语义编码器，成员间状态不做隐式平均），仅在末端汇总候选均值 \(\widehat Q^\rho=\frac1M\sum_{m=1}^M Q_m^\rho\) 并选取 \(\rho^*=\arg\max_\rho\widehat Q^\rho\)。整个 episode 在起点固定不可变模型视图 `ModelView`（\(\phi_0\) 或 \(\phi_T\)，其中 \(\phi_0\) 独立持久化保存），使过滤更新、短程序前瞻与尾估值全程使用同一参数身份。
+每个集成成员 \(m\) 维护各自独立的私有状态、字段分布与资源轨迹（共享冻结语义编码器，成员间状态不做隐式平均），仅在末端汇总候选均值 \(\widehat Q^\rho=\frac1M\sum_{m=1}^M Q_m^\rho\) 并选取 \(\rho^*=\arg\max_\rho\widehat Q^\rho\)。整个 episode 在新环境重置起点固定不可变模型视图 `ModelView`（\(\phi_0\) 或 \(\phi_T\)，其中 \(\phi_0\) 独立持久化保存）并清空信念、执行帧与历史事件（评测态明确写入 `member_index=None`），使过滤更新、短程序前瞻与尾估值全程使用同一参数身份。
 
-冻结底模提供真实可调用的共享隐藏语义表示 `frozen_context(g, h)`、动作嵌入 `frozen_action_context(c, a)` 以及规范化响应先验 \(\ell_0\)。响应模型保留条件程序实际读取的类型化公开字段分布（而非三比特粗分桶），零基础项与零残差初始化严格满足 \(K_{\phi_0}=p_0\)。测量簇采用带 `parent_transition_id` 的分叉树表示：公共前缀前向一次并在分叉点保留可微 `fork_belief`，事实后缀 \(u\) 与反事实后缀 \(v\) 各自从 `fork_belief` 独立展开：
+冻结底模为训练、过滤与规划（含冻结尾策略 \(\pi_0\) 执行区间）提供统一共享的语言嵌入语义表示 `extract_frozen_semantic_context(g, h)` 与动作嵌入 `extract_frozen_action_embeddings(a)`（区分冻结语言特征支撑与完整自回归响应概率先验，不在规划侧单独附加未经训练监督的成功偏置）。响应模型保留条件程序实际读取的四槽规范化公开字段分布，并在 `Case` 前瞻中按贝叶斯法则计算条件后验信念 \(b_m(s'\mid z)\propto b_m(s')P_m(z\mid s',c)\)；发射与终局读出头零初始化以维持对称初始可观测分布 \(p_0\)，同时潜在转移与初始信念采用非对称初值以打破同一成员内部的潜在状态可交换性。测量簇采用带 `parent_transition_id` 的分叉树表示：公共前缀前向一次并在分叉点保留可微 `fork_belief`，事实后缀 \(u\) 与反事实后缀 \(v\) 各自从 `fork_belief` 独立展开，且每个 `TailExample` 通过真实 `prefix_node_id` 与统一的 `encode_tail_state_context` 绑定其所属分支的前缀信念：
 
 \[
 \mathcal L_m(\phi)

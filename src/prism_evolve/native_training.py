@@ -633,6 +633,8 @@ def rollout(
     snapshots: list[Any] | None = None,
     stop_at_frontier: bool = False, progress_supervisor: Any | None = None,
     capture_information: dict[str, Any] | None = None,
+    dcc_episode_preinitialized: bool = False,
+    record_dcc_features: bool = False,
 ) -> NativeTrajectory:
     """Run the actual actor until native termination or an explicit experiment cap.
 
@@ -662,15 +664,15 @@ def rollout(
             else "k0_planner" if method == "dcc_k0_planner"
             else "full"
         )
-        if policy.dcc_mode_enabled and not prefix and getattr(policy, "dcc_active_belief", None) is None:
-            init_task_instruction = str(
-                (context or {}).get("instruction", task_info.get("instruction", ""))
-            )
-            policy.reset_dcc_episode(benchmark_name, task_instruction=init_task_instruction)
     with _meters(policy, env, meter):
         if context is None:
             with _preserve_actor_rng():
                 context = env.reset(str(task_info["task_id"]), seed=seed)
+        if hasattr(policy, "dcc_mode_enabled") and policy.dcc_mode_enabled and not prefix and not dcc_episode_preinitialized:
+            init_task_instruction = str(context.get("instruction", task_info.get("instruction", "")))
+            policy.reset_dcc_episode(
+                benchmark_name, task_instruction=init_task_instruction, member_index=None
+            )
         trajectory = NativeTrajectory(
             str(task_info["task_id"]), str(context.get("scenario_id", task_info["scenario_id"])),
             events=list(prefix), elapsed_seconds=float(prefix_seconds),
@@ -785,6 +787,9 @@ def rollout(
                     "state_changed": bool(facts.get("state_changed")),
                     "task_progress": task_progress,
                 }
+                event.metadata["elapsed_after"] = max(
+                    0.0, float(prefix_seconds + monotonic_seconds() - started - post_submission_seconds)
+                )
                 if method in DCC_METHODS and hasattr(policy, "dcc_ensemble"):
                     from .native_dcc import PublicBenchmarkBinder
                     task_instruction = str(context.get("instruction", task_info.get("instruction", "")))
@@ -812,7 +817,7 @@ def rollout(
                         schema,
                         terminal_success=bool(step.done and step.success),
                         within_budget=True,
-                        cost_used=float(prev_elapsed + generation.elapsed_seconds + event.environment_seconds),
+                        cost_used=float(event.metadata["elapsed_after"]),
                         cost_budget=float(max(1e-8, trajectory.budget_seconds)),
                     )
                     event.metadata["dcc_pre_public_fields"] = obs_update["pre_public_fields"]
@@ -821,6 +826,24 @@ def rollout(
                     event.metadata["dcc_public_goal_readout"] = pub_goal_val
                     event.metadata["dcc_frozen_context_vec"] = list(obs_update.get("frozen_context_vec", ()))
                     event.metadata["dcc_frozen_action_vec"] = list(obs_update.get("frozen_action_vec", ()))
+                elif record_dcc_features and hasattr(policy, "extract_frozen_semantic_context"):
+                    # Decouple read-only representation logging from the action controller so frozen_base pi_0 suffixes
+                    # record the exact same Qwen semantic vectors and public fields as DCC steps (fixes D).
+                    from .native_dcc import PublicBenchmarkBinder
+                    task_instruction = str(context.get("instruction", task_info.get("instruction", "")))
+                    pre_ev = list(trajectory.events[:-1])
+                    pre_f = PublicBenchmarkBinder.extract_public_fields(
+                        benchmark_name, task_instruction, pre_ev, schema
+                    )
+                    post_f = PublicBenchmarkBinder.extract_public_fields(
+                        benchmark_name, task_instruction, trajectory.events, schema
+                    )
+                    f_ctx = policy.extract_frozen_semantic_context(task_instruction, pre_f)
+                    f_act = policy.extract_frozen_action_embeddings([generation.text.strip()])[0]
+                    event.metadata["dcc_pre_public_fields"] = pre_f
+                    event.metadata["dcc_public_fields"] = post_f
+                    event.metadata["dcc_frozen_context_vec"] = list(f_ctx)
+                    event.metadata["dcc_frozen_action_vec"] = list(f_act)
                 if progress_supervisor is not None:
                     next_progress = float(progress_supervisor.score(env))
                     event.metadata["training_progress"] = {
@@ -1061,6 +1084,7 @@ def _extract_pi0_tail_examples(
     events: Sequence[NativeEvent],
     *,
     task_id: str,
+    episode_id: str,
     cluster_id: str,
     benchmark: str,
     goal_text: str,
@@ -1070,14 +1094,21 @@ def _extract_pi0_tail_examples(
     global_budget_limited: bool,
     total_elapsed_seconds: float,
     tail_start_index: int,
+    branch_transitions: Sequence[Any] = (),
 ) -> list[Any]:
-    """Generate TailExample supervision records strictly from genuine frozen pi_0 suffix intervals (fixes F02, F03, F11)."""
+    """Generate TailExample supervision records strictly from genuine frozen pi_0 suffix intervals,
+    preserving exact fork-tree `prefix_node_id` and branch-unique `example_id` (fixes C).
+    """
     from .native_dcc import PublicBenchmarkBinder, ResourceState, TailExample, TAIL_POLICY_VERSION, _short_hash
 
     examples: list[TailExample] = []
     b_sec = float(max(1e-8, budget_seconds))
     total_sec = float(max(0.0, total_elapsed_seconds))
     total_events = len(events)
+    parent_by_step = {
+        int(tr.step_index): tr.parent_transition_id
+        for tr in branch_transitions
+    }
 
     for idx in range(tail_start_index, total_events):
         ev = events[idx]
@@ -1105,9 +1136,10 @@ def _extract_pi0_tail_examples(
             None if global_budget_limited
             else float(min(1.0, max(0.0, total_sec / b_sec)))
         )
+        prefix_node_id = parent_by_step.get(idx, "__root__" if idx == 0 else None)
         examples.append(
             TailExample(
-                example_id=_short_hash((cluster_id, task_id, "pi0_tail", idx)),
+                example_id=_short_hash((cluster_id, episode_id, prefix_node_id, idx)),
                 cluster_id=cluster_id,
                 task_id=task_id,
                 benchmark=benchmark,
@@ -1121,6 +1153,8 @@ def _extract_pi0_tail_examples(
                 tail_seconds_cost_ratio=tail_sec_ratio,
                 total_seconds_cost_ratio=tot_sec_ratio,
                 censored=bool(global_budget_limited or terminal_outcome is None),
+                prefix_node_id=prefix_node_id,
+                episode_id=episode_id,
             )
         )
     return examples
@@ -1274,6 +1308,7 @@ def _run_branch_with_frozen_tail_pi0(
         head_elapsed = head_traj.elapsed_seconds
 
     # 2. Run the remaining suffix under the explicit frozen tail controller pi_0 ("frozen_base")
+    # while enabling read-only feature extraction (`record_dcc_features=True`) so tail states get Qwen vectors.
     with policy.frozen_reference():
         tail_traj = rollout(
             policy,
@@ -1292,6 +1327,7 @@ def _run_branch_with_frozen_tail_pi0(
             stop_after=cont_stop_after,
             stop_after_termination="budget:episode_environment_steps",
             progress_supervisor=progress_supervisor,
+            record_dcc_features=True,
         )
     tail_traj.metadata["tail_policy_version"] = "frozen-prior-tail-v2"
     tail_traj.metadata["tail_start_index"] = split_step + 1
@@ -1363,6 +1399,7 @@ def collect_branch_pair(
             stop_after_termination="prefix_ready",
             stop_at_frontier=(target_anchor_steps == 0),
             progress_supervisor=progress_supervisor,
+            dcc_episode_preinitialized=True,
         )
     else:
         anchor_trajectory = rollout(
@@ -1447,9 +1484,9 @@ def collect_branch_pair(
             best_q_score = q_info["q_selected"]
             selected_prog = prog
 
-    # Execute bounded probe program q (1..3 steps) by stepping the AST interpreter (fixes F05, F24)
+    # Execute bounded probe program q using authoritative AST max_call_depth() (fixes E)
     max_probe_steps = int(config.get("dcc_max_probe_steps", 3))
-    probe_steps = min(max_probe_steps, max(1, len(selected_prog.step_templates)))
+    probe_steps = min(max_probe_steps, max(1, selected_prog.max_call_depth()))
     probe_events = list(anchor_trajectory.events)
     probe_messages = [dict(item) for item in anchor_trajectory.metadata["final_messages"]]
     probe_started = monotonic_seconds()
@@ -1822,6 +1859,7 @@ def collect_branch_pair(
     first.metadata["dcc_cluster_transitions"] = [t.to_dict() for t in cluster_transitions]
 
     # Extract TailExamples strictly from genuine pi_0 suffix intervals (split_step + 1 .. end)
+    # with exact fork-tree `prefix_node_id` and branch-unique `episode_id` (fixes C)
     tail_examples = []
     if is_dcc:
         if len(first.events) > split_step + 1:
@@ -1829,6 +1867,7 @@ def collect_branch_pair(
                 _extract_pi0_tail_examples(
                     first.events,
                     task_id=str(task_info["task_id"]),
+                    episode_id=f"{task_info['task_id']}:factual_u",
                     cluster_id=cluster_id,
                     benchmark=benchmark_name,
                     goal_text=task_instruction,
@@ -1838,6 +1877,7 @@ def collect_branch_pair(
                     global_budget_limited=u_global_lim,
                     total_elapsed_seconds=first.elapsed_seconds,
                     tail_start_index=split_step + 1,
+                    branch_transitions=u_transitions,
                 )
             )
         if len(second.events) > split_step + 1:
@@ -1845,6 +1885,7 @@ def collect_branch_pair(
                 _extract_pi0_tail_examples(
                     second.events,
                     task_id=str(task_info["task_id"]),
+                    episode_id=f"{task_info['task_id']}:counterfactual_v",
                     cluster_id=cluster_id,
                     benchmark=benchmark_name,
                     goal_text=task_instruction,
@@ -1854,9 +1895,16 @@ def collect_branch_pair(
                     global_budget_limited=v_global_lim,
                     total_elapsed_seconds=second.elapsed_seconds,
                     tail_start_index=split_step + 1,
+                    branch_transitions=v_transitions,
                 )
             )
     first.metadata["dcc_tail_examples"] = [tex.to_dict() for tex in tail_examples]
+    first.metadata["dcc_probe_completed"] = bool(probe_prog_state.completed)
+    first.metadata["dcc_probe_truncated"] = bool(
+        not probe_prog_state.completed and not probe_prog_state.binding_failed and not probe_done
+    )
+    residual_probe = probe_prog_state.residual_program()
+    first.metadata["dcc_probe_residual_program"] = residual_probe.to_dict() if residual_probe is not None else None
 
     if (len(first.events) <= split_step or len(second.events) <= split_step
             or second.metadata.get("global_budget_limited")):
@@ -2104,6 +2152,8 @@ def _update_dcc_block(
             tail_seconds_cost_ratio=tex.get("tail_seconds_cost_ratio"),
             total_seconds_cost_ratio=tex.get("total_seconds_cost_ratio"),
             censored=bool(tex.get("censored", False)),
+            prefix_node_id=tex.get("prefix_node_id"),
+            episode_id=str(tex.get("episode_id", "")),
         )
         for tex in raw_tail_examples
         if isinstance(tex, Mapping)

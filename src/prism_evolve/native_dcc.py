@@ -397,17 +397,51 @@ class ExecutableProgram:
             existing_ast=self.ast_nodes,
         )
         object.__setattr__(self, "ast_nodes", nodes)
-        if not self.variable_scope:
-            object.__setattr__(self, "variable_scope", scope)
-        if not self.def_use_edges:
-            object.__setattr__(self, "def_use_edges", edges)
+        # Derive display `step_templates` directly from top-level AST Call nodes when AST is authoritative
+        if self.ast_nodes:
+            derived_steps: list[str] = []
+
+            def _collect_top_calls(seq: Sequence[ASTNode]) -> None:
+                for n in seq:
+                    if n.op == "Seq":
+                        _collect_top_calls(n.children)
+                    elif n.op == "Call" and n.tool_or_action:
+                        derived_steps.append(n.tool_or_action)
+
+            _collect_top_calls(nodes)
+            if derived_steps:
+                object.__setattr__(self, "step_templates", tuple(derived_steps))
+        object.__setattr__(self, "variable_scope", scope)
+        object.__setattr__(self, "def_use_edges", edges)
+        max_depth = self.max_call_depth()
+        object.__setattr__(self, "expected_cost", float(max(1, max_depth)))
         if not self.formal_params:
             slots: list[str] = []
             for tmpl in (*self.step_templates, self.case_true_template, self.case_false_template):
-                for s in re.findall(r"\{([a-zA-Z0-9_]+)\}", tmpl):
+                for s in re.findall(r"\{([a-zA-Z0-9_.]+)\}", tmpl):
                     if s not in slots:
                         slots.append(s)
             object.__setattr__(self, "formal_params", tuple(slots))
+
+    def max_call_depth(self) -> int:
+        """Compute maximum Call count along any root-to-Stop execution path in `ast_nodes`."""
+        def _depth(seq: Sequence[ASTNode]) -> int:
+            if not seq:
+                return 0
+            head, rest = seq[0], seq[1:]
+            if head.op == "Stop":
+                return 0
+            if head.op == "Seq":
+                return _depth(tuple(head.children) + tuple(rest))
+            if head.op == "Call":
+                return 1 + _depth(rest)
+            if head.op == "Case":
+                if not head.children:
+                    return _depth(rest)
+                return max(_depth((child,) + tuple(rest)) for child in head.children)
+            return _depth(rest)
+
+        return _depth(self.ast_nodes)
 
     def ast_signature(self) -> str:
         return _canonical_json([n.to_dict() for n in self.ast_nodes])
@@ -507,15 +541,49 @@ class ExecutionFrame:
                         self.node_stack = list(head.children) + self.node_stack
 
     def record_call_return(self, raw_observation: str, post_fields: Mapping[str, str]) -> None:
-        """Bind the return value of the most recently executed Call into `local_env`."""
+        """Bind the return value of the most recently executed Call into `local_env`, then consume ready Read/Stop nodes."""
         self.observed_readouts.update({str(k): str(v) for k, v in post_fields.items()})
         var_name = self.pending_return_var or f"ret_{max(0, self.program_counter - 1)}"
-        extracted: dict[str, str] = dict(self.observed_readouts)
-        for key_name, val in re.findall(r'"(id|path|file|token|key|record_id)"\s*:\s*"([^"]{1,64})"', raw_observation):
-            extracted[f"bound_{key_name}"] = val
-            self.bound_variables[f"bound_{key_name}"] = val
+        extracted: dict[str, str] = dict(post_fields)
+        for key_name, val in re.findall(
+            r'"([a-zA-Z0-9_]*(?:id|path|file|token|key|name|dir))"\s*:\s*"([^"]{1,64})"',
+            raw_observation,
+        ):
+            k_low = key_name.lower()
+            extracted[f"bound_{k_low}"] = val
+            self.bound_variables[f"bound_{k_low}"] = val
+            if "id" in k_low:
+                extracted.setdefault("bound_id", val)
+                self.bound_variables.setdefault("bound_id", val)
+            if "path" in k_low or "file" in k_low:
+                extracted.setdefault("bound_path", val)
+                self.bound_variables.setdefault("bound_path", val)
         self.local_env[var_name] = extracted
         self.pending_return_var = ""
+
+        # Consume Read nodes now that the real Call return is bound in `local_env`
+        while self.node_stack:
+            top = self.node_stack[0]
+            if top.op == "Seq":
+                self.node_stack.pop(0)
+                self.node_stack = list(top.children) + self.node_stack
+                continue
+            if top.op == "Read":
+                self.node_stack.pop(0)
+                src_env = self.local_env.get(top.variable, {}) if top.variable else {}
+                val = src_env.get(top.public_field_path, post_fields.get(top.public_field_path))
+                if val is not None:
+                    self.observed_readouts[top.public_field_path] = val
+                continue
+            if top.op == "Stop":
+                self.node_stack.pop(0)
+                self.completed = True
+                self.last_status = "Complete"
+                break
+            break
+        if not self.node_stack:
+            self.completed = True
+            self.last_status = "Complete"
 
     def remaining_call_nodes(self) -> list[ASTNode]:
         if self.completed or self.binding_failed:
@@ -532,9 +600,12 @@ class ExecutionFrame:
                 calls.append(node)
             elif node.op == "Case" and node.children:
                 cond_val = self.observed_readouts.get(node.condition_field, "unknown")
-                branch_idx = 0 if (cond_val != "unknown" and cond_val == node.condition_equals) else (
-                    1 if (cond_val != "unknown" and len(node.children) > 1) else 0
-                )
+                if cond_val != "unknown":
+                    lhs = PublicBenchmarkBinder.canonical_slot_predicate_value(node.condition_field, cond_val)
+                    rhs = PublicBenchmarkBinder.canonical_slot_predicate_value(node.condition_field, node.condition_equals)
+                    branch_idx = 0 if lhs == rhs else (1 if len(node.children) > 1 else 0)
+                else:
+                    branch_idx = 0
                 if branch_idx < len(node.children):
                     stack_copy = [node.children[branch_idx]] + stack_copy
         return calls
@@ -648,6 +719,8 @@ class TailExample:
     tail_seconds_cost_ratio: float | None = None
     total_seconds_cost_ratio: float | None = None
     censored: bool = False
+    prefix_node_id: str | None = None
+    episode_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1330,17 +1403,41 @@ class PublicBenchmarkBinder:
         return (int(s0), int(s1), int(s2), int(s3))
 
     @classmethod
+    def canonical_slot_predicate_value(cls, condition_field: str, raw_value: str) -> str:
+        """Normalize a field value into the exact categorical predicate event supported by both AST execution and K_phi."""
+        if raw_value == "unknown":
+            return "unknown"
+        slot_idx, val_idx = cls.condition_slot_and_value(condition_field, raw_value)
+        slot_names = (
+            ("unknown", "no_or_low", "yes_or_high", "error"),
+            ("unknown", "none", "bound_single", "bound_multiple"),
+            ("unknown", "closed_or_pending", "open_empty_or_subpage", "open_with_items_or_ready"),
+            ("unknown", "raw_or_unchanged", "inspected_or_selected", "treated_or_verified_write"),
+        )
+        return slot_names[slot_idx][val_idx]
+
+    @classmethod
     def condition_slot_and_value(cls, condition_field: str, condition_equals: str) -> tuple[int, int]:
         """Map a Case(condition_field, condition_equals) predicate to its corresponding (slot_idx, value_idx)."""
+        canonical_map = {
+            (0, "unknown"): 0, (0, "no_or_low"): 1, (0, "yes_or_high"): 2, (0, "error"): 3,
+            (1, "unknown"): 0, (1, "none"): 1, (1, "bound_single"): 2, (1, "bound_multiple"): 3,
+            (2, "unknown"): 0, (2, "closed_or_pending"): 1, (2, "open_empty_or_subpage"): 2, (2, "open_with_items_or_ready"): 3,
+            (3, "unknown"): 0, (3, "raw_or_unchanged"): 1, (3, "inspected_or_selected"): 2, (3, "treated_or_verified_write"): 3,
+        }
+        if condition_field in ("target_object_visible", "price_rating_match"):
+            s_idx = 0
+        elif condition_field in ("inventory_object", "current_asin", "bound_identifiers"):
+            s_idx = 1
+        elif condition_field in ("open_receptacle_state", "page_type", "prerequisite_status"):
+            s_idx = 2
+        else:
+            s_idx = 3
+        if (s_idx, condition_equals) in canonical_map:
+            return s_idx, canonical_map[(s_idx, condition_equals)]
         dummy = {condition_field: condition_equals}
         slots = cls.encode_typed_field_slots(dummy)
-        if condition_field in ("target_object_visible", "price_rating_match"):
-            return 0, slots[0]
-        if condition_field in ("inventory_object", "current_asin", "bound_identifiers"):
-            return 1, slots[1]
-        if condition_field in ("open_receptacle_state", "page_type", "prerequisite_status"):
-            return 2, slots[2]
-        return 3, slots[3]
+        return s_idx, slots[s_idx]
 
     @staticmethod
     def native_terminal_utility(
@@ -1406,24 +1503,46 @@ class PublicBenchmarkBinder:
         action_text: str,
         role_bindings: Mapping[str, str] | None = None,
     ) -> str:
-        """Rebind concrete entity IDs in an executed action to reversible symbolic role slots."""
+        """Rebind concrete entity IDs to distinguishable rebindable role slots (preserving distinct u/v roles)."""
         name = benchmark.split(":", 1)[0]
         text = action_text.strip()
-        inv_bindings = {v.lower(): k for k, v in (role_bindings or {}).items() if v and len(v) >= 2}
+        bindings = dict(role_bindings or {})
 
         if name == "alfworld":
             lowered = text.lower()
-            for entity_val, slot_name in sorted(inv_bindings.items(), key=lambda x: len(x[0]), reverse=True):
-                if entity_val in lowered and slot_name in ("target_receptacle", "target_object", "source_receptacle"):
+            # Priority role order so distinct receptacles/objects keep distinguishable role identities
+            priority_roles = (
+                "target_object",
+                "target_receptacle",
+                "source_receptacle",
+                "receptacle_1",
+                "receptacle_2",
+                "receptacle_3",
+                "receptacle_4",
+                "receptacle_5",
+                "receptacle_6",
+            )
+            for slot_name in priority_roles:
+                entity_val = str(bindings.get(slot_name, "")).strip().lower()
+                if entity_val and len(entity_val) >= 3 and entity_val in lowered:
                     lowered = lowered.replace(entity_val, f"{{{slot_name}}}")
-            lowered = re.sub(r"\b([a-z]+)\s+\d+\b", r"{\1_id}", lowered)
+            # Preserve ordinal index on any remaining unbound entity so `drawer 1` vs `drawer 2` stay distinct
+            lowered = re.sub(r"\b([a-z]+)\s+(\d+)\b", r"{\1_\2}", lowered)
             return lowered[:64]
 
         if name == "webshop":
             if text.lower().startswith("search["):
                 return "search[{goal_query}]"
-            if re.search(r"click\[b0[0-9a-z]{8}\]", text.lower()):
-                return "click[{candidate_asin}]"
+            m_asin = re.search(r"click\[(b0[0-9a-z]{8})\]", text.lower())
+            if m_asin:
+                asin_val = m_asin.group(1)
+                for idx in range(1, 5):
+                    slot_k = f"candidate_asin_{idx}"
+                    if str(bindings.get(slot_k, "")).lower() == asin_val:
+                        return f"click[{{{slot_k}}}]"
+                if str(bindings.get("candidate_asin", "")).lower() == asin_val:
+                    return "click[{candidate_asin_1}]"
+                return f"click[{{candidate_asin_{asin_val[-2:]}}}]"
             return text[:64]
 
         try:
@@ -1431,8 +1550,23 @@ class PublicBenchmarkBinder:
             if isinstance(obj, dict) and "name" in obj:
                 tool_name = str(obj["name"])
                 args = obj.get("arguments", {})
-                arg_keys = sorted(args.keys()) if isinstance(args, dict) else []
-                return f"{tool_name}({','.join(arg_keys[:3])})"
+                if isinstance(args, dict) and args:
+                    inv_bound = {
+                        str(v): k for k, v in bindings.items()
+                        if k.startswith("bound_") and v is not None and str(v)
+                    }
+                    arg_parts: list[str] = []
+                    for ak in sorted(args.keys())[:3]:
+                        av = args[ak]
+                        av_str = str(av)
+                        if av_str in inv_bound:
+                            arg_parts.append(f"{ak}=${inv_bound[av_str]}")
+                        elif isinstance(av, (int, float, bool)):
+                            arg_parts.append(f"{ak}={av}")
+                        else:
+                            arg_parts.append(f"{ak}={av_str[:12]}")
+                    return f"{tool_name}({','.join(arg_parts)})"[:80]
+                return f"{tool_name}()"
         except Exception:
             pass
         return text[:64]
@@ -1517,8 +1651,9 @@ class PublicBenchmarkBinder:
         task_instruction: str,
         role_bindings: Mapping[str, str] | None = None,
         local_env: Mapping[str, Mapping[str, str]] | None = None,
+        typed_arguments: Mapping[str, str] | None = None,
     ) -> str | None:
-        """Bind a symbolic step template or AST Call node to a concrete admissible action (fixes F07, F23, F24)."""
+        """Bind a symbolic step template or AST Call node (with `typed_arguments`) to a concrete admissible action."""
         name = benchmark.split(":", 1)[0]
         bindings = dict(role_bindings or {})
         if not bindings:
@@ -1530,6 +1665,21 @@ class PublicBenchmarkBinder:
                     if fk.startswith("bound_"):
                         bindings.setdefault(fk, fv)
 
+        # Resolve `Call.typed_arguments` ($ret_k.field or $slot) directly into active parameter bindings
+        if typed_arguments:
+            for param_slot, ref_expr in typed_arguments.items():
+                clean_ref = str(ref_expr).lstrip("$")
+                resolved_val: str | None = None
+                if "." in clean_ref and local_env:
+                    var_part, fld_part = clean_ref.split(".", 1)
+                    if var_part in local_env and fld_part in local_env[var_part]:
+                        resolved_val = local_env[var_part][fld_part]
+                if resolved_val is None and clean_ref in bindings:
+                    resolved_val = bindings[clean_ref]
+                if resolved_val is not None and resolved_val != "unknown":
+                    bindings[param_slot] = resolved_val
+                    bindings[f"bound_{param_slot}"] = resolved_val
+
         all_candidates = cls.enumerate_admissible_actions(benchmark, action_schema, task_instruction, bindings)
         if template in all_candidates:
             return template
@@ -1538,6 +1688,9 @@ class PublicBenchmarkBinder:
         for slot in re.findall(r"\{([a-zA-Z0-9_.]+)\}", template):
             if slot in bindings and bindings[slot]:
                 resolved = resolved.replace(f"{{{slot}}}", bindings[slot])
+            elif re.match(r"^[a-z]+_\d+$", slot):
+                literal_entity = slot.replace("_", " ")
+                resolved = resolved.replace(f"{{{slot}}}", literal_entity)
         if resolved in all_candidates:
             return resolved
         for cand in all_candidates:
@@ -1555,7 +1708,7 @@ class PublicBenchmarkBinder:
                 if not cand_l.startswith(verb_prefix):
                     continue
                 if slot_matches:
-                    slot_type = slot_matches[0].replace("_id", "").replace("target_", "").replace("source_", "")
+                    slot_type = re.sub(r"_\d+$", "", slot_matches[0]).replace("_id", "").replace("target_", "").replace("source_", "")
                     if slot_type and slot_type not in ("receptacle", "object") and slot_type not in cand_l:
                         continue
                 matching.append(cand)
@@ -1568,19 +1721,25 @@ class PublicBenchmarkBinder:
                     words = [w for w in re.findall(r"[a-z0-9]+", task_instruction.lower()) if len(w) > 2][:6]
                     query = " ".join(words)
                 return f"search[{query}]" if query else None
-            if template == "click[{candidate_asin}]":
-                target_asin = bindings.get("candidate_asin", "")
+            m_asin_slot = re.match(r"^click\[\{(candidate_asin(?:_\d+)?)\}\]$", template.strip())
+            if m_asin_slot:
+                slot_name = m_asin_slot.group(1)
+                target_asin = bindings.get(slot_name) or bindings.get("candidate_asin", "")
                 for cand in all_candidates:
                     if target_asin and f"click[{target_asin}]" == cand.lower():
                         return cand
                 asin_clicks = [c for c in all_candidates if re.search(r"click\[b0[0-9a-z]{8}\]", c.lower())]
+                if slot_name.startswith("candidate_asin_") and slot_name[-1].isdigit():
+                    idx_pos = max(0, int(slot_name.rsplit("_", 1)[-1]) - 1)
+                    if idx_pos < len(asin_clicks):
+                        return asin_clicks[idx_pos]
                 return asin_clicks[0] if asin_clicks else None
             for cand in all_candidates:
                 if cand.lower() == template.lower():
                     return cand
             return None
 
-        # LOCA / structured tool environment (fixes F07)
+        # LOCA / structured tool environment (fixes F07 + typed_arguments resolution)
         loca_tools = cls._extract_loca_tools(action_schema)
         tool_by_name = {t["name"]: t for t in loca_tools}
         for slot_key in ("primary_read_tool", "secondary_read_tool", "primary_write_tool"):
@@ -1607,7 +1766,11 @@ class PublicBenchmarkBinder:
         task_instruction: str,
         events: Sequence[Any],
     ) -> InterpreterStepResult:
-        """Consume AST nodes from `frame.node_stack` until the next `Call`, `Stop`, or `BindingFailure`."""
+        """Consume AST nodes from `frame.node_stack` until the next `Call`, `Stop`, or `BindingFailure`.
+
+        Resolves `Call.typed_arguments` against `local_env` and `bound_variables`, and suspends
+        trailing `Read` nodes until `record_call_return` binds the actual environment response.
+        """
         next_frame = frame.clone()
         if next_frame.completed:
             next_frame.last_status = "Complete"
@@ -1619,15 +1782,25 @@ class PublicBenchmarkBinder:
         live_bindings = cls.extract_role_bindings(
             next_frame.program.benchmark, task_instruction, events, action_schema
         )
-        # Task-live bindings and frame-bound return variables take precedence; no stale program bindings (F23)
-        next_frame.bound_variables = {**live_bindings, **next_frame.bound_variables}
+        # Merge live_bindings without overwriting return-bound local variables
+        merged_vars = dict(live_bindings)
+        for k, v in next_frame.bound_variables.items():
+            if k.startswith("bound_") and v:
+                merged_vars[k] = v
+        next_frame.bound_variables = merged_vars
+
         current_fields = cls.extract_public_fields(
             next_frame.program.benchmark, task_instruction, events, action_schema
         )
-        next_frame.observed_readouts.update(current_fields)
+        for fk, fv in current_fields.items():
+            if fk not in next_frame.observed_readouts or next_frame.observed_readouts[fk] == "unknown":
+                next_frame.observed_readouts[fk] = fv
+
         if events and next_frame.pending_return_var:
             last_obs = str(getattr(events[-1], "observation", ""))
             next_frame.record_call_return(last_obs, current_fields)
+            if next_frame.completed:
+                return InterpreterStepResult("Complete", None, next_frame, False)
 
         steps_guard = 0
         while next_frame.node_stack and steps_guard < 32:
@@ -1645,6 +1818,8 @@ class PublicBenchmarkBinder:
                     val = next_frame.local_env[node.variable].get(node.public_field_path)
                     if val is not None:
                         next_frame.observed_readouts[node.public_field_path] = val
+                elif node.public_field_path in current_fields:
+                    next_frame.observed_readouts[node.public_field_path] = current_fields[node.public_field_path]
                 continue
             if node.op == "Case":
                 cond_val = next_frame.observed_readouts.get(node.condition_field, "unknown")
@@ -1652,13 +1827,14 @@ class PublicBenchmarkBinder:
                     next_frame.binding_failed = True
                     next_frame.last_status = "BindingFailure"
                     return InterpreterStepResult("BindingFailure", None, next_frame, False)
-                take_true = cond_val == node.condition_equals
+                lhs = cls.canonical_slot_predicate_value(node.condition_field, cond_val)
+                rhs = cls.canonical_slot_predicate_value(node.condition_field, node.condition_equals)
+                take_true = lhs == rhs
                 chosen_child = (
                     node.children[0]
                     if (take_true and len(node.children) >= 1)
                     else (node.children[1] if (not take_true and len(node.children) >= 2) else ASTNode(op="Stop"))
                 )
-                # Push ONLY the chosen branch onto the stack; once consumed, execution proceeds to Stop (fixes F06)
                 next_frame.node_stack = [chosen_child] + next_frame.node_stack
                 continue
             if node.op == "Call":
@@ -1669,6 +1845,7 @@ class PublicBenchmarkBinder:
                     task_instruction,
                     next_frame.bound_variables,
                     next_frame.local_env,
+                    node.typed_arguments,
                 )
                 if concrete_action is None:
                     next_frame.binding_failed = True
@@ -1677,11 +1854,7 @@ class PublicBenchmarkBinder:
                 next_frame.program_counter += 1
                 next_frame.pending_return_var = node.bind_return_to or f"ret_{next_frame.program_counter - 1}"
                 next_frame.executed_actions.append(concrete_action)
-                # Peek if only Read/Stop nodes remain on stack and consume trailing Reads
-                while next_frame.node_stack and next_frame.node_stack[0].op == "Read":
-                    r_node = next_frame.node_stack.pop(0)
-                    if r_node.public_field_path in current_fields:
-                        next_frame.observed_readouts[r_node.public_field_path] = current_fields[r_node.public_field_path]
+                # Only mark completed immediately if no Read, Case, or Call remains on the stack
                 if not next_frame.node_stack or (
                     len(next_frame.node_stack) == 1 and next_frame.node_stack[0].op == "Stop"
                 ):
@@ -1758,10 +1931,13 @@ class ControlledResponseEnsemble(nn.Module):
             self.context_dim,
             self.ensemble_size * self.state_dim * NUM_FIELD_SLOTS * NUM_SLOT_VALUES,
         )
-        # Base transition and emission logits initialized at zero so K_{phi_0} == p_0 (fixes F01)
-        self.transition_logits = nn.Parameter(
-            torch.zeros(self.ensemble_size, self.state_dim, self.state_dim)
+        # Break intra-member latent state symmetry on T and initial belief while keeping G and all
+        # observable readout heads at zero so the initial observable distribution strictly equals p_0 (fixes B).
+        init_gen = torch.Generator(device="cpu").manual_seed(20261110)
+        asym_t = 0.15 * torch.randn(
+            (self.ensemble_size, self.state_dim, self.state_dim), generator=init_gen
         )
+        self.transition_logits = nn.Parameter(asym_t)
         self.emission_logits = nn.Parameter(
             torch.zeros(self.ensemble_size, self.state_dim, self.outcome_bins)
         )
@@ -1795,13 +1971,22 @@ class ControlledResponseEnsemble(nn.Module):
             torch.zeros(self.ensemble_size, TAIL_COST_BINS)
         )
 
-        nn.init.zeros_(self.transition_residual_proj.weight)
+        with torch.no_grad():
+            self.transition_residual_proj.weight.copy_(
+                0.05 * torch.randn(self.transition_residual_proj.weight.shape, generator=init_gen)
+            )
         nn.init.zeros_(self.transition_residual_proj.bias)
         nn.init.zeros_(self.emission_residual_proj.weight)
         nn.init.zeros_(self.emission_residual_proj.bias)
         nn.init.zeros_(self.field_slot_proj.weight)
         nn.init.zeros_(self.field_slot_proj.bias)
 
+        # Asymmetric initial belief logits per member/state so all 16 states receive distinct gradients from step 1
+        state_ramp = torch.linspace(-0.6, 0.6, self.state_dim, dtype=torch.float32)
+        init_b_logits = torch.stack(
+            [torch.roll(state_ramp, shifts=m_i) for m_i in range(self.ensemble_size)], dim=0
+        )
+        self.register_buffer("initial_belief_logits", init_b_logits)
         self.register_buffer(
             "mechanism_weights",
             torch.full((self.ensemble_size,), 1.0 / self.ensemble_size, dtype=torch.float32),
@@ -1857,12 +2042,34 @@ class ControlledResponseEnsemble(nn.Module):
 
     def reset_intra_task_belief(self, device: torch.device | None = None) -> torch.Tensor:
         dev = device or self.transition_logits.device
-        return torch.full(
-            (self.ensemble_size, self.state_dim),
-            1.0 / self.state_dim,
+        return F.softmax(self.initial_belief_logits.to(device=dev, dtype=torch.float32), dim=-1)
+
+    def encode_tail_state_context(
+        self,
+        *,
+        goal_text: str,
+        public_fields: Mapping[str, str],
+        remaining_budget_ratio: float = 1.0,
+        spent_seconds_ratio: float | None = None,
+        remaining_steps_ratio: float = 1.0,
+        frozen_context_vec: Sequence[float] = (),
+        frozen_tail_action_vec: Sequence[float] = (),
+        device: torch.device | None = None,
+    ) -> torch.Tensor:
+        """Canonical tail-state encoder shared identically by TailExample training and Q leaf evaluation (fixes D)."""
+        dev = device or self.transition_logits.device
+        c_vec = self.encode_context_vector(
+            goal_text=goal_text,
+            public_fields=public_fields,
+            action_text=TAIL_POLICY_VERSION,
+            remaining_budget_ratio=remaining_budget_ratio,
+            spent_seconds_ratio=spent_seconds_ratio,
+            remaining_steps_ratio=remaining_steps_ratio,
+            frozen_context_vec=frozen_context_vec,
+            frozen_action_vec=frozen_tail_action_vec,
             device=dev,
-            dtype=torch.float32,
         )
+        return self.context_encoder(self._coerce_context(c_vec))
 
     @classmethod
     def deterministic_semantic_projection(cls, text: str, dim: int) -> tuple[float, ...]:
@@ -2077,6 +2284,7 @@ class ControlledResponseEnsemble(nn.Module):
             "h_ctx": h_ctx,
             "outcome_probs": outcome_probs,          # (M, O)
             "field_slot_probs": field_slot_probs,    # (M, 4, 4)
+            "slot_probs_per_state": slot_probs_s,    # (M, S, 4, 4)
             "next_state_prior": next_state_prior,    # (M, S)
             "post_belief": post_belief,              # (M, S)
             "termination_probs": termination_probs,  # (M, 3)
@@ -2213,6 +2421,8 @@ class ControlledResponseEnsemble(nn.Module):
         remaining_budget_ratio: float = 1.0,
         frozen_context_vec: Sequence[float] = (),
         frozen_action_vec: Sequence[float] = (),
+        frozen_tail_action_vec: Sequence[float] = (),
+        action_embedder: Any | None = None,
         prior_action_logprob: float = 0.0,
         prior_success_logit: float = 0.0,
         member_index: int | None = None,
@@ -2220,12 +2430,11 @@ class ControlledResponseEnsemble(nn.Module):
     ) -> dict[str, Any]:
         """Compute unified long-horizon value Q_m^rho(g, h, beta) = E_{K_{phi,m}, rho -> pi_0}[U_B(Y, C_seconds)].
 
-        Fixes F02, F05, F09, F11, F12, F13:
-          - Unrolls `program.ast_nodes` (including `Case` true/false branches weighted by each member's
-            predicted field-slot probability `p_m(cond_field == cond_val)`).
-          - Maintains private per-member state, private elapsed seconds ratio, and strictly absorbing
-            `alive_prob` (`alive_prob * termination_probs[:, 0]`, no 0.95 clamp).
-          - Queries the amortized fixed-tail distribution `predict_tail_pi0` at AST leaves.
+        Fixes D and E:
+          - Unrolls `program.ast_nodes` with Bayesian state conditioning inside `Case`:
+            b_m(s' | z) proportional to b_m(s') * P_m(z | s', c), updating both member beliefs and
+            branch public field states before evaluating true/false subtrees.
+          - Evaluates leaves via the canonical `encode_tail_state_context` shared with `TailExample` training.
         """
         if use_initial_params and self._initial_state_tensors:
             return self.active_model_view(use_initial_params=True).evaluate_candidate_q(
@@ -2237,198 +2446,219 @@ class ControlledResponseEnsemble(nn.Module):
                 remaining_budget_ratio=remaining_budget_ratio,
                 frozen_context_vec=frozen_context_vec,
                 frozen_action_vec=frozen_action_vec,
+                frozen_tail_action_vec=frozen_tail_action_vec,
+                action_embedder=action_embedder,
                 prior_action_logprob=prior_action_logprob,
                 prior_success_logit=prior_success_logit,
                 member_index=member_index,
                 use_initial_params=False,
             )
 
-        if True:
-            device = self.transition_logits.device
-            init_belief = belief.clone().to(device)
-            rem_ratio = float(max(0.0, min(1.0, remaining_budget_ratio)))
-            init_spent = torch.full(
-                (self.ensemble_size,), 1.0 - rem_ratio, device=device, dtype=torch.float32
+        device = self.transition_logits.device
+        init_belief = belief.clone().to(device)
+        rem_ratio = float(max(0.0, min(1.0, remaining_budget_ratio)))
+        init_spent = torch.full(
+            (self.ensemble_size,), 1.0 - rem_ratio, device=device, dtype=torch.float32
+        )
+        init_alive = torch.ones(self.ensemble_size, device=device, dtype=torch.float32)
+        base_fields = dict(public_fields)
+
+        def _leaf_tail_value(
+            cur_b: torch.Tensor,
+            cur_spent: torch.Tensor,
+            cur_alive: torch.Tensor,
+            cur_fields: Mapping[str, str],
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            rem_mean = float((1.0 - cur_spent).clamp(min=0.0, max=1.0).mean().item())
+            spent_mean = float(cur_spent.clamp(min=0.0, max=1.0).mean().item())
+            tail_h_ctx = self.encode_tail_state_context(
+                goal_text=goal_text,
+                public_fields=cur_fields,
+                remaining_budget_ratio=rem_mean,
+                spent_seconds_ratio=spent_mean,
+                frozen_context_vec=frozen_context_vec,
+                frozen_tail_action_vec=frozen_tail_action_vec,
+                device=device,
             )
-            init_alive = torch.ones(self.ensemble_size, device=device, dtype=torch.float32)
-            last_h_ctx = self.context_encoder(
-                self.encode_context_vector(
-                    goal_text=goal_text,
-                    public_fields=public_fields,
-                    action_text=candidate_action,
-                    remaining_budget_ratio=rem_ratio,
-                    frozen_context_vec=frozen_context_vec,
-                    frozen_action_vec=frozen_action_vec,
-                    prior_success_logit=prior_success_logit,
-                    device=device,
-                )
+            tail_out = self.predict_tail_pi0(
+                cur_b, tail_h_ctx, cur_spent, prior_success_logit=prior_success_logit
             )
-            last_slot_probs: torch.Tensor | None = None
+            leaf_u = cur_alive * tail_out["expected_tail_utility"]
+            leaf_cost = (cur_spent + cur_alive * tail_out["expected_cond_tail_cost"]).clamp(max=1.0)
+            return leaf_u, leaf_cost, tail_out["tail_y_prob"]
 
-            def _eval_call_step(
-                cur_b: torch.Tensor,
-                cur_spent: torch.Tensor,
-                cur_alive: torch.Tensor,
-                act_str: str,
-                is_first: bool,
-            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-                rem_vec = (1.0 - cur_spent).clamp(min=0.0, max=1.0)
-                ctx = self.encode_context_vector(
-                    goal_text=goal_text,
-                    public_fields=public_fields,
-                    action_text=act_str,
-                    remaining_budget_ratio=float(rem_vec.mean().item()),
-                    frozen_context_vec=frozen_context_vec,
-                    frozen_action_vec=frozen_action_vec if is_first else (),
-                    prior_success_logit=prior_success_logit,
-                    device=device,
-                )
-                preds = self.step_and_predict(
-                    cur_b,
-                    ctx,
-                    observed_outcome_bin=None,
-                    prior_success_logit=prior_success_logit,
-                    remaining_budget_ratio=rem_vec,
-                )
-                next_spent = (cur_spent + preds["cost_ratio"]).clamp(min=0.0, max=1.0)
-                p_live = preds["termination_probs"][:, 0]            # Exact absorbing live probability (fixes F12)
-                p_nat_term = preds["termination_probs"][:, 1]        # Official native terminal
-                y_prob = preds["terminal_success_prob"]
-                rem_after = (1.0 - next_spent).clamp(min=0.0, max=1.0)
-                step_u = cur_alive * p_nat_term * y_prob * rem_after
-                next_alive = cur_alive * p_live
-                return (
-                    preds["next_state_prior"],
-                    next_spent,
-                    next_alive,
-                    step_u,
-                    preds["field_slot_probs"],
-                    preds["h_ctx"],
-                )
-
-            def _eval_ast_sequence(
-                nodes: Sequence[ASTNode],
-                cur_b: torch.Tensor,
-                cur_spent: torch.Tensor,
-                cur_alive: torch.Tensor,
-                cur_slot_probs: torch.Tensor | None,
-                cur_h_ctx: torch.Tensor,
-                calls_used: int,
-            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-                """Return `(accumulated_u, final_spent, final_tail_y_prob)` across members."""
-                if not nodes or calls_used >= DEFAULT_MAX_PROBE_STEPS:
-                    tail_out = self.predict_tail_pi0(
-                        cur_b, cur_h_ctx, cur_spent, prior_success_logit=prior_success_logit
-                    )
-                    leaf_u = cur_alive * tail_out["expected_tail_utility"]
-                    leaf_cost = (cur_spent + cur_alive * tail_out["expected_cond_tail_cost"]).clamp(max=1.0)
-                    return leaf_u, leaf_cost, tail_out["tail_y_prob"]
-
-                head = nodes[0]
-                rest = nodes[1:]
-                if head.op == "Stop":
-                    tail_out = self.predict_tail_pi0(
-                        cur_b, cur_h_ctx, cur_spent, prior_success_logit=prior_success_logit
-                    )
-                    leaf_u = cur_alive * tail_out["expected_tail_utility"]
-                    leaf_cost = (cur_spent + cur_alive * tail_out["expected_cond_tail_cost"]).clamp(max=1.0)
-                    return leaf_u, leaf_cost, tail_out["tail_y_prob"]
-
-                if head.op == "Seq":
-                    return _eval_ast_sequence(
-                        tuple(head.children) + tuple(rest),
-                        cur_b,
-                        cur_spent,
-                        cur_alive,
-                        cur_slot_probs,
-                        cur_h_ctx,
-                        calls_used,
-                    )
-
-                if head.op == "Read":
-                    return _eval_ast_sequence(
-                        rest, cur_b, cur_spent, cur_alive, cur_slot_probs, cur_h_ctx, calls_used
-                    )
-
-                if head.op == "Call":
-                    act_str = candidate_action if calls_used == 0 else (head.tool_or_action or candidate_action)
-                    nb, n_spent, n_alive, step_u, n_slots, n_h_ctx = _eval_call_step(
-                        cur_b, cur_spent, cur_alive, act_str, is_first=(calls_used == 0)
-                    )
-                    rem_u, end_cost, tail_y = _eval_ast_sequence(
-                        rest, nb, n_spent, n_alive, n_slots, n_h_ctx, calls_used + 1
-                    )
-                    return step_u + rem_u, end_cost, tail_y
-
-                if head.op == "Case":
-                    slot_idx, val_idx = PublicBenchmarkBinder.condition_slot_and_value(
-                        head.condition_field, head.condition_equals
-                    )
-                    if cur_slot_probs is not None:
-                        p_true = cur_slot_probs[:, slot_idx, val_idx].clamp(min=0.0, max=1.0)  # (M,)
-                    else:
-                        obs_val = public_fields.get(head.condition_field, "unknown")
-                        if obs_val != "unknown":
-                            p_true = torch.full(
-                                (self.ensemble_size,),
-                                1.0 if obs_val == head.condition_equals else 0.0,
-                                device=device,
-                                dtype=torch.float32,
-                            )
-                        else:
-                            p_true = torch.full(
-                                (self.ensemble_size,), 0.5, device=device, dtype=torch.float32
-                            )
-                    p_false = 1.0 - p_true
-                    true_child = (head.children[0],) if len(head.children) >= 1 else (ASTNode(op="Stop"),)
-                    false_child = (head.children[1],) if len(head.children) >= 2 else (ASTNode(op="Stop"),)
-                    u_t, c_t, y_t = _eval_ast_sequence(
-                        true_child + tuple(rest),
-                        cur_b,
-                        cur_spent,
-                        cur_alive * p_true,
-                        cur_slot_probs,
-                        cur_h_ctx,
-                        calls_used,
-                    )
-                    u_f, c_f, y_f = _eval_ast_sequence(
-                        false_child + tuple(rest),
-                        cur_b,
-                        cur_spent,
-                        cur_alive * p_false,
-                        cur_slot_probs,
-                        cur_h_ctx,
-                        calls_used,
-                    )
-                    return u_t + u_f, p_true * c_t + p_false * c_f, p_true * y_t + p_false * y_f
-
-                return _eval_ast_sequence(
-                    rest, cur_b, cur_spent, cur_alive, cur_slot_probs, cur_h_ctx, calls_used
-                )
-
-            ast_seq = (
-                program.ast_nodes
-                if (program is not None and program.ast_nodes)
-                else (ASTNode(op="Call", tool_or_action=candidate_action), ASTNode(op="Stop"))
-            )
-            q_members, end_spent, tail_y_members = _eval_ast_sequence(
-                ast_seq, init_belief, init_spent, init_alive, last_slot_probs, last_h_ctx, 0
-            )
-            q_members = q_members.clamp(min=0.0, max=1.0)
-
-            if member_index is not None:
-                m_idx = int(member_index) % self.ensemble_size
-                q_scalar = float(q_members[m_idx].item())
+        def _eval_call_step(
+            cur_b: torch.Tensor,
+            cur_spent: torch.Tensor,
+            cur_alive: torch.Tensor,
+            cur_fields: Mapping[str, str],
+            act_str: str,
+            is_first: bool,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            rem_vec = (1.0 - cur_spent).clamp(min=0.0, max=1.0)
+            if is_first and frozen_action_vec:
+                act_vec: Sequence[float] = frozen_action_vec
+            elif action_embedder is not None:
+                act_vec = action_embedder(act_str)
             else:
-                q_scalar = float(q_members.mean().item())
+                act_vec = ()
+            ctx = self.encode_context_vector(
+                goal_text=goal_text,
+                public_fields=cur_fields,
+                action_text=act_str,
+                remaining_budget_ratio=float(rem_vec.mean().item()),
+                spent_seconds_ratio=float(cur_spent.mean().item()),
+                frozen_context_vec=frozen_context_vec,
+                frozen_action_vec=act_vec,
+                prior_success_logit=prior_success_logit,
+                device=device,
+            )
+            preds = self.step_and_predict(
+                cur_b,
+                ctx,
+                observed_outcome_bin=None,
+                prior_success_logit=prior_success_logit,
+                remaining_budget_ratio=rem_vec,
+            )
+            next_spent = (cur_spent + preds["cost_ratio"]).clamp(min=0.0, max=1.0)
+            p_live = preds["termination_probs"][:, 0]
+            p_nat_term = preds["termination_probs"][:, 1]
+            y_prob = preds["terminal_success_prob"]
+            rem_after = (1.0 - next_spent).clamp(min=0.0, max=1.0)
+            step_u = cur_alive * p_nat_term * y_prob * rem_after
+            next_alive = cur_alive * p_live
+            return (
+                preds["next_state_prior"],
+                next_spent,
+                next_alive,
+                step_u,
+                preds["slot_probs_per_state"],
+            )
 
-            return {
-                "q_mean": float(q_members.mean().item()),
-                "q_selected": q_scalar,
-                "q_members": [float(x) for x in q_members.detach().cpu().tolist()],
-                "predicted_terminal_success": float(tail_y_members.mean().item()),
-                "predicted_cost_ratio": float(end_spent.mean().item()),
-            }
+        def _eval_ast_sequence(
+            nodes: Sequence[ASTNode],
+            cur_b: torch.Tensor,
+            cur_spent: torch.Tensor,
+            cur_alive: torch.Tensor,
+            cur_slot_probs_s: torch.Tensor | None,
+            cur_fields: dict[str, str],
+            calls_used: int,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            if not nodes or calls_used >= DEFAULT_MAX_PROBE_STEPS + 1:
+                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_fields)
+
+            head = nodes[0]
+            rest = nodes[1:]
+            if head.op == "Stop":
+                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_fields)
+
+            if head.op == "Seq":
+                return _eval_ast_sequence(
+                    tuple(head.children) + tuple(rest),
+                    cur_b,
+                    cur_spent,
+                    cur_alive,
+                    cur_slot_probs_s,
+                    cur_fields,
+                    calls_used,
+                )
+
+            if head.op == "Read":
+                return _eval_ast_sequence(
+                    rest, cur_b, cur_spent, cur_alive, cur_slot_probs_s, cur_fields, calls_used
+                )
+
+            if head.op == "Call":
+                act_str = candidate_action if calls_used == 0 else (head.tool_or_action or candidate_action)
+                nb, n_spent, n_alive, step_u, n_slots_s = _eval_call_step(
+                    cur_b, cur_spent, cur_alive, cur_fields, act_str, is_first=(calls_used == 0)
+                )
+                rem_u, end_cost, tail_y = _eval_ast_sequence(
+                    rest, nb, n_spent, n_alive, n_slots_s, cur_fields, calls_used + 1
+                )
+                return step_u + rem_u, end_cost, tail_y
+
+            if head.op == "Case":
+                slot_idx, val_idx = PublicBenchmarkBinder.condition_slot_and_value(
+                    head.condition_field, head.condition_equals
+                )
+                if cur_slot_probs_s is not None:
+                    # Bayesian belief conditioning: b_m(s' | z) proportional to b_m(s') * P_m(z | s', c)
+                    lik_true = cur_slot_probs_s[:, :, slot_idx, val_idx].clamp(min=1e-6, max=1.0 - 1e-6)  # (M, S)
+                    lik_false = (1.0 - lik_true).clamp(min=1e-6, max=1.0 - 1e-6)
+                    unnorm_b_true = cur_b * lik_true
+                    p_true = unnorm_b_true.sum(dim=-1).clamp(min=0.0, max=1.0)  # (M,)
+                    b_true = unnorm_b_true / unnorm_b_true.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+
+                    unnorm_b_false = cur_b * lik_false
+                    p_false = (1.0 - p_true).clamp(min=0.0, max=1.0)
+                    b_false = unnorm_b_false / unnorm_b_false.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                else:
+                    obs_val = cur_fields.get(head.condition_field, "unknown")
+                    if obs_val != "unknown":
+                        lhs = PublicBenchmarkBinder.canonical_slot_predicate_value(head.condition_field, obs_val)
+                        rhs = PublicBenchmarkBinder.canonical_slot_predicate_value(head.condition_field, head.condition_equals)
+                        p_t_val = 1.0 if lhs == rhs else 0.0
+                    else:
+                        p_t_val = 0.5
+                    p_true = torch.full((self.ensemble_size,), p_t_val, device=device, dtype=torch.float32)
+                    p_false = 1.0 - p_true
+                    b_true = cur_b
+                    b_false = cur_b
+
+                fields_true = {**cur_fields, head.condition_field: head.condition_equals}
+                alt_val = "no_or_low" if head.condition_equals == "yes_or_high" else "none"
+                fields_false = {**cur_fields, head.condition_field: alt_val}
+
+                true_child = (head.children[0],) if len(head.children) >= 1 else (ASTNode(op="Stop"),)
+                false_child = (head.children[1],) if len(head.children) >= 2 else (ASTNode(op="Stop"),)
+                u_t, c_t, y_t = _eval_ast_sequence(
+                    true_child + tuple(rest),
+                    b_true,
+                    cur_spent,
+                    cur_alive * p_true,
+                    cur_slot_probs_s,
+                    fields_true,
+                    calls_used,
+                )
+                u_f, c_f, y_f = _eval_ast_sequence(
+                    false_child + tuple(rest),
+                    b_false,
+                    cur_spent,
+                    cur_alive * p_false,
+                    cur_slot_probs_s,
+                    fields_false,
+                    calls_used,
+                )
+                return u_t + u_f, p_true * c_t + p_false * c_f, p_true * y_t + p_false * y_f
+
+            return _eval_ast_sequence(
+                rest, cur_b, cur_spent, cur_alive, cur_slot_probs_s, cur_fields, calls_used
+            )
+
+        ast_seq = (
+            program.ast_nodes
+            if (program is not None and program.ast_nodes)
+            else (ASTNode(op="Call", tool_or_action=candidate_action), ASTNode(op="Stop"))
+        )
+        q_members, end_spent, tail_y_members = _eval_ast_sequence(
+            ast_seq, init_belief, init_spent, init_alive, None, base_fields, 0
+        )
+        q_members = q_members.clamp(min=0.0, max=1.0)
+
+        if member_index is not None:
+            m_idx = int(member_index) % self.ensemble_size
+            q_scalar = float(q_members[m_idx].item())
+        else:
+            q_scalar = float(q_members.mean().item())
+
+        return {
+            "q_mean": float(q_members.mean().item()),
+            "q_selected": q_scalar,
+            "q_members": [float(x) for x in q_members.detach().cpu().tolist()],
+            "predicted_terminal_success": float(tail_y_members.mean().item()),
+            "predicted_cost_ratio": float(end_spent.mean().item()),
+        }
 
     @torch.no_grad()
     def score_program_evsi(
@@ -2607,32 +2837,30 @@ class ControlledResponseEnsemble(nn.Module):
 
             total_member_nll = total_member_nll + (resp_nll + slot_nll + 0.5 * term_nll + cost_nll + y_nll)
 
-        # 5. Supervise fixed-tail head H_{phi,m}^{pi_0}(Y, C_tail | Y=1) on genuine pi_0 TailExamples (fixes F02, F11)
-        belief_by_step: dict[int, torch.Tensor] = {0: root_belief}
-        for tr in transitions:
-            belief_by_step[int(tr.step_index) + 1] = belief_by_node.get(tr.transition_id, last_belief)
-
+        # 5. Supervise fixed-tail head H_{phi,m}^{pi_0}(Y, C_tail | Y=1) using exact fork-tree `prefix_node_id`
+        # and the canonical `encode_tail_state_context` shared with Q leaf evaluation (fixes C & D).
         tail_member_nll = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
         for tex in tail_examples:
             if tex.censored or tex.observed_y is None:
                 continue
             tail_supervised_count += 1
             res_b = ResourceState.from_dict(tex.resource_before)
-            t_ctx = self.encode_context_vector(
+            h_ctx_t = self.encode_tail_state_context(
                 goal_text=tex.goal_text,
                 public_fields=tex.pre_public_fields,
-                action_text=tex.tail_policy_version,
                 remaining_budget_ratio=res_b.remaining_seconds_ratio,
                 spent_seconds_ratio=res_b.spent_seconds_ratio,
                 remaining_steps_ratio=res_b.remaining_steps_ratio,
                 frozen_context_vec=tex.frozen_context_vec,
                 device=device,
             )
-            _, _, h_ctx_t = self.operator_matrices(t_ctx)
             spent_vec = torch.full(
                 (self.ensemble_size,), res_b.spent_seconds_ratio, device=device, dtype=torch.float32
             )
-            tex_belief = belief_by_step.get(int(tex.step_index), last_belief)
+            if tex.prefix_node_id in (None, "", "__root__"):
+                tex_belief = root_belief
+            else:
+                tex_belief = belief_by_node.get(str(tex.prefix_node_id), root_belief)
             tail_preds = self.predict_tail_pi0(tex_belief, h_ctx_t, spent_vec)
             p_y = tail_preds["tail_y_prob"].clamp(min=1e-6, max=1.0 - 1e-6)
             y_target = 1.0 if tex.observed_y else 0.0
@@ -2786,7 +3014,7 @@ class ActionContrastProposer:
 
     @staticmethod
     def _def_use_delete(program: ExecutableProgram, target_field: str) -> ExecutableProgram | None:
-        """Remove `target_field` and ONLY producer Call steps with zero remaining AST consumers (fixes F05)."""
+        """Transform `program.ast_nodes` directly, removing `target_field` and ONLY unreferenced producer Calls (fixes E)."""
         if len(program.readout_fields) <= 1 or target_field not in program.readout_fields:
             return None
         remaining_fields = tuple(f for f in program.readout_fields if f != target_field)
@@ -2795,30 +3023,45 @@ class ActionContrastProposer:
             for e in program.def_use_edges
             if e.field_path == target_field and e.consumer_step is None
         }
-        # Protect any producer step that is consumed by another Call/Case step or by remaining readouts
         protected_producers = {
             e.producer_step
             for e in program.def_use_edges
             if e.consumer_step is not None or e.field_path in remaining_fields
         }
         removable_steps = producer_for_target - protected_producers
-        if removable_steps and len(program.step_templates) > 1:
-            kept_steps = tuple(
-                s for idx, s in enumerate(program.step_templates) if idx not in removable_steps
-            )
-            if not kept_steps:
-                kept_steps = program.step_templates
-        else:
-            kept_steps = program.step_templates
 
+        new_ast: list[ASTNode] = []
+        removed_vars: set[str] = set()
+        call_counter = 0
+        total_top_calls = sum(1 for n in program.ast_nodes if n.op == "Call")
+        for node in program.ast_nodes:
+            if node.op == "Call":
+                cur_idx = call_counter
+                call_counter += 1
+                if cur_idx in removable_steps and total_top_calls > 1:
+                    if node.bind_return_to:
+                        removed_vars.add(node.bind_return_to)
+                    total_top_calls -= 1
+                    continue
+                new_ast.append(node)
+            elif node.op == "Read":
+                if node.public_field_path == target_field or (node.variable and node.variable in removed_vars):
+                    continue
+                new_ast.append(node)
+            else:
+                new_ast.append(node)
+
+        kept_steps = tuple(n.tool_or_action for n in new_ast if n.op == "Call" and n.tool_or_action)
+        if not kept_steps:
+            return None
         return ExecutableProgram(
-            program_id=_short_hash((program.benchmark, kept_steps, remaining_fields, "delete", program.case_condition_field)),
+            program_id=_short_hash((program.benchmark, tuple(n.to_dict() for n in new_ast), remaining_fields, "delete")),
             benchmark=program.benchmark,
             step_templates=kept_steps,
             readout_fields=remaining_fields,
             origin="witness_delete",
             parent_ids=(program.program_id,),
-            expected_cost=float(len(kept_steps)),
+            ast_nodes=tuple(new_ast),
             case_condition_field=program.case_condition_field,
             case_condition_value=program.case_condition_value,
             case_true_template=program.case_true_template,
@@ -2836,51 +3079,85 @@ class ActionContrastProposer:
         case_true_template: str = "",
         case_false_template: str = "",
     ) -> ExecutableProgram | None:
-        """Concatenate two programs with local-variable alpha-renaming on p2's AST (fixes F05, F23).
-
-        Preserves repeated read steps when separated by an intervening operation; only collapses
-        immediately adjacent identical idempotent calls.
-        """
-        combined_steps: list[str] = []
-        for step in (*p1.step_templates, *p2.step_templates):
-            if len(combined_steps) >= max_steps:
-                break
-            if combined_steps and combined_steps[-1] == step:
-                continue
-            combined_steps.append(step)
-
+        """Concatenate two programs directly on AST with alpha-renaming and consistent AST/budget Call count (fixes E)."""
         combined_fields: list[str] = []
         for fld in (*differing_fields, *p1.readout_fields, *p2.readout_fields):
             if fld not in combined_fields and len(combined_fields) < 4:
                 combined_fields.append(fld)
-        if not combined_steps or not combined_fields:
+        if not combined_fields:
             return None
+
+        cond_field = differing_fields[0] if differing_fields else p1.case_condition_field
+        raw_cond_val = case_condition_value or p1.case_condition_value
+        cond_val = (
+            PublicBenchmarkBinder.canonical_slot_predicate_value(cond_field, raw_cond_val)
+            if (cond_field and raw_cond_val)
+            else ""
+        )
+        t_tmpl = case_true_template or p1.case_true_template
+        f_tmpl = case_false_template or p1.case_false_template
+        has_valid_case = bool(cond_field and cond_val and t_tmpl and f_tmpl and t_tmpl != f_tmpl)
+        body_call_cap = max(1, max_steps - (1 if has_valid_case else 0))
 
         p1_body = [n for n in p1.ast_nodes if n.op not in ("Stop", "Case")]
         p2_body = list(_alpha_rename_ast_nodes([n for n in p2.ast_nodes if n.op not in ("Stop", "Case")], "p2"))
         merged_ast: list[ASTNode] = []
+        kept_vars: set[str] = set()
+        last_call_tmpl: str | None = None
+        last_kept_var: str = ""
+        remapped_vars: dict[str, str] = {}
         calls_count = 0
+
         for node in (*p1_body, *p2_body):
             if node.op == "Call":
-                if calls_count >= max_steps:
+                if last_call_tmpl is not None and node.tool_or_action == last_call_tmpl:
+                    # Collapse immediately adjacent identical idempotent Call in AST itself (matching display templates!)
+                    if node.bind_return_to and last_kept_var:
+                        remapped_vars[node.bind_return_to] = last_kept_var
+                    continue
+                if calls_count >= body_call_cap:
                     continue
                 calls_count += 1
-            merged_ast.append(node)
+                last_call_tmpl = node.tool_or_action
+                if node.bind_return_to:
+                    kept_vars.add(node.bind_return_to)
+                    last_kept_var = node.bind_return_to
+                merged_ast.append(node)
+            elif node.op == "Read":
+                target_var = remapped_vars.get(node.variable, node.variable)
+                if target_var and target_var not in kept_vars:
+                    continue
+                merged_ast.append(
+                    ASTNode(
+                        op="Read",
+                        variable=target_var,
+                        public_field_path=node.public_field_path,
+                    )
+                )
 
-        cond_field = differing_fields[0] if differing_fields else p1.case_condition_field
-        t_tmpl = case_true_template or p1.case_true_template
-        f_tmpl = case_false_template or p1.case_false_template
-        if cond_field and (t_tmpl or f_tmpl):
+        kept_steps = tuple(n.tool_or_action for n in merged_ast if n.op == "Call" and n.tool_or_action)
+        if not kept_steps:
+            return None
+
+        if has_valid_case:
             merged_ast.append(
                 ASTNode(
                     op="Case",
                     condition_field=cond_field,
-                    condition_equals=case_condition_value or p1.case_condition_value,
+                    condition_equals=cond_val,
                     children=(
-                        ASTNode(op="Call", tool_or_action=t_tmpl, bind_return_to="ret_case_true")
-                        if t_tmpl else ASTNode(op="Stop"),
-                        ASTNode(op="Call", tool_or_action=f_tmpl, bind_return_to="ret_case_false")
-                        if f_tmpl else ASTNode(op="Stop"),
+                        ASTNode(
+                            op="Call",
+                            tool_or_action=t_tmpl,
+                            typed_arguments={s: f"${s}" for s in re.findall(r"\{([a-zA-Z0-9_.]+)\}", t_tmpl)},
+                            bind_return_to="ret_case_true",
+                        ),
+                        ASTNode(
+                            op="Call",
+                            tool_or_action=f_tmpl,
+                            typed_arguments={s: f"${s}" for s in re.findall(r"\{([a-zA-Z0-9_.]+)\}", f_tmpl)},
+                            bind_return_to="ret_case_false",
+                        ),
                     ),
                 )
             )
@@ -2888,19 +3165,18 @@ class ActionContrastProposer:
 
         return ExecutableProgram(
             program_id=_short_hash(
-                (p1.benchmark, tuple(combined_steps), tuple(combined_fields), cond_field, t_tmpl, f_tmpl)
+                (p1.benchmark, tuple(n.to_dict() for n in merged_ast), tuple(combined_fields))
             ),
             benchmark=p1.benchmark,
-            step_templates=tuple(combined_steps),
+            step_templates=kept_steps,
             readout_fields=tuple(combined_fields),
             origin="witness_concat",
             parent_ids=(p1.program_id, p2.program_id),
-            expected_cost=float(len(combined_steps)),
             ast_nodes=tuple(merged_ast),
-            case_condition_field=cond_field,
-            case_condition_value=case_condition_value or p1.case_condition_value,
-            case_true_template=t_tmpl,
-            case_false_template=f_tmpl,
+            case_condition_field=cond_field if has_valid_case else "",
+            case_condition_value=cond_val if has_valid_case else "",
+            case_true_template=t_tmpl if has_valid_case else "",
+            case_false_template=f_tmpl if has_valid_case else "",
         )
 
     def _build_label_view(self) -> tuple[dict[str, float], int, int]:
@@ -3000,27 +3276,33 @@ class ActionContrastProposer:
                     )[:4] or r1.readout_fields
 
                     cond_f = differing_fields[0] if differing_fields else ""
-                    cond_v = r1.public_readout_z.get(cond_f, "") if cond_f else ""
+                    raw_cond_v = r1.public_readout_z.get(cond_f, "") if cond_f else ""
+                    cond_v = (
+                        PublicBenchmarkBinder.canonical_slot_predicate_value(cond_f, raw_cond_v)
+                        if (cond_f and raw_cond_v)
+                        else ""
+                    )
                     true_branch_tmpl = r1.u_policy_id if d1_view > 0 else r1.v_policy_id
                     false_branch_tmpl = r1.v_policy_id if d1_view > 0 else r1.u_policy_id
+                    use_case = bool(cond_f and cond_v and true_branch_tmpl != false_branch_tmpl)
 
-                    # 1. Full original trace program candidate with populated Case(z: u, v) branches (fixes F05, F06)
-                    full_steps = r1.rebound_trace_templates[: self.max_probe_steps] or r1.step_templates
+                    # 1. Full original trace program candidate with canonical Case(z: u, v) branches
+                    body_cap = max(1, self.max_probe_steps - (1 if use_case else 0))
+                    full_steps = (r1.rebound_trace_templates or r1.step_templates)[:body_cap]
                     full_fields = r1.rebound_trace_fields[:4] or ordered_fields
                     full_prog = ExecutableProgram(
                         program_id=_short_hash(
-                            (self.benchmark, full_steps, full_fields, cond_f, cond_v, true_branch_tmpl, false_branch_tmpl)
+                            (self.benchmark, full_steps, full_fields, cond_f if use_case else "", cond_v if use_case else "", true_branch_tmpl, false_branch_tmpl)
                         ),
                         benchmark=self.benchmark,
                         step_templates=full_steps,
                         readout_fields=full_fields,
                         origin="witness_full",
                         parent_ids=(r1.program_id, r2.program_id),
-                        expected_cost=float(len(full_steps)),
-                        case_condition_field=cond_f,
-                        case_condition_value=cond_v,
-                        case_true_template=true_branch_tmpl if cond_f else "",
-                        case_false_template=false_branch_tmpl if cond_f else "",
+                        case_condition_field=cond_f if use_case else "",
+                        case_condition_value=cond_v if use_case else "",
+                        case_true_template=true_branch_tmpl if use_case else "",
+                        case_false_template=false_branch_tmpl if use_case else "",
                     )
                     candidates_constructed += 1
                     candidates_checked += 1
