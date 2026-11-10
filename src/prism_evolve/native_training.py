@@ -48,6 +48,7 @@ TRAINING_METHODS = frozenset({
     "gigpo", "infopo", "arew", "t3", "step_dpo", "frozen_base",
 })
 PRISM_ACTOR_METHODS = frozenset({
+    "frozen_base",
     "prism_evolve", "dcc_label_shuffled", "dcc_no_program_growth",
     "dcc_reset_parameters", "dcc_pre_first_success", "dcc_k0_planner",
     "dcc_fixed_d_shuffled",
@@ -733,6 +734,7 @@ def rollout(
                 greedy = (not training) and bool(config.get("evaluation_greedy", False))
                 task_instruction = str(context.get("instruction", task_info.get("instruction", "")))
                 rem_sec_ratio = max(0.0, 1.0 - (trajectory.elapsed_seconds / max(1e-8, trajectory.budget_seconds)))
+                rem_steps_ratio = max(0.0, 1.0 - (len(trajectory.events) / max(1, limits.max_env_steps)))
                 if gated_actor:
                     generation = policy.act(
                         before,
@@ -743,6 +745,9 @@ def rollout(
                         events=trajectory.events,
                         task_instruction=task_instruction,
                         remaining_budget_ratio=rem_sec_ratio,
+                        remaining_steps_ratio=rem_steps_ratio,
+                        max_env_steps=limits.max_env_steps,
+                        ungated_union=(method == "frozen_base"),
                     )
                 else:
                     generation = policy.act_native(before, schema, greedy=greedy, role="actor")

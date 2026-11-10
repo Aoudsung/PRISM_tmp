@@ -1930,7 +1930,10 @@ class NativeCausalPolicy(nn.Module):
         events: Sequence[Any] | None = None,
         task_instruction: str | None = None,
         remaining_budget_ratio: float | None = None,
+        remaining_steps_ratio: float | None = None,
+        max_env_steps: int | None = None,
         forced_program: Any | None = None,
+        ungated_union: bool = False,
     ) -> NativeGeneration:
         """Select and execute the best action or condition program under unified terminal Q_m^rho."""
         if forced_mode not in (None, "I", "E"):
@@ -1986,6 +1989,13 @@ class NativeCausalPolicy(nn.Module):
                 if remaining_budget_ratio is not None
                 else float(self.dcc_remaining_budget_ratio)
             )
+            eff_max_steps = max(1, int(max_env_steps) if max_env_steps is not None else 25)
+            rem_steps_ratio = (
+                float(remaining_steps_ratio)
+                if remaining_steps_ratio is not None
+                else max(0.0, 1.0 - (len(hist_events) / float(eff_max_steps)))
+            )
+            step_budget_frac = 1.0 / float(eff_max_steps)
             public_fields = PublicBenchmarkBinder.extract_public_fields(
                 benchmark, goal_text, hist_events, action_schema
             )
@@ -2092,21 +2102,50 @@ class NativeCausalPolicy(nn.Module):
                     candidates.append((prog.program_id, step_res.concrete_action, prog, step_res.frame))
                     seen_actions.add(step_res.concrete_action)
 
-            # 3. Prior-proposed concrete action (always included)
-            if prior_action_text:
+            # Identify actions already verified in the current episode history `h_t` to be zero-change self-loops
+            # at the exact current `public_fields` state.
+            observed_self_loops: set[str] = set()
+            for ev in hist_events:
+                ev_meta = getattr(ev, "metadata", None)
+                if isinstance(ev_meta, Mapping):
+                    pre_f = ev_meta.get("dcc_pre_public_fields")
+                    post_f = ev_meta.get("dcc_public_fields")
+                    if (
+                        isinstance(pre_f, Mapping)
+                        and isinstance(post_f, Mapping)
+                        and dict(pre_f) == dict(public_fields)
+                        and dict(post_f) == dict(public_fields)
+                    ):
+                        ev_act = getattr(getattr(ev, "generation", None), "text", "")
+                        if ev_act:
+                            observed_self_loops.add(str(ev_act).strip())
+
+            # Filter already-verified self-loops from library/residual candidates when alternatives exist
+            non_loop_cands = [c for c in candidates if c[1] not in observed_self_loops]
+            if non_loop_cands:
+                candidates = non_loop_cands
+                seen_actions = {c[1] for c in candidates}
+
+            # 3. Prior-proposed concrete action (anchored at index 0 unless verified to be a self-loop here)
+            has_valid_prior = False
+            if prior_action_text and prior_action_text not in observed_self_loops:
                 candidates.insert(
                     0,
                     (f"native_prior:{_short_hash(prior_action_text)}", prior_action_text, None, None),
                 )
                 seen_actions.add(prior_action_text)
+                has_valid_prior = True
 
-            # 4. Complete unbiased admissible native actions from current public schema (fixes F08)
-            for adm_act in PublicBenchmarkBinder.enumerate_admissible_actions(
+            # 4. Complete unbiased admissible native actions from current public schema (excluding verified self-loops)
+            adm_list = PublicBenchmarkBinder.enumerate_admissible_actions(
                 benchmark, action_schema, goal_text, role_bindings
-            )[:32]:
-                if adm_act not in seen_actions:
+            )[:32]
+            for adm_act in adm_list:
+                if adm_act not in seen_actions and adm_act not in observed_self_loops:
                     candidates.append((f"native_atomic:{_short_hash(adm_act)}", adm_act, None, None))
                     seen_actions.add(adm_act)
+            if not candidates and prior_action_text:
+                candidates.append((f"native_prior:{_short_hash(prior_action_text)}", prior_action_text, None, None))
 
             cand_action_texts = [c[1] for c in candidates]
             all_embed_queries = [*cand_action_texts, TAIL_POLICY_VERSION]
@@ -2137,6 +2176,8 @@ class NativeCausalPolicy(nn.Module):
                     candidate_action=c_act,
                     program=c_prog,
                     remaining_budget_ratio=rem_ratio,
+                    remaining_steps_ratio=rem_steps_ratio,
+                    step_budget_fraction=step_budget_frac,
                     frozen_context_vec=frozen_ctx_vec,
                     frozen_action_vec=act_vec,
                     frozen_tail_action_vec=tail_action_vec,
@@ -2150,9 +2191,18 @@ class NativeCausalPolicy(nn.Module):
                 cand_acts.append(c_act)
                 cand_qs.append(q_score)
                 cand_member_qs.append(tuple(q_eval["q_members"]))
-                if q_score > best_q:
-                    best_q = q_score
+
+            # Safe policy improvement over pi_0 at deployment: deviate from valid prior proposal a_{pi_0}
+            # only when candidate LCB certifies a positive advantage > 0.002 over Q(a_{pi_0}).
+            adv_margin = 0.002 if (self.dcc_active_member_index is None and has_valid_prior) else 0.0
+            best_idx = 0
+            best_eff_q = cand_qs[0] if cand_qs else -1e9
+            for idx in range(1, len(cand_qs)):
+                eff_score = cand_qs[idx] - adv_margin
+                if eff_score > best_eff_q:
+                    best_eff_q = eff_score
                     best_idx = idx
+            best_q = cand_qs[best_idx] if cand_qs else 0.0
 
             sel_id, sel_act, sel_prog, sel_next_frame = candidates[best_idx]
             if sel_next_frame is not None and not sel_next_frame.completed and not sel_next_frame.binding_failed:
@@ -2234,6 +2284,43 @@ class NativeCausalPolicy(nn.Module):
                 input_tokens=prior_generation.input_tokens + len(mode_prompt_ids),
                 output_tokens=prior_generation.output_tokens + int(bool(mode_prompt_ids)),
                 elapsed_seconds=prior_generation.elapsed_seconds + mode_elapsed,
+                role=role,
+                metadata=metadata,
+            )
+
+        if ungated_union:
+            if action_schema.get("classic_text"):
+                generation = self._generate_native_text(
+                    messages,
+                    action_schema,
+                    mode=None,
+                    greedy=greedy,
+                    role=f"{role}.action",
+                    max_new_tokens=max_new_tokens,
+                )
+            else:
+                generation = self._generate_program(
+                    messages,
+                    action_schema,
+                    mode=None,
+                    greedy=greedy,
+                    role=f"{role}.action",
+                    max_new_tokens=max_new_tokens,
+                )
+            metadata = dict(
+                generation.metadata,
+                actor_gated=False,
+                gate_active=False,
+                mode_sampled=False,
+                mode_temperature=mode_temp,
+                mode_log_probability=0.0,
+                gate_probability=0.5,
+                forced_mode=None,
+            )
+            return replace(
+                generation,
+                mode_prompt_ids=(),
+                mode_token_id=None,
                 role=role,
                 metadata=metadata,
             )

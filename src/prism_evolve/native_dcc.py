@@ -2275,7 +2275,7 @@ class ControlledResponseEnsemble(nn.Module):
         termination_probs = F.softmax(base_term + term_res, dim=-1)  # (M, 3)
 
         cost_res = (member_in * self.member_step_cost_weight).sum(dim=-1) + self.member_step_cost_bias  # (M,)
-        cost_ratio = torch.sigmoid(-3.0 + cost_res)  # (M,) wall-clock step cost fraction in (0, 1)
+        cost_ratio = torch.sigmoid(-5.0 + cost_res)  # (M,) calibrated initial wall-clock step cost fraction (~0.0067)
 
         out_in = torch.cat([member_in, outcome_probs], dim=-1)  # (M, S + C + O)
         y_res = (out_in * self.member_step_outcome_weight).sum(dim=-1) + self.member_step_outcome_bias  # (M,)
@@ -2435,6 +2435,8 @@ class ControlledResponseEnsemble(nn.Module):
         candidate_action: str,
         program: ExecutableProgram | None = None,
         remaining_budget_ratio: float = 1.0,
+        remaining_steps_ratio: float = 1.0,
+        step_budget_fraction: float = 0.05,
         frozen_context_vec: Sequence[float] = (),
         frozen_action_vec: Sequence[float] = (),
         frozen_tail_action_vec: Sequence[float] = (),
@@ -2450,6 +2452,8 @@ class ControlledResponseEnsemble(nn.Module):
           - Unrolls `program.ast_nodes` with Bayesian state conditioning inside `Case`:
             b_m(s' | z) proportional to b_m(s') * P_m(z | s', c), updating both member beliefs and
             branch public field states before evaluating true/false subtrees.
+          - Advances `remaining_steps_ratio` per Call and applies finite-horizon Bellman contraction
+            on predicted zero-change self-loops (`outcome_probs[:, :4]`), preventing zero-cost no-op loops.
           - Evaluates leaves via the canonical `encode_tail_state_context` shared with `TailExample` training.
         """
         if use_initial_params and self._initial_state_tensors:
@@ -2460,6 +2464,8 @@ class ControlledResponseEnsemble(nn.Module):
                 candidate_action=candidate_action,
                 program=program,
                 remaining_budget_ratio=remaining_budget_ratio,
+                remaining_steps_ratio=remaining_steps_ratio,
+                step_budget_fraction=step_budget_fraction,
                 frozen_context_vec=frozen_context_vec,
                 frozen_action_vec=frozen_action_vec,
                 frozen_tail_action_vec=frozen_tail_action_vec,
@@ -2473,6 +2479,8 @@ class ControlledResponseEnsemble(nn.Module):
         device = self.transition_logits.device
         init_belief = belief.clone().to(device)
         rem_ratio = float(max(0.0, min(1.0, remaining_budget_ratio)))
+        init_rem_steps = float(max(0.0, min(1.0, remaining_steps_ratio)))
+        step_frac = float(max(0.01, min(1.0, step_budget_fraction)))
         init_spent = torch.full(
             (self.ensemble_size,), 1.0 - rem_ratio, device=device, dtype=torch.float32
         )
@@ -2483,9 +2491,13 @@ class ControlledResponseEnsemble(nn.Module):
             cur_b: torch.Tensor,
             cur_spent: torch.Tensor,
             cur_alive: torch.Tensor,
+            cur_rem_steps: float,
             cur_slot_probs_s: torch.Tensor | None,
             cur_fields: Mapping[str, str],
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            if cur_rem_steps <= 0.0:
+                zeros = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
+                return zeros, cur_spent.clamp(max=1.0), zeros
             rem_mean = float((1.0 - cur_spent).clamp(min=0.0, max=1.0).mean().item())
             spent_mean = float(cur_spent.clamp(min=0.0, max=1.0).mean().item())
             tail_h_ctx = self.encode_tail_state_context(
@@ -2493,6 +2505,7 @@ class ControlledResponseEnsemble(nn.Module):
                 public_fields=cur_fields,
                 remaining_budget_ratio=rem_mean,
                 spent_seconds_ratio=spent_mean,
+                remaining_steps_ratio=cur_rem_steps,
                 frozen_context_vec=frozen_context_vec,
                 frozen_tail_action_vec=frozen_tail_action_vec,
                 device=device,
@@ -2520,10 +2533,11 @@ class ControlledResponseEnsemble(nn.Module):
             cur_b: torch.Tensor,
             cur_spent: torch.Tensor,
             cur_alive: torch.Tensor,
+            cur_rem_steps: float,
             cur_fields: Mapping[str, str],
             act_str: str,
             is_first: bool,
-        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, torch.Tensor, torch.Tensor]:
             rem_vec = (1.0 - cur_spent).clamp(min=0.0, max=1.0)
             if is_first and frozen_action_vec:
                 act_vec: Sequence[float] = frozen_action_vec
@@ -2537,6 +2551,7 @@ class ControlledResponseEnsemble(nn.Module):
                 action_text=act_str,
                 remaining_budget_ratio=float(rem_vec.mean().item()),
                 spent_seconds_ratio=float(cur_spent.mean().item()),
+                remaining_steps_ratio=cur_rem_steps,
                 frozen_context_vec=frozen_context_vec,
                 frozen_action_vec=act_vec,
                 prior_success_logit=prior_success_logit,
@@ -2550,16 +2565,22 @@ class ControlledResponseEnsemble(nn.Module):
                 remaining_budget_ratio=rem_vec,
             )
             next_spent = (cur_spent + preds["cost_ratio"]).clamp(min=0.0, max=1.0)
+            next_rem_steps = max(0.0, cur_rem_steps - step_frac)
             p_live = preds["termination_probs"][:, 0]
             p_nat_term = preds["termination_probs"][:, 1]
             y_prob = preds["terminal_success_prob"]
             rem_after = (1.0 - next_spent).clamp(min=0.0, max=1.0)
             step_u = cur_alive * p_nat_term * y_prob * rem_after
-            next_alive = cur_alive * p_live
+            # Finite-horizon Bellman contraction on zero-field-change transitions (`outcome_probs[:, :4]`)
+            p_no_change = preds["outcome_probs"][:, :4].sum(dim=-1).clamp(min=0.0, max=1.0)
+            contraction = (1.0 - p_no_change * max(step_frac, 0.05)).clamp(min=0.0, max=1.0)
+            horizon_alive = 1.0 if next_rem_steps > 0.0 else 0.0
+            next_alive = cur_alive * p_live * contraction * horizon_alive
             return (
                 preds["next_state_prior"],
                 next_spent,
                 next_alive,
+                next_rem_steps,
                 step_u,
                 preds["slot_probs_per_state"],
             )
@@ -2569,17 +2590,18 @@ class ControlledResponseEnsemble(nn.Module):
             cur_b: torch.Tensor,
             cur_spent: torch.Tensor,
             cur_alive: torch.Tensor,
+            cur_rem_steps: float,
             cur_slot_probs_s: torch.Tensor | None,
             cur_fields: dict[str, str],
             calls_used: int,
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            if not nodes or calls_used >= DEFAULT_MAX_PROBE_STEPS + 1:
-                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_slot_probs_s, cur_fields)
+            if not nodes or calls_used >= DEFAULT_MAX_PROBE_STEPS + 1 or cur_rem_steps <= 0.0:
+                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, cur_fields)
 
             head = nodes[0]
             rest = nodes[1:]
             if head.op == "Stop":
-                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_slot_probs_s, cur_fields)
+                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, cur_fields)
 
             if head.op == "Seq":
                 return _eval_ast_sequence(
@@ -2587,6 +2609,7 @@ class ControlledResponseEnsemble(nn.Module):
                     cur_b,
                     cur_spent,
                     cur_alive,
+                    cur_rem_steps,
                     cur_slot_probs_s,
                     cur_fields,
                     calls_used,
@@ -2594,16 +2617,16 @@ class ControlledResponseEnsemble(nn.Module):
 
             if head.op == "Read":
                 return _eval_ast_sequence(
-                    rest, cur_b, cur_spent, cur_alive, cur_slot_probs_s, cur_fields, calls_used
+                    rest, cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, cur_fields, calls_used
                 )
 
             if head.op == "Call":
                 act_str = candidate_action if calls_used == 0 else (head.tool_or_action or candidate_action)
-                nb, n_spent, n_alive, step_u, n_slots_s = _eval_call_step(
-                    cur_b, cur_spent, cur_alive, cur_fields, act_str, is_first=(calls_used == 0)
+                nb, n_spent, n_alive, n_rem_steps, step_u, n_slots_s = _eval_call_step(
+                    cur_b, cur_spent, cur_alive, cur_rem_steps, cur_fields, act_str, is_first=(calls_used == 0)
                 )
                 rem_u, end_cost, tail_y = _eval_ast_sequence(
-                    rest, nb, n_spent, n_alive, n_slots_s, cur_fields, calls_used + 1
+                    rest, nb, n_spent, n_alive, n_rem_steps, n_slots_s, cur_fields, calls_used + 1
                 )
                 return step_u + rem_u, end_cost, tail_y
 
@@ -2612,11 +2635,10 @@ class ControlledResponseEnsemble(nn.Module):
                     head.condition_field, head.condition_equals
                 )
                 if cur_slot_probs_s is not None:
-                    # Bayesian belief conditioning: b_m(s' | z) proportional to b_m(s') * P_m(z | s', c)
-                    lik_true = cur_slot_probs_s[:, :, slot_idx, val_idx].clamp(min=1e-6, max=1.0 - 1e-6)  # (M, S)
+                    lik_true = cur_slot_probs_s[:, :, slot_idx, val_idx].clamp(min=1e-6, max=1.0 - 1e-6)
                     lik_false = (1.0 - lik_true).clamp(min=1e-6, max=1.0 - 1e-6)
                     unnorm_b_true = cur_b * lik_true
-                    p_true = unnorm_b_true.sum(dim=-1).clamp(min=0.0, max=1.0)  # (M,)
+                    p_true = unnorm_b_true.sum(dim=-1).clamp(min=0.0, max=1.0)
                     b_true = unnorm_b_true / unnorm_b_true.sum(dim=-1, keepdim=True).clamp(min=1e-8)
 
                     unnorm_b_false = cur_b * lik_false
@@ -2646,6 +2668,7 @@ class ControlledResponseEnsemble(nn.Module):
                     b_true,
                     cur_spent,
                     cur_alive * p_true,
+                    cur_rem_steps,
                     cur_slot_probs_s,
                     fields_true,
                     calls_used,
@@ -2655,6 +2678,7 @@ class ControlledResponseEnsemble(nn.Module):
                     b_false,
                     cur_spent,
                     cur_alive * p_false,
+                    cur_rem_steps,
                     cur_slot_probs_s,
                     fields_false,
                     calls_used,
@@ -2662,7 +2686,7 @@ class ControlledResponseEnsemble(nn.Module):
                 return u_t + u_f, p_true * c_t + p_false * c_f, p_true * y_t + p_false * y_f
 
             return _eval_ast_sequence(
-                rest, cur_b, cur_spent, cur_alive, cur_slot_probs_s, cur_fields, calls_used
+                rest, cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, cur_fields, calls_used
             )
 
         ast_seq = (
@@ -2671,7 +2695,7 @@ class ControlledResponseEnsemble(nn.Module):
             else (ASTNode(op="Call", tool_or_action=candidate_action), ASTNode(op="Stop"))
         )
         q_members, end_spent, tail_y_members = _eval_ast_sequence(
-            ast_seq, init_belief, init_spent, init_alive, None, base_fields, 0
+            ast_seq, init_belief, init_spent, init_alive, init_rem_steps, None, base_fields, 0
         )
         q_members = q_members.clamp(min=0.0, max=1.0)
 
