@@ -1,16 +1,34 @@
-"""Exact finite-model research diagnostics for PRISM DCC.
+"""Exact finite-model research diagnostics and bounded-budget program discovery study for PRISM DCC.
 
-These are controlled mechanism studies, not native agent benchmarks.
-The model class and finite program grammar are supplied to every selector.
-No neural model, language model, or native environment is trained here.
+Implements the systematic revision contract (`docs/prism-dcc-v2-design.md`):
+1. Known-model parity diagnostic and exact closed-form EVSI reference without fantasy retraining.
+2. Strictly paid field access in program discovery (`_propose_programs`):
+   - Only fields actually observed in an anchor's paid trace (`observed_bits: dict[int, int]`) are stored
+     and accessible to proposers; unobserved fields are never read from ground-truth `anchor_bits` (fixes E05).
+3. Complete candidate construction and inspection budget accounting:
+   - Proposers may construct and inspect at most `max_candidate_checks` candidate pairs per call,
+     recording `candidates_constructed` and `candidates_checked` instead of exhaustively scoring all
+     remaining combinations (fixes E06).
+4. Unified executable policy support between acquisition and deployment:
+   - Both EVSI acquisition and deployment evaluate over the same executable policy pool `avail_models`
+     induced by `active_pool` (fixes E09).
+5. Honest baseline naming:
+   - `random_query_finite_bayes` (formerly `lsharp_paid_intervention`) and
+     `noiseless_version_space_elimination` (formerly `lsharp_free_oracle`), accurately reflecting
+     their random-query Bayesian update and noiseless version-space elimination semantics (fixes E08).
+6. Unknown response law K + delayed terminal goal study (`unknown_k_delayed_goal_study`):
+   - Learns empirical transition/response tables from scratch (Laplace-smoothed counts) and evaluates
+     multi-stage delayed terminal success Y in {0, 1} alongside local response feedback (fixes E07).
 """
 
+from __future__ import annotations
+
 import argparse
+from functools import lru_cache
 import itertools
 import json
 import math
 from pathlib import Path
-from functools import lru_cache
 
 import numpy as np
 
@@ -48,7 +66,6 @@ def parity_diagnostics():
                 "predictive_entropy_uniform_ties_success": 0.5 + 0.5 / candidates,
                 "complete_program_success": 1.0,
             })
-    # Direct enumeration: all binary signals and all size-two query subsets.
     all_values = []
     for subset in itertools.combinations(range(8), 2):
         conditional = {}
@@ -60,22 +77,17 @@ def parity_diagnostics():
         all_values.append(sum(max(v) for v in conditional.values()) / 256)
     exact_uniform = 0.5 + 0.5 / math.comb(8, 2)
     assert abs(float(np.mean(all_values)) - exact_uniform) < 1e-12
-    return {"rows": rows, "direct_enumeration_check_n8_k2": exact_uniform,
-            "single_bit_value_of_information": 0.0,
-            "joint_two_bit_value_of_information": 0.5,
-            "interpretation": "Known-model planning diagnostic; all individual fields are independent fair bits. Predictive-entropy ties are uniform. No learned novelty claim."}
+    return {
+        "rows": rows,
+        "direct_enumeration_check_n8_k2": exact_uniform,
+        "single_bit_value_of_information": 0.0,
+        "joint_two_bit_value_of_information": 0.5,
+        "interpretation": "Known-model planning diagnostic; all individual fields are independent fair bits. Predictive-entropy ties are uniform. No learned novelty claim.",
+    }
 
 
 def likelihoods(num_programs):
-    """p(z, paired_response | query program, model).
-
-    A model is (relevant program, polarity). An informative program reveals
-    the XOR of the relevant public bits. Wrong programs give an independent bit.
-    From the same post-query snapshot, both actions use a shared U~Uniform(0,1).
-    The correct action passes for U<.8; the other passes for U<.2.
-    Hence paired outcomes are 00 with .2, 11 with .2, and the correct-only
-    outcome with .6. The joint likelihood preserves this sibling dependence.
-    """
+    """p(z, paired_response | query program, model) for known-noise reference experiments."""
     table = np.zeros((num_programs, 2 * num_programs, 8), dtype=np.float64)
     for query in range(num_programs):
         for model in range(2 * num_programs):
@@ -94,7 +106,6 @@ def likelihoods(num_programs):
 
 
 def policy_values(num_programs):
-    # Candidate deployment policy: execute one full program, then choose xor b.
     values = np.full((2 * num_programs, 2 * num_programs), 0.5)
     for model in range(2 * num_programs):
         values[model, model] = 0.8
@@ -108,16 +119,26 @@ def entropy(probabilities, axis=-1):
     return -(probabilities * terms).sum(axis=axis)
 
 
-def scores_for(weight, table, method):
-    """Closed-form finite-particle expected value, without retraining fantasies."""
+def scores_for(weight, table, method, *, values_sub=None):
+    """Closed-form finite-particle expected value, without retraining fantasies.
+
+    When `values_sub` is provided (shape `(2 * num_programs, len(avail_models))`),
+    EVSI is computed strictly over the executable policy set `avail_models` (fixes E09).
+    """
     predictive = np.einsum("qmo,m->qo", table, weight)
     if method == "predictive_entropy":
         return entropy(predictive)
     if method == "model_information":
         return entropy(predictive) - np.einsum("qm,m->q", entropy(table), weight)
     if method == "complete_program_evsi":
-        # Posterior policy value = .5 + .3 max_j |w(j,0)-w(j,1)|.
-        # The normalization cancels when multiplied by p(outcome).
+        if values_sub is not None:
+            before = float(np.max(weight @ values_sub))
+            joint = table * weight[None, :, None]  # (Q, M, O)
+            # post_values[q, o, j] = sum_m joint[q, m, o] * values_sub[m, j]
+            post_values = np.einsum("qmo,mj->qoj", joint, values_sub)
+            after = np.max(post_values, axis=-1).sum(axis=-1)
+            result = np.maximum(0.0, after - before)
+            return result
         joint = table * weight[None, :, None]
         signed = joint[:, 0::2, :] - joint[:, 1::2, :]
         after = 0.5 + 0.3 * np.max(np.abs(signed), axis=1).sum(axis=1)
@@ -129,7 +150,7 @@ def scores_for(weight, table, method):
 
 
 def check_likelihood_and_evsi():
-    """Independently enumerate raw four-bit worlds and verify EVSI formulas."""
+    """Independently enumerate raw four-bit worlds and verify EVSI formulas, including zero-info determinism."""
     pairs = list(itertools.combinations(range(4), 2))
     table = likelihoods(len(pairs))
     for qi, query in enumerate(pairs):
@@ -149,6 +170,8 @@ def check_likelihood_and_evsi():
     for _ in range(40):
         weight = rng.dirichlet(np.ones(2 * len(pairs)))
         simplified = scores_for(weight, table, "complete_program_evsi")
+        with_explicit_v = scores_for(weight, table, "complete_program_evsi", values_sub=values)
+        assert np.allclose(simplified, with_explicit_v, atol=1e-12)
         current = (weight @ values).max()
         for query in range(len(pairs)):
             direct = 0.0
@@ -166,36 +189,42 @@ def check_likelihood_and_evsi():
             from_regret = (clairvoyant_before - current) - expected_regret_after
             assert abs(simplified[query] - (direct - current)) < 1e-12
             assert abs(simplified[query] - from_regret) < 1e-12
-    return {"raw_state_joint_likelihood_check": "passed",
-            "evsi_closed_form_and_bayes_regret_check": "passed",
-            "maximum_check_tolerance": 1e-12}
+
+    # Deterministic known-mechanism check: M=1 known model => EVSI == 0.0 exactly
+    one_hot_w = np.zeros(2 * len(pairs))
+    one_hot_w[0] = 1.0
+    zero_evsi = scores_for(one_hot_w, table, "complete_program_evsi", values_sub=values)
+    assert np.max(np.abs(zero_evsi)) < 1e-12
+    return {
+        "raw_state_joint_likelihood_check": "passed",
+        "evsi_closed_form_and_bayes_regret_check": "passed",
+        "deterministic_known_model_zero_evsi_check": "passed",
+        "maximum_check_tolerance": 1e-12,
+    }
 
 
 def study(num_fields, seeds, max_blocks):
-    """Unknown relevant two-bit program and polarity; all full-task Y=0.
-
-    Training probes end after short local checks, before the terminal task.
-    Program identities and parameters are unknown; the whole finite class is
-    provided. All selectors receive the same class, budget, and observations.
-    """
+    """Known-likelihood reference study over exhaustive two-read candidate pool."""
     num_programs = math.comb(num_fields, 2)
     table = likelihoods(num_programs)
     values = policy_values(num_programs)
-    methods = ("uniform_programs", "predictive_entropy", "model_information",
-               "complete_program_evsi")
+    methods = (
+        "uniform_programs",
+        "predictive_entropy",
+        "model_information",
+        "complete_program_evsi",
+    )
     checkpoints = [n for n in (0, 1, 2, 4, 8, 16, 32, 64) if n <= max_blocks]
     checkpoints = sorted(set(checkpoints + [max_blocks]))
     summary = []
     raw = {}
-    for method_index, method in enumerate(methods):
+    for method in methods:
         observed = {n: [] for n in checkpoints}
         entropies = {n: [] for n in checkpoints}
         masses = {n: [] for n in checkpoints}
         for seed in range(seeds):
             world_rng = np.random.default_rng(100003 * num_fields + seed)
             true_model = int(world_rng.integers(2 * num_programs))
-            # Common random uniforms by seed across selectors; adaptive query
-            # identities may differ. Algorithm tie choices use a separate stream.
             outcome_rng = np.random.default_rng(300007 * num_fields + seed)
             choice_rng = np.random.default_rng(500009 * num_fields + seed)
             weight = np.full(2 * num_programs, 1 / (2 * num_programs))
@@ -203,7 +232,6 @@ def study(num_fields, seeds, max_blocks):
                 if block in observed:
                     deployment = weight @ values
                     best = np.flatnonzero(deployment >= deployment.max() - 1e-12)
-                    # Average over equally-valued decisions, not one lucky tie.
                     observed[block].append(float(values[true_model, best].mean()))
                     entropies[block].append(float(entropy(weight)))
                     masses[block].append(float(weight[true_model]))
@@ -212,12 +240,11 @@ def study(num_fields, seeds, max_blocks):
                 if method == "uniform_programs":
                     query = int(choice_rng.integers(num_programs))
                 else:
-                    scores = scores_for(weight, table, method)
+                    scores = scores_for(weight, table, method, values_sub=values)
                     best = np.flatnonzero(scores >= scores.max() - 1e-12)
                     query = int(choice_rng.choice(best))
                 sample = outcome_rng.random()
-                outcome = int(np.searchsorted(np.cumsum(table[query, true_model]), sample,
-                                              side="right"))
+                outcome = int(np.searchsorted(np.cumsum(table[query, true_model]), sample, side="right"))
                 weight *= table[query, :, outcome]
                 assert weight.sum() > 0
                 weight /= weight.sum()
@@ -227,108 +254,176 @@ def study(num_fields, seeds, max_blocks):
             mean = float(samples.mean())
             se = float(samples.std(ddof=1) / math.sqrt(seeds)) if seeds > 1 else 0.0
             summary.append({
-                "fields": num_fields, "candidate_two_read_programs": num_programs,
-                "model_hypotheses": 2 * num_programs, "method": method,
-                "blocks": n, "physical_actions": 4 * n, "training_full_task_successes": 0,
+                "fields": num_fields,
+                "candidate_two_read_programs": num_programs,
+                "model_hypotheses": 2 * num_programs,
+                "method": method,
+                "blocks": n,
+                "physical_actions": 4 * n,
+                "training_full_task_successes": 0,
                 "mean_deployment_response_value": mean,
-                "seed_standard_error": se, "normal_95_ci": [mean - 1.96 * se, mean + 1.96 * se],
+                "seed_standard_error": se,
+                "normal_95_ci": [mean - 1.96 * se, mean + 1.96 * se],
                 "mean_posterior_entropy_nats": float(np.mean(entropies[n])),
                 "mean_posterior_true_model_mass": float(np.mean(masses[n])),
             })
-    return {"fields": num_fields, "seeds": seeds, "max_blocks": max_blocks,
-            "response_ceiling_with_known_model": 0.8, "untrained_value": 0.5,
-            "atomic_design_value_for_all_budgets": 0.5,
-            "atomic_design_explanation": "One bit plus paired action responses is independent of the model when the true relation is a two-bit parity; new anchors do not share latent bits.",
-            "summary": summary, "raw_seed_values": raw}
+    return {
+        "fields": num_fields,
+        "seeds": seeds,
+        "max_blocks": max_blocks,
+        "prior_scope": "known_likelihood_table_and_known_local_value_table",
+        "response_ceiling_with_known_model": 0.8,
+        "untrained_value": 0.5,
+        "atomic_design_value_for_all_budgets": 0.5,
+        "atomic_design_explanation": "One bit plus paired action responses is independent of the model when the true relation is a two-bit parity; new anchors do not share latent bits.",
+        "summary": summary,
+        "raw_seed_values": raw,
+    }
 
 
 def _propose_programs(
-    pairs, active_set, records, budget, proposer, rng,
+    pairs,
+    active_set,
+    records,
+    budget,
+    proposer,
+    rng,
+    *,
+    max_candidate_checks=6,
 ):
-    """Propose up to `budget` two-read composite programs via delete/concat operators.
+    """Propose up to `budget` two-read composite programs under strict paid-field and check-budget constraints.
 
-    All proposers share the same grammar (full trace retention + single-field
-    deletion from wide traces + two-field concatenation of atomic reads) and
-    the same candidate budget `budget`. They differ ONLY in how records are
-    prioritized to form witnesses:
-      - action_diff_growth: order-reversal witness pairs (d_1 * d_2 < 0)
-      - label_shuffled_growth: identical operator, but action-difference labels d
-        are permuted across records in the proposer input
-      - prediction_error_growth: records prioritized by model surprise -log P(Y)
-      - uniform_prior_growth: uniform grammar prior over remaining candidates
+    Fixes E05 and E06:
+      - Only fields present in a record's paid `observed_bits` dictionary may be accessed;
+        unobserved fields have unknown values and cannot have their XOR computed.
+      - At most `max_candidate_checks` candidate programs may be constructed and inspected per call;
+        the proposer never enumerates and scores all `remaining` pairs for free.
+      - In `label_shuffled_growth`, all grouping and ranking use the single permuted label view.
+    Returns `(selected_program_indices, stats_dict)`.
     """
     remaining = [idx for idx in range(len(pairs)) if idx not in active_set]
     if not remaining or budget <= 0:
-        return []
-    if len(remaining) <= budget or proposer == "exhaustive_pool":
-        return list(remaining)
+        return [], {"candidates_constructed": 0, "candidates_checked": 0}
+    if proposer == "exhaustive_pool":
+        return list(remaining), {
+            "candidates_constructed": len(remaining),
+            "candidates_checked": len(remaining),
+        }
     if proposer == "uniform_prior_growth" or len(records) < 2:
-        chosen = rng.choice(remaining, size=min(budget, len(remaining)), replace=False)
-        return [int(x) for x in chosen]
+        n_pick = min(budget, len(remaining), max_candidate_checks)
+        chosen = rng.choice(remaining, size=n_pick, replace=False)
+        return [int(x) for x in chosen], {
+            "candidates_constructed": int(n_pick),
+            "candidates_checked": int(n_pick),
+        }
 
-    num_fields = max(max(p) for p in pairs) + 1
-    pair_scores = np.zeros(len(pairs), dtype=np.float64)
+    pair_To_idx = {pair: idx for idx, pair in enumerate(pairs)}
+    candidate_scores: dict[int, float] = {}
+    candidates_constructed = 0
+    candidates_checked = 0
 
     if proposer in ("action_diff_growth", "label_shuffled_growth"):
         d_values = [rec["d"] for rec in records]
         if proposer == "label_shuffled_growth":
             perm = rng.permutation(len(d_values))
             d_values = [d_values[int(i)] for i in perm]
-        pos_records = [rec for rec, d in zip(records, d_values) if d > 0]
-        neg_records = [rec for rec, d in zip(records, d_values) if d < 0]
+        pos_records = [(rec, d) for rec, d in zip(records, d_values) if d > 0]
+        neg_records = [(rec, d) for rec, d in zip(records, d_values) if d < 0]
+
         if pos_records and neg_records:
-            # Order-reversal witnesses (d_1 > 0 vs d_2 < 0): rank two-field
-            # programs (created via Delete from wide trace or Concat of atomic
-            # fields) by consistency of their XOR parity flip across witness pairs.
-            for r1 in pos_records[-8:]:
-                b1 = r1["anchor_bits"]
-                s1 = r1["trace_fields"]
-                for r2 in neg_records[-8:]:
-                    b2 = r2["anchor_bits"]
-                    s2 = r2["trace_fields"]
-                    union_fields = s1 | s2
-                    for q_idx in remaining:
-                        i, j = pairs[q_idx]
-                        in_scope = 1.5 if (i in union_fields and j in union_fields) else 0.5
-                        xor_1 = b1[i] ^ b1[j]
-                        xor_2 = b2[i] ^ b2[j]
+            for r1, d1_view in pos_records[-6:]:
+                if candidates_checked >= max_candidate_checks:
+                    break
+                obs1 = r1["observed_bits"]  # dict[field_idx, bit_val] of PAID observed fields only
+                for r2, d2_view in neg_records[-6:]:
+                    if candidates_checked >= max_candidate_checks:
+                        break
+                    obs2 = r2["observed_bits"]
+                    # Delete / Concat can only form pairs from fields actually observed in the paid traces
+                    shared_observed_fields = sorted(set(obs1.keys()) & set(obs2.keys()))
+                    joint_pairs = [
+                        (i, j)
+                        for i, j in itertools.combinations(shared_observed_fields, 2)
+                        if pair_To_idx.get((i, j)) in remaining
+                    ]
+                    rng.shuffle(joint_pairs)
+                    for i, j in joint_pairs:
+                        if candidates_checked >= max_candidate_checks:
+                            break
+                        q_idx = pair_To_idx[(i, j)]
+                        candidates_constructed += 1
+                        candidates_checked += 1
+                        xor_1 = obs1[i] ^ obs1[j]
+                        xor_2 = obs2[i] ^ obs2[j]
+                        mag = 0.5 * abs(float(d1_view) - float(d2_view))
                         if xor_1 != xor_2:
-                            pair_scores[q_idx] += in_scope * 1.0
+                            candidate_scores[q_idx] = candidate_scores.get(q_idx, 0.0) + mag * 1.0
                         else:
-                            pair_scores[q_idx] -= in_scope * 0.25
-        else:
-            chosen = rng.choice(remaining, size=min(budget, len(remaining)), replace=False)
-            return [int(x) for x in chosen]
+                            candidate_scores[q_idx] = candidate_scores.get(q_idx, 0.0) - mag * 0.25
     elif proposer == "prediction_error_growth":
-        # Isomorphic Delete/Concat over high-surprise records without order-reversal sign
-        sorted_recs = sorted(records, key=lambda r: r["surprise"], reverse=True)[:8]
+        sorted_recs = sorted(records, key=lambda r: r["surprise"], reverse=True)[:6]
         for idx_a in range(len(sorted_recs)):
+            if candidates_checked >= max_candidate_checks:
+                break
             for idx_b in range(idx_a + 1, len(sorted_recs)):
+                if candidates_checked >= max_candidate_checks:
+                    break
                 r1, r2 = sorted_recs[idx_a], sorted_recs[idx_b]
-                b1, b2 = r1["anchor_bits"], r2["anchor_bits"]
-                union_fields = r1["trace_fields"] | r2["trace_fields"]
+                obs1, obs2 = r1["observed_bits"], r2["observed_bits"]
+                shared_observed_fields = sorted(set(obs1.keys()) & set(obs2.keys()))
+                joint_pairs = [
+                    (i, j)
+                    for i, j in itertools.combinations(shared_observed_fields, 2)
+                    if pair_To_idx.get((i, j)) in remaining
+                ]
+                rng.shuffle(joint_pairs)
                 weight_surprise = 0.5 * (r1["surprise"] + r2["surprise"])
-                for q_idx in remaining:
-                    i, j = pairs[q_idx]
-                    in_scope = 1.5 if (i in union_fields and j in union_fields) else 0.5
-                    # Without action-difference sign, surprise only sees field change
-                    if (b1[i], b1[j]) != (b2[i], b2[j]):
-                        pair_scores[q_idx] += in_scope * weight_surprise
+                for i, j in joint_pairs:
+                    if candidates_checked >= max_candidate_checks:
+                        break
+                    q_idx = pair_To_idx[(i, j)]
+                    candidates_constructed += 1
+                    candidates_checked += 1
+                    if (obs1[i], obs1[j]) != (obs2[i], obs2[j]):
+                        candidate_scores[q_idx] = candidate_scores.get(q_idx, 0.0) + weight_surprise
     else:
         raise ValueError(f"Unknown proposer: {proposer}")
 
-    # Break ties randomly using the proposer RNG stream
-    jitter = rng.uniform(0.0, 1e-9, size=len(pairs))
-    ranked = sorted(remaining, key=lambda q: pair_scores[q] + jitter[q], reverse=True)
-    return [int(x) for x in ranked[:budget]]
+    # If remaining check budget allows and we haven't filled `budget` candidates, sample from grammar prior
+    if len(candidate_scores) < budget and candidates_checked < max_candidate_checks:
+        unscored = [q for q in remaining if q not in candidate_scores]
+        extra_n = min(budget - len(candidate_scores), len(unscored), max_candidate_checks - candidates_checked)
+        if extra_n > 0:
+            extra_picks = rng.choice(unscored, size=extra_n, replace=False)
+            for q in extra_picks:
+                candidates_constructed += 1
+                candidates_checked += 1
+                candidate_scores[int(q)] = -1e-4
+
+    if not candidate_scores:
+        return [], {
+            "candidates_constructed": candidates_constructed,
+            "candidates_checked": candidates_checked,
+        }
+
+    ranked = sorted(
+        candidate_scores.keys(),
+        key=lambda q: candidate_scores[q] + float(rng.uniform(0.0, 1e-9)),
+        reverse=True,
+    )
+    return [int(x) for x in ranked[:budget]], {
+        "candidates_constructed": candidates_constructed,
+        "candidates_checked": candidates_checked,
+    }
 
 
 def check_exhaustive_proposer_equivalence():
-    """Verify L249: when all methods receive the full candidate pool, EVSI choices match."""
+    """Verify that when all methods receive the full candidate pool, EVSI choices match."""
     num_fields = 6
     pairs = list(itertools.combinations(range(num_fields), 2))
     num_programs = len(pairs)
     table = likelihoods(num_programs)
+    values = policy_values(num_programs)
     rng = np.random.default_rng(20261109)
     proposers = (
         "action_diff_growth",
@@ -342,11 +437,11 @@ def check_exhaustive_proposer_equivalence():
         reference_scores = None
         for prop in proposers:
             active = set(range(num_programs))
-            proposed = _propose_programs(
+            proposed, _ = _propose_programs(
                 pairs, active, [], num_programs, prop, np.random.default_rng(7)
             )
             pool = sorted(active | set(proposed))
-            scores = scores_for(weight, table[pool], "complete_program_evsi")
+            scores = scores_for(weight, table[pool], "complete_program_evsi", values_sub=values)
             if reference_scores is None:
                 reference_scores = scores
             else:
@@ -355,16 +450,23 @@ def check_exhaustive_proposer_equivalence():
     return {"exhaustive_candidate_pool_evsi_equivalence": "passed", "max_abs_difference": max_diff}
 
 
-def growth_study(num_fields, seeds, max_blocks, proposal_budget=2, initial_pool_size=2):
-    """Program discovery under bounded candidate generation budget (L221-250, L317).
+def growth_study(
+    num_fields,
+    seeds,
+    max_blocks,
+    proposal_budget=2,
+    initial_pool_size=2,
+    max_candidate_checks=6,
+):
+    """Program discovery under bounded candidate construction/inspection budget and paid field access.
 
     Compares:
-      - action_diff_growth: order-reversal witness guided Delete/Concat + EVSI
-      - label_shuffled_growth: same proposer with shuffled action-diff labels d + EVSI
-      - prediction_error_growth: model surprise guided Delete/Concat + EVSI
-      - uniform_prior_growth: uniform grammar prior proposal + EVSI
-      - lsharp_paid_intervention: L# separating-automata query learner with paid noisy interventions
-      - lsharp_free_oracle: L# reference learner with free noiseless action-direction oracle
+      - action_diff_growth: order-reversal witness guided Delete/Concat + active-pool EVSI
+      - label_shuffled_growth: same proposer with permuted action-diff labels d + active-pool EVSI
+      - prediction_error_growth: model surprise guided Delete/Concat + active-pool EVSI
+      - uniform_prior_growth: uniform grammar prior proposal + active-pool EVSI
+      - random_query_finite_bayes: random query expansion with finite-table Bayes update
+      - noiseless_version_space_elimination: free noiseless action-direction oracle version-space elimination
     """
     pairs = list(itertools.combinations(range(num_fields), 2))
     num_programs = len(pairs)
@@ -375,8 +477,8 @@ def growth_study(num_fields, seeds, max_blocks, proposal_budget=2, initial_pool_
         "label_shuffled_growth",
         "prediction_error_growth",
         "uniform_prior_growth",
-        "lsharp_paid_intervention",
-        "lsharp_free_oracle",
+        "random_query_finite_bayes",
+        "noiseless_version_space_elimination",
     )
     checkpoints = [n for n in (0, 1, 2, 4, 8, 16, 32, 64) if n <= max_blocks]
     checkpoints = sorted(set(checkpoints + [max_blocks]))
@@ -390,6 +492,7 @@ def growth_study(num_fields, seeds, max_blocks, proposal_budget=2, initial_pool_
         best_improvements = {n: [] for n in checkpoints}
         entropies = {n: [] for n in checkpoints}
         masses = {n: [] for n in checkpoints}
+        checked_counts = {n: [] for n in checkpoints}
 
         for seed in range(seeds):
             world_rng = np.random.default_rng(100003 * num_fields + seed)
@@ -397,73 +500,74 @@ def growth_study(num_fields, seeds, max_blocks, proposal_budget=2, initial_pool_
             true_program, true_polarity = divmod(true_model, 2)
             true_i, true_j = pairs[true_program]
 
+            init_rng = np.random.default_rng(700001 * num_fields + seed)
+            non_true = [idx for idx in range(num_programs) if idx != true_program]
+            active_pool = set(
+                int(x) for x in init_rng.choice(non_true, size=min(initial_pool_size, len(non_true)), replace=False)
+            )
+
+            anchor_rng = np.random.default_rng(200003 * num_fields + seed)
             outcome_rng = np.random.default_rng(300007 * num_fields + seed)
             choice_rng = np.random.default_rng(500009 * num_fields + seed)
-            proposer_rng = np.random.default_rng(700001 * num_fields + seed)
-            anchor_rng = np.random.default_rng(900011 * num_fields + seed)
+            proposer_rng = np.random.default_rng(900011 * num_fields + seed)
 
             weight = np.full(2 * num_programs, 1.0 / (2 * num_programs))
-            starter = proposer_rng.choice(
-                num_programs, size=min(initial_pool_size, num_programs), replace=False
-            )
-            active_pool = set(int(x) for x in starter)
             records = []
+            cum_candidates_checked = 0
 
             for block in range(max_blocks + 1):
                 if block in observed:
-                    if method in ("lsharp_paid_intervention", "lsharp_free_oracle"):
-                        deployment = weight @ values
-                    else:
-                        # Deployment can only execute discovered programs in active_pool
-                        avail_models = []
-                        for q_idx in sorted(active_pool):
-                            avail_models.extend([2 * q_idx, 2 * q_idx + 1])
-                        deployment_sub = weight @ values[:, avail_models]
-                        best_sub = np.flatnonzero(deployment_sub >= deployment_sub.max() - 1e-12)
-                        best = [avail_models[int(i)] for i in best_sub]
-                    if method in ("lsharp_paid_intervention", "lsharp_free_oracle"):
-                        best = np.flatnonzero(deployment >= deployment.max() - 1e-12)
+                    # Unified executable policy set: deployment and acquisition both use `avail_models` from `active_pool`
+                    avail_models = []
+                    for q_idx in sorted(active_pool):
+                        avail_models.extend([2 * q_idx, 2 * q_idx + 1])
+                    deployment_sub = weight @ values[:, avail_models]
+                    best_sub = np.flatnonzero(deployment_sub >= deployment_sub.max() - 1e-12)
+                    best = [avail_models[int(i)] for i in best_sub]
                     val = float(values[true_model, best].mean())
                     observed[block].append(val)
                     hit_rates[block].append(float(true_program in active_pool))
                     best_improvements[block].append(max(0.0, val - 0.5))
                     entropies[block].append(float(entropy(weight)))
                     masses[block].append(float(weight[true_model]))
+                    checked_counts[block].append(float(cum_candidates_checked))
                 if block == max_blocks:
                     break
 
                 anchor_bits = tuple(int(b) for b in anchor_rng.integers(0, 2, size=num_fields))
-                # Each anchor also exposes a wide public trace window (4 fields)
+                # Paid public trace window exposes 4 fields; ONLY those observed bits are stored
                 trace_subset = set(
                     int(x) for x in anchor_rng.choice(num_fields, size=min(4, num_fields), replace=False)
                 )
 
-                if method in ("lsharp_paid_intervention", "lsharp_free_oracle"):
-                    # L# separating automata: tests single-field / prefix apartness
-                    # in sequential order and extends prefixes when apartness is found
-                    cand_list = [idx for idx in range(num_programs) if idx not in active_pool]
-                    if cand_list:
-                        new_q = int(choice_rng.choice(cand_list))
-                        active_pool.add(new_q)
+                if method in ("random_query_finite_bayes", "noiseless_version_space_elimination"):
+                    max_active_pool = initial_pool_size + 2 * proposal_budget
+                    if block in (2, 4, 6, 8) and len(active_pool) < max_active_pool:
+                        cand_list = [idx for idx in range(num_programs) if idx not in active_pool]
+                        if cand_list:
+                            new_q = int(choice_rng.choice(cand_list))
+                            active_pool.add(new_q)
+                            cum_candidates_checked += 1
                     pool_sorted = sorted(active_pool)
                     query = int(choice_rng.choice(pool_sorted))
                     q_i, q_j = pairs[query]
                     obs_bit = anchor_bits[q_i] ^ anchor_bits[q_j]
                     true_action = anchor_bits[true_i] ^ anchor_bits[true_j] ^ true_polarity
                     sample = outcome_rng.random()
-                    if method == "lsharp_free_oracle":
-                        # Free noiseless oracle reveals true_action without noise
+                    if method == "noiseless_version_space_elimination":
+                        # Only eliminates hypotheses whose fields were actually observed at this anchor
+                        observed_at_anchor = trace_subset | {q_i, q_j}
                         for m_idx in range(2 * num_programs):
                             r_prog, r_pol = divmod(m_idx, 2)
                             m_i, m_j = pairs[r_prog]
-                            pred_action = anchor_bits[m_i] ^ anchor_bits[m_j] ^ r_pol
-                            if pred_action != true_action:
-                                weight[m_idx] = 0.0
+                            if m_i in observed_at_anchor and m_j in observed_at_anchor:
+                                pred_action = anchor_bits[m_i] ^ anchor_bits[m_j] ^ r_pol
+                                if pred_action != true_action:
+                                    weight[m_idx] = 0.0
                         if weight.sum() == 0:
                             weight[:] = 1.0
                         weight /= weight.sum()
                     else:
-                        # Paid intervention: noisy paired outcome (0.2 fail, 0.2 pass, 0.6 diff)
                         if sample < 0.2:
                             outcome = 4 * obs_bit
                         elif sample < 0.4:
@@ -474,17 +578,31 @@ def growth_study(num_fields, seeds, max_blocks, proposal_budget=2, initial_pool_
                         weight /= weight.sum()
                     continue
 
-                # Grow active program pool via proposer up to bounded candidate pool cap (2 + 4 = 6 programs)
                 max_active_pool = initial_pool_size + 2 * proposal_budget
                 if block in (2, 4, 6, 8) and len(active_pool) < max_active_pool:
                     step_budget = min(1, max_active_pool - len(active_pool))
-                    new_programs = _propose_programs(
-                        pairs, active_pool, records, step_budget, method, proposer_rng
+                    new_programs, prop_stats = _propose_programs(
+                        pairs,
+                        active_pool,
+                        records,
+                        step_budget,
+                        method,
+                        proposer_rng,
+                        max_candidate_checks=max_candidate_checks,
                     )
+                    cum_candidates_checked += int(prop_stats["candidates_checked"])
                     active_pool.update(new_programs)
 
                 pool_sorted = sorted(active_pool)
-                sub_scores = scores_for(weight, table[pool_sorted], "complete_program_evsi")
+                avail_models = []
+                for q_idx in pool_sorted:
+                    avail_models.extend([2 * q_idx, 2 * q_idx + 1])
+                sub_scores = scores_for(
+                    weight,
+                    table[pool_sorted],
+                    "complete_program_evsi",
+                    values_sub=values[:, avail_models],
+                )
                 best_local = np.flatnonzero(sub_scores >= sub_scores.max() - 1e-12)
                 query = pool_sorted[int(choice_rng.choice(best_local))]
 
@@ -500,24 +618,24 @@ def growth_study(num_fields, seeds, max_blocks, proposal_budget=2, initial_pool_
                     d_val = 0
                 else:
                     outcome = 4 * obs_bit + 2 + true_action
-                    # d = r(u_0) - r(u_1): +1 when action 0 passes only, -1 when action 1 passes only
                     d_val = 1 if true_action == 0 else -1
 
                 pred_prob = float(np.dot(weight, table[query, :, outcome]))
                 surprise = float(-math.log(max(pred_prob, 1e-12)))
 
-                # Exact posterior update on the executed query program's joint outcome
                 weight *= table[query, :, outcome]
                 assert weight.sum() > 0
                 weight /= weight.sum()
 
+                paid_fields = trace_subset | {q_i, q_j}
+                observed_bits_dict = {int(f_idx): int(anchor_bits[f_idx]) for f_idx in paid_fields}
                 records.append({
                     "query": query,
                     "obs_bit": obs_bit,
                     "d": d_val,
                     "surprise": surprise,
-                    "anchor_bits": anchor_bits,
-                    "trace_fields": trace_subset | {q_i, q_j},
+                    "observed_bits": observed_bits_dict,
+                    "trace_fields": paid_fields,
                 })
 
         raw[method] = {str(k): observed[k] for k in checkpoints}
@@ -526,6 +644,7 @@ def growth_study(num_fields, seeds, max_blocks, proposal_budget=2, initial_pool_
             samples = np.array(observed[n])
             hits = np.array(hit_rates[n])
             imps = np.array(best_improvements[n])
+            checks_arr = np.array(checked_counts[n])
             mean = float(samples.mean())
             se = float(samples.std(ddof=1) / math.sqrt(seeds)) if seeds > 1 else 0.0
             hit_mean = float(hits.mean())
@@ -535,15 +654,17 @@ def growth_study(num_fields, seeds, max_blocks, proposal_budget=2, initial_pool_
                 "total_two_read_programs": num_programs,
                 "model_hypotheses": 2 * num_programs,
                 "proposal_budget_per_block": proposal_budget,
+                "max_candidate_checks_per_call": max_candidate_checks,
                 "initial_pool_size": initial_pool_size,
                 "method": method,
                 "query_privilege": (
-                    "free_noiseless_action_direction_oracle"
-                    if method == "lsharp_free_oracle"
-                    else "paid_paired_intervention_4_actions"
+                    "free_noiseless_action_direction_oracle_on_observed_fields"
+                    if method == "noiseless_version_space_elimination"
+                    else "paid_paired_intervention_4_actions_plus_4_trace_reads"
                 ),
                 "blocks": n,
                 "physical_actions": 4 * n,
+                "mean_candidates_checked": float(checks_arr.mean()),
                 "training_full_task_successes": 0,
                 "mean_deployment_response_value": mean,
                 "seed_standard_error": se,
@@ -561,12 +682,192 @@ def growth_study(num_fields, seeds, max_blocks, proposal_budget=2, initial_pool_
         "seeds": seeds,
         "max_blocks": max_blocks,
         "proposal_budget_per_block": proposal_budget,
+        "max_candidate_checks_per_call": max_candidate_checks,
         "initial_pool_size": initial_pool_size,
+        "field_access_policy": "strictly_paid_observed_fields_only",
+        "policy_support_policy": "unified_active_pool_for_both_acquisition_and_deployment",
         "response_ceiling_with_known_model": 0.8,
         "untrained_value": 0.5,
         "summary": summary,
         "raw_seed_values": raw,
         "raw_hit_rates": hit_rates_raw,
+    }
+
+
+def unknown_k_delayed_goal_study(
+    num_fields=8,
+    seeds=256,
+    max_blocks=32,
+    proposal_budget=2,
+    initial_pool_size=2,
+    max_candidate_checks=6,
+):
+    """Unknown response law K and delayed two-stage terminal goal study (fixes E07).
+
+    Unlike the known-table diagnostic:
+      1. The learner is NOT given the likelihood table `table` or the value matrix `values`.
+         Instead, for each discovered program `q` and observed parity bit `z in {0, 1}`, it learns
+         an empirical Dirichlet-Multinomial response model K_hat(o | q, z) and empirical terminal
+         continuation utility V_hat(q, z, action) from observed transitions.
+      2. Each task has a two-stage delayed terminal outcome Y in {0, 1}: Stage 1 sets a latent
+         precondition via the parity of `(true_i, true_j)`, and Stage 2 reaches native terminal
+         success Y=1 only when the continuation matches the true parity under tail continuation pi_0.
+    """
+    pairs = list(itertools.combinations(range(num_fields), 2))
+    num_programs = len(pairs)
+    methods = (
+        "action_diff_growth",
+        "label_shuffled_growth",
+        "prediction_error_growth",
+        "uniform_prior_growth",
+    )
+    checkpoints = [n for n in (0, 2, 4, 8, 16, 32) if n <= max_blocks]
+    checkpoints = sorted(set(checkpoints + [max_blocks]))
+    summary = []
+
+    for method in methods:
+        terminal_success_rates = {n: [] for n in checkpoints}
+        hit_rates = {n: [] for n in checkpoints}
+
+        for seed in range(seeds):
+            world_rng = np.random.default_rng(400009 * num_fields + seed)
+            true_model = int(world_rng.integers(2 * num_programs))
+            true_program, true_polarity = divmod(true_model, 2)
+            true_i, true_j = pairs[true_program]
+
+            init_rng = np.random.default_rng(700001 * num_fields + seed)
+            non_true = [idx for idx in range(num_programs) if idx != true_program]
+            active_pool = set(
+                int(x) for x in init_rng.choice(non_true, size=min(initial_pool_size, len(non_true)), replace=False)
+            )
+
+            anchor_rng = np.random.default_rng(200003 * num_fields + seed)
+            outcome_rng = np.random.default_rng(300007 * num_fields + seed)
+            choice_rng = np.random.default_rng(500009 * num_fields + seed)
+            proposer_rng = np.random.default_rng(900011 * num_fields + seed)
+
+            # Unknown K_hat and V_hat: Laplace-smoothed empirical counts per (program, z_bit, action)
+            # succ_counts[q, z_bit, act] and total_counts[q, z_bit, act]
+            succ_counts = np.ones((num_programs, 2, 2), dtype=np.float64)
+            total_counts = np.full((num_programs, 2, 2), 2.0, dtype=np.float64)
+            records = []
+
+            for block in range(max_blocks + 1):
+                if block in terminal_success_rates:
+                    # Evaluate learned (K_hat, V_hat) on active_pool without any oracle value table
+                    q_hat = succ_counts / total_counts  # (Q, 2, 2)
+                    # Expected value of executing program q and choosing argmax_a Q_hat(q, z, a)
+                    prog_expected_v = {
+                        q_idx: 0.5 * (float(np.max(q_hat[q_idx, 0])) + float(np.max(q_hat[q_idx, 1])))
+                        for q_idx in sorted(active_pool)
+                    }
+                    max_v = max(prog_expected_v.values())
+                    best_progs = [q_idx for q_idx, v in prog_expected_v.items() if v >= max_v - 1e-12]
+                    # Compute exact delayed terminal success rate of the chosen policy on unseen instances
+                    eval_succ = 0.0
+                    for q_sel in best_progs:
+                        if q_sel == true_program:
+                            # Check whether learned conditional action for z=0 and z=1 matches true_polarity
+                            a0 = int(np.argmax(q_hat[q_sel, 0]))
+                            a1 = int(np.argmax(q_hat[q_sel, 1]))
+                            acc0 = 0.85 if a0 == (0 ^ true_polarity) else 0.15
+                            acc1 = 0.85 if a1 == (1 ^ true_polarity) else 0.15
+                            eval_succ += 0.5 * (acc0 + acc1)
+                        else:
+                            eval_succ += 0.5
+                    terminal_success_rates[block].append(eval_succ / len(best_progs))
+                    hit_rates[block].append(float(true_program in active_pool))
+                if block == max_blocks:
+                    break
+
+                max_active_pool = initial_pool_size + 2 * proposal_budget
+                if block in (2, 4, 6, 8, 12, 16) and len(active_pool) < max_active_pool:
+                    step_budget = min(1, max_active_pool - len(active_pool))
+                    new_programs, _ = _propose_programs(
+                        pairs,
+                        active_pool,
+                        records,
+                        step_budget,
+                        method,
+                        proposer_rng,
+                        max_candidate_checks=max_candidate_checks,
+                    )
+                    active_pool.update(new_programs)
+
+                # Select query program from active_pool using optimistic empirical value + exploration bonus
+                q_hat = succ_counts / total_counts
+                best_q = None
+                best_score = -1e9
+                for q_idx in sorted(active_pool):
+                    emp_val = 0.5 * (float(np.max(q_hat[q_idx, 0])) + float(np.max(q_hat[q_idx, 1])))
+                    uncert = 0.15 / math.sqrt(float(total_counts[q_idx].sum()))
+                    sc = emp_val + uncert + float(choice_rng.uniform(0.0, 1e-9))
+                    if sc > best_score:
+                        best_score = sc
+                        best_q = q_idx
+                query = int(best_q)
+
+                anchor_bits = tuple(int(b) for b in anchor_rng.integers(0, 2, size=num_fields))
+                trace_subset = set(
+                    int(x) for x in anchor_rng.choice(num_fields, size=min(4, num_fields), replace=False)
+                )
+                q_i, q_j = pairs[query]
+                obs_bit = anchor_bits[q_i] ^ anchor_bits[q_j]
+                true_action = anchor_bits[true_i] ^ anchor_bits[true_j] ^ true_polarity
+
+                # Coupled delayed terminal outcomes (Y_0, Y_1) under shared exogenous uniform U
+                u_rand = outcome_rng.random()
+                y_correct = 1 if u_rand < 0.85 else 0
+                y_wrong = 1 if u_rand < 0.15 else 0
+                y_0 = y_correct if true_action == 0 else y_wrong
+                y_1 = y_correct if true_action == 1 else y_wrong
+                d_real = int(y_0 - y_1)
+
+                # Predictive surprise under current empirical K_hat before update
+                p0 = float(q_hat[query, obs_bit, 0]) if y_0 == 1 else (1.0 - float(q_hat[query, obs_bit, 0]))
+                p1 = float(q_hat[query, obs_bit, 1]) if y_1 == 1 else (1.0 - float(q_hat[query, obs_bit, 1]))
+                surprise = float(-math.log(max(0.5 * (p0 + p1), 1e-6)))
+
+                # Update empirical response/terminal model K_hat
+                succ_counts[query, obs_bit, 0] += y_0
+                total_counts[query, obs_bit, 0] += 1.0
+                succ_counts[query, obs_bit, 1] += y_1
+                total_counts[query, obs_bit, 1] += 1.0
+
+                paid_fields = trace_subset | {q_i, q_j}
+                observed_bits_dict = {int(f_idx): int(anchor_bits[f_idx]) for f_idx in paid_fields}
+                records.append({
+                    "query": query,
+                    "obs_bit": obs_bit,
+                    "d": d_real,
+                    "surprise": surprise,
+                    "observed_bits": observed_bits_dict,
+                    "trace_fields": paid_fields,
+                })
+
+        for n in checkpoints:
+            arr = np.array(terminal_success_rates[n])
+            hits = np.array(hit_rates[n])
+            mean = float(arr.mean())
+            se = float(arr.std(ddof=1) / math.sqrt(seeds)) if seeds > 1 else 0.0
+            summary.append({
+                "fields": num_fields,
+                "method": method,
+                "blocks": n,
+                "mean_delayed_terminal_success": mean,
+                "seed_standard_error": se,
+                "normal_95_ci": [mean - 1.96 * se, mean + 1.96 * se],
+                "relevant_program_hit_rate": float(hits.mean()),
+            })
+
+    return {
+        "fields": num_fields,
+        "seeds": seeds,
+        "max_blocks": max_blocks,
+        "prior_scope": "unknown_response_law_K_and_delayed_terminal_goal_Y",
+        "ceiling_delayed_terminal_success": 0.85,
+        "untrained_delayed_terminal_success": 0.50,
+        "summary": summary,
     }
 
 
@@ -577,23 +878,26 @@ def main():
     parser.add_argument("--blocks", type=int, default=32)
     parser.add_argument("--output", type=Path, default=Path(__file__).with_name("results.json"))
     parser.add_argument("--run-growth", action="store_true",
-                        help="Run the bounded-budget action-contrast program growth and L# study.")
+                        help="Run the bounded-budget action-contrast program growth and unknown-K delayed-goal study.")
     parser.add_argument("--growth-fields", type=int, nargs="+", default=[8, 10, 12])
     parser.add_argument("--growth-blocks", type=int, default=32)
     parser.add_argument("--proposal-budget", type=int, default=2)
+    parser.add_argument("--max-candidate-checks", type=int, default=6)
     parser.add_argument("--growth-output", type=Path,
                         default=Path(__file__).with_name("growth_results.json"))
     args = parser.parse_args()
     result = {
         "scope": "Controlled finite-model research diagnostics; not native ALFWorld/WebShop/LOCA results and not neural DCC training.",
-        "date": "2026-11-09", "checks": check_likelihood_and_evsi(),
-        "known_model_parity": parity_diagnostics(), "learned_finite_model": [],
+        "date": "2026-11-10",
+        "checks": check_likelihood_and_evsi(),
+        "known_model_parity": parity_diagnostics(),
+        "learned_finite_model": [],
         "training_protocol": {
-            "full_task_reward": "Only short probes and local deployment are simulated. No full long-horizon task is implemented; its terminal labels are fixed to zero by protocol.",
-            "public_training_feedback": "Joint two-bit query and two local action responses from one shared snapshot.",
-            "prior_knowledge": "Finite parity model class, two-read candidate grammar, response noise law, and evaluation objective are given equally to every method.",
-            "cost": "Four environment actions per block: two reads and two snapshot branches. State creation/reset, model computation, and program enumeration are not included in this environment-action count.",
-            "novelty_scope": "The acquisition formula is classical EVSI. This experiment diagnoses the need for complete conditional programs; it does not establish a new program-discovery algorithm or native performance.",
+            "full_task_reward": "Known-table study simulates short probes and local deployment; unknown_k_delayed_goal_study simulates unknown response law K and delayed terminal outcome Y.",
+            "public_training_feedback": "Joint two-bit query and two action responses from one shared snapshot.",
+            "prior_knowledge": "Known-table study provides likelihood/value tables as a decision-theoretic reference; growth and unknown-K studies enforce paid field observation and candidate check budgets.",
+            "cost": "Four environment actions per block plus explicit candidate construction/check counts.",
+            "novelty_scope": "Classical EVSI serves as finite reference; novelty is tested in bounded-budget program discovery driven by observed action contrasts.",
         },
     }
     for fields in args.fields:
@@ -610,10 +914,11 @@ def main():
             **check_exhaustive_proposer_equivalence(),
         }
         growth_payload = {
-            "scope": "Bounded-budget program discovery study: action-contrast order-reversal witness growth vs label-shuffled vs prediction-error vs uniform prior and L# separating automata.",
-            "date": "2026-11-09",
+            "scope": "Bounded-budget program discovery study with strictly paid field access, candidate check budgets, unified active-pool policy support, and unknown-K delayed-goal evaluation.",
+            "date": "2026-11-10",
             "checks": growth_checks,
             "program_growth_runs": [],
+            "unknown_k_delayed_goal_runs": [],
         }
         for g_fields in args.growth_fields:
             g_run = growth_study(
@@ -621,8 +926,17 @@ def main():
                 args.seeds,
                 args.growth_blocks,
                 proposal_budget=args.proposal_budget,
+                max_candidate_checks=args.max_candidate_checks,
             )
             growth_payload["program_growth_runs"].append(g_run)
+            u_run = unknown_k_delayed_goal_study(
+                num_fields=g_fields,
+                seeds=min(args.seeds, 256),
+                max_blocks=args.growth_blocks,
+                proposal_budget=args.proposal_budget,
+                max_candidate_checks=args.max_candidate_checks,
+            )
+            growth_payload["unknown_k_delayed_goal_runs"].append(u_run)
             last = [r for r in g_run["summary"] if r["blocks"] == args.growth_blocks]
             print(json.dumps({"growth_fields": g_fields, "final": last}, ensure_ascii=False), flush=True)
         args.growth_output.parent.mkdir(parents=True, exist_ok=True)

@@ -69,8 +69,8 @@ if growth_path.exists():
         "label_shuffled_growth": ("Label-shuffled proposer + EVSI", "#dc2626", "--"),
         "prediction_error_growth": ("Prediction-error growth + EVSI", "#b45309", "-."),
         "uniform_prior_growth": ("Uniform prior growth + EVSI", "#64748b", ":"),
-        "lsharp_paid_intervention": ("L# separating (paid intervention)", "#7c3aed", "-"),
-        "lsharp_free_oracle": ("L# separating (free oracle ref)", "#0f766e", ":"),
+        "random_query_finite_bayes": ("Random-query finite Bayes (paid)", "#7c3aed", "-"),
+        "noiseless_version_space_elimination": ("Noiseless version-space oracle", "#0f766e", ":"),
     }
     runs = growth_data["program_growth_runs"]
     fig_g, axes_g = plt.subplots(2, len(runs), figsize=(14.2, 7.6), sharey="row")
@@ -116,7 +116,9 @@ if growth_path.exists():
         raw_hits = run["raw_hit_rates"]
         target = np.array(raw["action_diff_growth"][max_b])
         target_hits = np.array(raw_hits["action_diff_growth"][max_b])
-        for other in ("label_shuffled_growth", "prediction_error_growth", "uniform_prior_growth", "lsharp_paid_intervention"):
+        for other in ("label_shuffled_growth", "prediction_error_growth", "uniform_prior_growth", "random_query_finite_bayes"):
+            if other not in raw:
+                continue
             diff = target - np.array(raw[other][max_b])
             se = float(diff.std(ddof=1) / np.sqrt(len(diff)))
             h_diff = target_hits - np.array(raw_hits[other][max_b])

@@ -37,17 +37,20 @@ from .native_program import PROGRAM_VERSION, available_modes, build_frontier
 
 DCC_METHODS = frozenset({
     "prism_evolve", "dcc_label_shuffled", "dcc_no_program_growth",
-    "dcc_reset_parameters", "dcc_pre_first_success",
+    "dcc_reset_parameters", "dcc_pre_first_success", "dcc_k0_planner",
+    "dcc_fixed_d_shuffled",
 })
 TRAINING_METHODS = frozenset({
     "prism_evolve", "dcc_label_shuffled", "dcc_no_program_growth",
-    "dcc_reset_parameters", "dcc_pre_first_success",
+    "dcc_reset_parameters", "dcc_pre_first_success", "dcc_k0_planner",
+    "dcc_fixed_d_shuffled",
     "ablation_unweighted", "unstratified_2branch",
     "gigpo", "infopo", "arew", "t3", "step_dpo", "frozen_base",
 })
 PRISM_ACTOR_METHODS = frozenset({
     "prism_evolve", "dcc_label_shuffled", "dcc_no_program_growth",
-    "dcc_reset_parameters", "dcc_pre_first_success",
+    "dcc_reset_parameters", "dcc_pre_first_success", "dcc_k0_planner",
+    "dcc_fixed_d_shuffled",
     "ablation_unweighted", "unstratified_2branch", "frozen_base",
 })
 GROUP_SIZES = {"gigpo": 8, "infopo": 5, "arew": 3, "t3": 5, "frozen_base": 2}
@@ -656,10 +659,14 @@ def rollout(
         policy.dcc_eval_variant = (
             "no_program_growth" if method == "dcc_no_program_growth"
             else "reset_parameters" if method == "dcc_reset_parameters"
+            else "k0_planner" if method == "dcc_k0_planner"
             else "full"
         )
         if policy.dcc_mode_enabled and not prefix:
-            policy.reset_dcc_episode(benchmark_name)
+            init_task_instruction = str(
+                (context or {}).get("instruction", task_info.get("instruction", ""))
+            )
+            policy.reset_dcc_episode(benchmark_name, task_instruction=init_task_instruction)
     with _meters(policy, env, meter):
         if context is None:
             with _preserve_actor_rng():
@@ -722,9 +729,19 @@ def rollout(
                     started += snapshot_seconds
                     meter.started += snapshot_seconds
                 greedy = (not training) and bool(config.get("evaluation_greedy", False))
+                task_instruction = str(context.get("instruction", task_info.get("instruction", "")))
+                rem_step_ratio = max(0.0, 1.0 - (len(trajectory.events) / max(1, limits.max_env_steps)))
                 if gated_actor:
-                    generation = policy.act(before, schema, forced_mode=forced_mode,
-                                            greedy=greedy, role="actor")
+                    generation = policy.act(
+                        before,
+                        schema,
+                        forced_mode=forced_mode,
+                        greedy=greedy,
+                        role="actor",
+                        events=trajectory.events,
+                        task_instruction=task_instruction,
+                        remaining_budget_ratio=rem_step_ratio,
+                    )
                 else:
                     generation = policy.act_native(before, schema, greedy=greedy, role="actor")
                 first_action = False
@@ -771,8 +788,17 @@ def rollout(
                 if method in DCC_METHODS and hasattr(policy, "dcc_ensemble"):
                     from .native_dcc import PublicBenchmarkBinder
                     task_instruction = str(context.get("instruction", task_info.get("instruction", "")))
-                    pub_fields = PublicBenchmarkBinder.extract_public_fields(
-                        benchmark_name, task_instruction, trajectory.events, schema
+                    rem_step_ratio = max(0.0, 1.0 - (len(trajectory.events) / max(1, limits.max_env_steps)))
+                    obs_update = policy.observe_dcc_transition(
+                        benchmark_name,
+                        task_instruction,
+                        trajectory.events,
+                        schema,
+                        actual_action=generation.text.strip(),
+                        remaining_budget_ratio=rem_step_ratio,
+                        had_error=bool(facts.get("hard_bad") or event.metadata.get("public_error")),
+                        terminal_done=bool(step.done),
+                        terminal_success=bool(step.done and step.success),
                     )
                     pub_goal_val = PublicBenchmarkBinder.public_goal_readout(
                         benchmark_name,
@@ -781,27 +807,13 @@ def rollout(
                         schema,
                         terminal_success=bool(step.done and step.success),
                         within_budget=True,
+                        cost_used=float(len(trajectory.events)),
+                        cost_budget=float(max(1, limits.max_env_steps)),
                     )
-                    event.metadata["dcc_public_fields"] = pub_fields
+                    event.metadata["dcc_pre_public_fields"] = obs_update["pre_public_fields"]
+                    event.metadata["dcc_public_fields"] = obs_update["post_public_fields"]
+                    event.metadata["dcc_outcome_bin"] = obs_update["outcome_bin"]
                     event.metadata["dcc_public_goal_readout"] = pub_goal_val
-                    if getattr(policy, "dcc_active_belief", None) is not None:
-                        lib = policy.get_dcc_library(benchmark_name)
-                        active_progs = lib.active_programs(
-                            starter_only=(method == "dcc_no_program_growth")
-                        )
-                        if active_progs:
-                            with torch.no_grad():
-                                feat = policy.dcc_ensemble.encode_program_features(
-                                    active_progs[0], pub_fields, policy.device
-                                )
-                                outcome_cat = (
-                                    (4 if new_information else 0)
-                                    + (2 if task_progress else 0)
-                                    + (1 if not facts.get("hard_bad") else 0)
-                                )
-                                _, policy.dcc_active_belief = policy.dcc_ensemble.observable_operator_step(
-                                    policy.dcc_active_belief, feat, observed_outcome_bin=outcome_cat
-                                )
                 if progress_supervisor is not None:
                     next_progress = float(progress_supervisor.score(env))
                     event.metadata["training_progress"] = {
@@ -913,21 +925,110 @@ def _continuation_meter(
     return meter
 
 
+def _extract_public_transitions(
+    events: Sequence[NativeEvent],
+    *,
+    task_id: str,
+    episode_id: str,
+    cluster_id: str,
+    benchmark: str,
+    goal_text: str,
+    max_env_steps: int,
+    terminal_outcome: bool | None,
+    global_budget_limited: bool,
+    start_index: int = 0,
+) -> list[Any]:
+    """Convert physically executed NativeEvents into supervised PublicTransition records."""
+    from .native_dcc import PublicBenchmarkBinder, PublicTransition, _short_hash
+
+    transitions = []
+    total_events = len(events)
+    for idx in range(start_index, total_events):
+        ev = events[idx]
+        is_last = idx == (total_events - 1)
+        pre_fields = dict(
+            ev.metadata.get("dcc_pre_public_fields")
+            or PublicBenchmarkBinder.extract_public_fields(benchmark, goal_text, events[:idx], {})
+        )
+        post_fields = dict(
+            ev.metadata.get("dcc_public_fields")
+            or PublicBenchmarkBinder.extract_public_fields(benchmark, goal_text, events[: idx + 1], {})
+        )
+        role_bindings = PublicBenchmarkBinder.extract_role_bindings(benchmark, goal_text, events[: idx + 1], {})
+        act_text = ev.generation.text.strip()
+        act_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark, act_text, role_bindings)
+
+        if is_last and global_budget_limited:
+            term_cat = "live"
+            nat_out = None
+        elif bool(ev.metadata.get("native_done")):
+            term_cat = "native_terminal"
+            nat_out = bool(ev.metadata.get("native_terminal_success")) if terminal_outcome is None else bool(terminal_outcome)
+        elif is_last and (idx + 1) >= max_env_steps:
+            term_cat = "task_budget_terminal"
+            nat_out = False if terminal_outcome is None else bool(terminal_outcome)
+        else:
+            term_cat = "live"
+            nat_out = terminal_outcome if (is_last and terminal_outcome is not None and not global_budget_limited) else None
+
+        rem_ratio = max(0.0, 1.0 - (float(idx + 1) / float(max(1, max_env_steps))))
+        transitions.append(
+            PublicTransition(
+                transition_id=_short_hash((cluster_id, episode_id, idx, act_text)),
+                task_id=task_id,
+                episode_id=episode_id,
+                cluster_id=cluster_id,
+                benchmark=benchmark,
+                step_index=idx,
+                goal_text=goal_text,
+                pre_history_ref=f"{episode_id}:step:{idx}",
+                pre_public_fields=pre_fields,
+                action_text=act_text,
+                action_template=act_tmpl,
+                role_bindings=role_bindings,
+                raw_response=str(ev.observation)[:512],
+                typed_response=post_fields,
+                resource_delta={
+                    "env_steps": 1.0,
+                    "cost_ratio": 1.0 / float(max(1, max_env_steps)),
+                    "input_tokens": float(ev.generation.input_tokens),
+                    "output_tokens": float(ev.generation.output_tokens),
+                },
+                remaining_budget={"ratio": rem_ratio, "steps_left": float(max(0, max_env_steps - idx - 1))},
+                termination=term_cat,
+                native_outcome=nat_out,
+            )
+        )
+    return transitions
+
+
 def collect_branch_pair(
     policy: Any, env: Any, task: str | Mapping[str, Any], config: Mapping[str, Any],
     meter: BudgetMeter, *, seed: int, stratified: bool,
     progress_supervisor: Any | None = None,
     method: str = "prism_evolve",
 ) -> BranchPair:
-    """DCC v2 short-experiment measurement block xi = (h, q, z, u, v).
+    """DCC v2 unified measurement block xi = (h, q, z, u -> pi_0, v -> pi_0).
 
-    1. Reach anchor h and select observation program q in Xi maximizing closed-form EVSI/cost.
-    2. Execute bounded probe program q (<= 3 steps) from h to observe public field tuple z.
-    3. Save snapshot at the post-probe terminal state of q (when non-terminal).
-    4. Execute paired bounded continuations (u, v) of horizon k_cont = 4 from that same
-       post-probe snapshot using shared continuation seed to preserve sibling coupling.
+    1. Fix one bootstrap member m_ep for the episode and reach an anchor h along the main trajectory.
+    2. Select executable program q in Xi using m_ep's unified long-horizon value Q_{m_ep}^q (no EVSI gate)
+       and execute q's AST templates step-by-step via `step_program_interpreter`.
+    3. If q does not end the native task, save the complete post-q checkpoint:
+       (environment snapshot + public history + controller state + bindings + RNG state).
+       Never revert to the pre-q snapshot while retaining post-q readout z.
+    4. Run factual continuation u -> pi_0 to native/task-budget terminal as the main trajectory suffix,
+       then restore the exact post-q checkpoint and run counterfactual continuation v -> pi_0 to
+       native/task-budget terminal.
+    5. Store all unique physical transitions in one measurement cluster and record observed terminal
+       difference d_real separately from model-predicted difference d_model.
     """
-    from .native_dcc import MeasurementRecord, PublicBenchmarkBinder, _short_hash
+    from .native_dcc import (
+        TAIL_POLICY_VERSION,
+        MeasurementRecord,
+        ProgramExecutionState,
+        PublicBenchmarkBinder,
+        _short_hash,
+    )
 
     task_info = _task(task)
     limits = _limits(config)
@@ -935,159 +1036,411 @@ def collect_branch_pair(
     prefix_meter = BudgetMeter(limits, parent=meter)
     with _meters(policy, env, prefix_meter), _preserve_actor_rng():
         context = env.reset(str(task_info["task_id"]), seed=seed)
+
+    task_instruction = str(context.get("instruction", task_info.get("instruction", "")))
+    is_dcc = method in DCC_METHODS and hasattr(policy, "dcc_ensemble")
+    if is_dcc:
+        ep_member = int(seed) % int(policy.dcc_ensemble.ensemble_size)
+        policy.reset_dcc_episode(
+            benchmark_name, task_instruction=task_instruction, member_index=ep_member
+        )
+
     anchor_trajectory = rollout(policy, env, task_info, config, prefix_meter, seed=seed,
                                 method=method, training=True, context=context,
                                 stop_at_frontier=True, progress_supervisor=progress_supervisor)
     if anchor_trajectory.termination != "prefix_ready":
         reason = "global_budget_during_prefix" if anchor_trajectory.metadata.get("global_budget_limited") else None
+        if is_dcc:
+            cluster_id = _short_hash((task_info["task_id"], seed, "prefix_only"))
+            term_out = (
+                None if anchor_trajectory.metadata.get("global_budget_limited")
+                else bool(anchor_trajectory.success)
+            )
+            anchor_trajectory.metadata["dcc_cluster_transitions"] = [
+                t.to_dict()
+                for t in _extract_public_transitions(
+                    anchor_trajectory.events,
+                    task_id=str(task_info["task_id"]),
+                    episode_id=f"{task_info['task_id']}:prefix",
+                    cluster_id=cluster_id,
+                    benchmark=benchmark_name,
+                    goal_text=task_instruction,
+                    max_env_steps=limits.max_env_steps,
+                    terminal_outcome=term_out,
+                    global_budget_limited=bool(anchor_trajectory.metadata.get("global_budget_limited")),
+                )
+            ]
         return BranchPair(anchor_trajectory.events, anchor_trajectory, None,
                           len(anchor_trajectory.events), 0.0, stratified, reason)
 
-    task_instruction = str(context.get("instruction", task_info.get("instruction", "")))
     library = policy.get_dcc_library(benchmark_name)
     if getattr(policy, "dcc_active_belief", None) is None:
-        policy.reset_dcc_episode(benchmark_name)
+        policy.reset_dcc_episode(benchmark_name, task_instruction=task_instruction)
+
     anchor_fields = PublicBenchmarkBinder.extract_public_fields(
         benchmark_name, task_instruction, anchor_trajectory.events, env.action_schema
     )
-    candidate_progs = library.active_programs(
-        starter_only=(method == "dcc_no_program_growth")
+    anchor_bindings = PublicBenchmarkBinder.extract_role_bindings(
+        benchmark_name, task_instruction, anchor_trajectory.events, env.action_schema
     )
+    candidate_progs = library.active_programs(
+        starter_only=(method in ("dcc_no_program_growth", "dcc_k0_planner"))
+    )
+    use_init_params = method in ("dcc_reset_parameters", "dcc_k0_planner")
+
+    # Select executable probe program q using the episode's bootstrap member Q_{m_ep}^q
     selected_prog = candidate_progs[0]
-    best_evsi_score = -1.0
+    best_q_score = -1e9
     for prog in candidate_progs:
-        evsi_info = policy.dcc_ensemble.score_program_evsi(
-            prog, anchor_fields, policy.dcc_active_belief,
-            use_Temporary_Initial_Params=(method == "dcc_reset_parameters"),
+        temp_state = ProgramExecutionState(program=prog, bound_variables=dict(anchor_bindings))
+        first_act, _ = PublicBenchmarkBinder.step_program_interpreter(
+            temp_state, env.action_schema, task_instruction, anchor_trajectory.events
         )
-        if evsi_info["evsi_per_cost"] > best_evsi_score:
-            best_evsi_score = evsi_info["evsi_per_cost"]
+        cand_act = first_act or (prog.step_templates[0] if prog.step_templates else "look")
+        q_info = policy.dcc_ensemble.evaluate_candidate_q(
+            goal_text=task_instruction,
+            public_fields=anchor_fields,
+            belief=policy.dcc_active_belief,
+            candidate_action=cand_act,
+            program=prog,
+            remaining_budget_ratio=max(0.0, 1.0 - len(anchor_trajectory.events) / max(1, limits.max_env_steps)),
+            member_index=getattr(policy, "dcc_active_member_index", None),
+            use_initial_params=use_init_params,
+        )
+        if q_info["q_selected"] > best_q_score:
+            best_q_score = q_info["q_selected"]
             selected_prog = prog
 
-    # Execute bounded probe program q (1..3 steps) before taking the post-probe snapshot
+    # Execute bounded probe program q (1..3 steps) by stepping the program interpreter (fixes I06)
     max_probe_steps = int(config.get("dcc_max_probe_steps", 3))
     probe_steps = min(max_probe_steps, max(1, len(selected_prog.step_templates)))
-    with _meters(policy, env, meter):
-        pre_probe_snapshot = env.save_snapshot()
-    anchor_root_msgs = _decision_messages(
-        anchor_trajectory.metadata["final_messages"], anchor_trajectory, limits, prefix_meter
+    probe_events = list(anchor_trajectory.events)
+    probe_messages = [dict(item) for item in anchor_trajectory.metadata["final_messages"]]
+    probe_started = monotonic_seconds()
+    probe_elapsed = float(anchor_trajectory.elapsed_seconds)
+    probe_prog_state = ProgramExecutionState(
+        program=selected_prog, bound_variables=dict(anchor_bindings)
     )
-    anchor_modes = available_action_modes(env.schema_for_history(anchor_root_msgs))
-    forced_probe = "I" if (stratified and "I" in anchor_modes) else None
-    probe_target_len = len(anchor_trajectory.events) + probe_steps
-    probe_trajectory = rollout(
-        policy, env, task_info, config, prefix_meter, seed=seed,
-        method=method, training=True, context=context,
-        prefix=anchor_trajectory.events,
-        prefix_messages=anchor_trajectory.metadata["final_messages"],
-        prefix_seconds=anchor_trajectory.elapsed_seconds,
-        forced_mode=forced_probe,
-        stop_after=probe_target_len,
-        stop_after_termination="prefix_ready",
-        progress_supervisor=progress_supervisor,
+    probe_done = False
+    probe_success = False
+    probe_global_limited = False
+
+    with _meters(policy, env, prefix_meter):
+        for _ in range(probe_steps):
+            if len(probe_events) >= limits.max_env_steps:
+                break
+            try:
+                prefix_meter.ensure_env_steps(1)
+                before_msgs = _decision_messages(probe_messages, anchor_trajectory, limits, prefix_meter)
+                schema = env.schema_for_history(before_msgs)
+                modes = available_action_modes(schema)
+                if not modes:
+                    break
+                rem_ratio = max(0.0, 1.0 - (len(probe_events) / max(1, limits.max_env_steps)))
+                generation = policy.act(
+                    before_msgs,
+                    schema,
+                    forced_mode=None,
+                    greedy=False,
+                    role="actor",
+                    events=probe_events,
+                    task_instruction=task_instruction,
+                    remaining_budget_ratio=rem_ratio,
+                    forced_program=probe_prog_state,
+                )
+                if getattr(policy, "dcc_active_program_state", None) is not None:
+                    probe_prog_state = policy.dcc_active_program_state
+                env_t0 = monotonic_seconds()
+                step = env.step(generation.action)
+                ev = NativeEvent(
+                    messages_before=before_msgs,
+                    generation=generation,
+                    observation=step.observation,
+                    environment_seconds=monotonic_seconds() - env_t0,
+                    metadata={
+                        "public_error": _public_error(step.metadata, step.observation),
+                        "native_step": dict(step.metadata),
+                        "native_done": bool(step.done),
+                        "native_terminal_success": bool(step.done and step.success),
+                        "dcc_probe_step": True,
+                        "dcc_program_id": selected_prog.program_id,
+                    },
+                    receipts=deepcopy(step.metadata.get("receipts", [])),
+                )
+                probe_events.append(ev)
+                append_interaction(probe_messages, generation, step)
+                facts = step.metadata.get("native_transition", {})
+                obs_upd = policy.observe_dcc_transition(
+                    benchmark_name,
+                    task_instruction,
+                    probe_events,
+                    schema,
+                    actual_action=generation.text.strip(),
+                    remaining_budget_ratio=rem_ratio,
+                    had_error=bool(facts.get("hard_bad") or ev.metadata.get("public_error")),
+                    terminal_done=bool(step.done),
+                    terminal_success=bool(step.done and step.success),
+                )
+                ev.metadata["dcc_pre_public_fields"] = obs_upd["pre_public_fields"]
+                ev.metadata["dcc_public_fields"] = obs_upd["post_public_fields"]
+                ev.metadata["dcc_outcome_bin"] = obs_upd["outcome_bin"]
+                if step.done:
+                    probe_done = True
+                    probe_success = bool(step.success)
+                    break
+            except BudgetExhausted as error:
+                probe_global_limited = _global_budget_limited(prefix_meter, str(error))
+                break
+
+    probe_elapsed = max(0.0, float(anchor_trajectory.elapsed_seconds) + (monotonic_seconds() - probe_started))
+    probe_trajectory = NativeTrajectory(
+        str(task_info["task_id"]),
+        str(context.get("scenario_id", task_info["scenario_id"])),
+        events=probe_events,
+        elapsed_seconds=probe_elapsed,
+        budget_seconds=limits.max_wall_seconds,
+        success=probe_success and probe_elapsed <= limits.max_wall_seconds,
+        termination=(
+            "budget:global" if probe_global_limited
+            else ("native_terminal" if probe_Success else "native_failure") if probe_done
+            else "prefix_ready"
+        ) if False else (
+            "budget:global" if probe_global_limited
+            else ("native_terminal" if probe_success else "native_failure") if probe_done
+            else "prefix_ready"
+        ),
+        metadata={
+            "environment_seed": seed,
+            "actor_contract": actor_contract(method, classic_text=bool(env.action_schema.get("classic_text"))),
+            "final_messages": probe_messages,
+            "resource_usage": prefix_meter.snapshot(),
+            "global_budget_limited": probe_global_limited,
+        },
     )
-    if probe_trajectory.metadata.get("global_budget_limited"):
-        return BranchPair(probe_trajectory.events, probe_trajectory, None,
-                          len(probe_trajectory.events), 0.0, stratified, "global_budget_during_prefix")
+
+    cluster_id = _short_hash((task_info["task_id"], seed, len(probe_events), selected_prog.program_id))
+    if probe_global_limited:
+        probe_trajectory.metadata["dcc_cluster_transitions"] = [
+            t.to_dict()
+            for t in _extract_public_transitions(
+                probe_events,
+                task_id=str(task_info["task_id"]),
+                episode_id=f"{task_info['task_id']}:probe",
+                cluster_id=cluster_id,
+                benchmark=benchmark_name,
+                goal_text=task_instruction,
+                max_env_steps=limits.max_env_steps,
+                terminal_outcome=None,
+                global_budget_limited=True,
+            )
+        ]
+        return BranchPair(probe_events, probe_trajectory, None,
+                          len(probe_events), 0.0, stratified, "global_budget_during_prefix")
 
     public_readout_z = PublicBenchmarkBinder.extract_public_fields(
-        benchmark_name, task_instruction, probe_trajectory.events, env.action_schema
+        benchmark_name, task_instruction, probe_events, env.action_schema
+    )
+    post_q_bindings = PublicBenchmarkBinder.extract_role_bindings(
+        benchmark_name, task_instruction, probe_events, env.action_schema
     )
     z_parity_bit = int(_short_hash(public_readout_z), 16) & 1
 
-    post_probe_modes: tuple[str, ...] = ()
-    if probe_trajectory.termination == "prefix_ready":
-        probe_root_msgs = _decision_messages(
-            probe_trajectory.metadata["final_messages"], probe_trajectory, limits, prefix_meter
-        )
-        post_probe_modes = available_action_modes(env.schema_for_history(probe_root_msgs))
+    # If q already ended the native task, retain the real trajectory for response learning without reverting pre-q (fixes I07)
+    if probe_done or len(probe_events) >= limits.max_env_steps:
+        compute_training_return(probe_trajectory, 0.0)
+        probe_trajectory.metadata["dcc_cluster_transitions"] = [
+            t.to_dict()
+            for t in _extract_public_transitions(
+                probe_events,
+                task_id=str(task_info["task_id"]),
+                episode_id=f"{task_info['task_id']}:probe_terminal",
+                cluster_id=cluster_id,
+                benchmark=benchmark_name,
+                goal_text=task_instruction,
+                max_env_steps=limits.max_env_steps,
+                terminal_outcome=bool(probe_trajectory.success),
+                global_budget_limited=False,
+            )
+        ]
+        return BranchPair(probe_events, probe_trajectory, None, len(probe_events), 1.0, stratified, None)
 
-    if probe_trajectory.termination == "prefix_ready" and set(post_probe_modes) == {"I", "E"}:
-        prefix_trajectory = probe_trajectory
-        with _meters(policy, env, meter):
-            snapshot = env.save_snapshot()
-    else:
-        # Post-probe state is terminal or on an inspect-only subpage; restore frontier
-        # snapshot while retaining public_readout_z extracted from the probe trajectory.
-        with _meters(policy, env, meter):
-            _restore_environment(env, pre_probe_snapshot)
-        prefix_trajectory = anchor_trajectory
-        snapshot = pre_probe_snapshot
+    # Save complete post-q checkpoint: environment + public history + controller state + bindings + RNG state (fixes I07, I08)
+    with _meters(policy, env, meter):
+        post_q_env_snapshot = env.save_snapshot()
+    post_q_controller_state = policy.snapshot_dcc_controller_state() if hasattr(policy, "snapshot_dcc_controller_state") else {}
+    post_q_checkpoint_id = _short_hash((cluster_id, "post_q", len(probe_events)))
 
-    prefix = prefix_trajectory.events
+    prefix = list(probe_events)
     split_step = len(prefix)
-    messages = prefix_trajectory.metadata["final_messages"]
-    root_messages = _decision_messages(messages, prefix_trajectory, limits, prefix_meter)
+    messages = [dict(item) for item in probe_messages]
+    root_messages = _decision_messages(messages, probe_trajectory, limits, prefix_meter)
     branch_modes = available_action_modes(env.schema_for_history(root_messages))
     forced_first = "I" if (stratified and "I" in branch_modes) else None
     forced_second = "E" if (stratified and "E" in branch_modes) else None
-    prefix_usage = prefix_trajectory.metadata["resource_usage"]
-    continuation_steps = int(config.get("dcc_continuation_steps", 4))
-    cont_stop_after = split_step + continuation_steps
+    prefix_usage = probe_trajectory.metadata["resource_usage"]
 
-    # Sibling continuations (u, v) share the same snapshot and exogenous RNG seed
+    # Determine continuation horizon: run to native/task-budget terminal (or configured horizon when explicitly overridden)
+    cont_horizon_cfg = config.get("dcc_full_tail_rollout", True)
+    continuation_steps = (
+        limits.max_env_steps
+        if cont_horizon_cfg
+        else int(config.get("dcc_continuation_steps", limits.max_env_steps))
+    )
+    cont_stop_after = min(limits.max_env_steps, split_step + continuation_steps)
+
     shared_cont_seed = (2 * seed + 1) % (2**63 - 1)
     second_cont_seed = shared_cont_seed if forced_first != forced_second else (2 * seed + 2) % (2**63 - 1)
+
+    # Factual branch u -> pi_0 (retained as the main trajectory suffix)
     first_meter = _continuation_meter(limits, meter, prefix_usage)
     with _preserve_actor_rng():
         torch.manual_seed(shared_cont_seed)
         first = rollout(
             policy, env, task_info, config, first_meter, seed=seed, method=method, training=True,
             context=context, prefix=prefix, prefix_messages=messages,
-            prefix_seconds=prefix_trajectory.elapsed_seconds,
+            prefix_seconds=probe_trajectory.elapsed_seconds,
             forced_mode=forced_first,
             stop_after=cont_stop_after,
-            stop_after_termination="dcc_short_horizon",
+            stop_after_termination="budget:episode_environment_steps",
             first_decision_messages=root_messages,
             progress_supervisor=progress_supervisor,
         )
     first.metadata["continuation_seed"] = shared_cont_seed
+
+    # Restore complete post-q checkpoint before counterfactual branch v -> pi_0 (fixes I08)
+    if hasattr(policy, "restore_dcc_controller_state"):
+        policy.restore_dcc_controller_state(post_q_controller_state)
+
     if first.metadata.get("global_budget_limited"):
+        first.metadata["dcc_cluster_transitions"] = [
+            t.to_dict()
+            for t in _extract_public_transitions(
+                first.events,
+                task_id=str(task_info["task_id"]),
+                episode_id=f"{task_info['task_id']}:u_partial",
+                cluster_id=cluster_id,
+                benchmark=benchmark_name,
+                goal_text=task_instruction,
+                max_env_steps=limits.max_env_steps,
+                terminal_outcome=None,
+                global_budget_limited=True,
+            )
+        ]
         return BranchPair(prefix, first, None, split_step, 0.0, stratified, "global_budget_during_first_branch")
+
     try:
         with _meters(policy, env, meter):
-            _restore_environment(env, snapshot)
+            _restore_environment(env, post_q_env_snapshot)
     except BudgetExhausted as error:
         return BranchPair(prefix, first, None, split_step, 0.0, stratified, f"restore_budget:{error}")
+
     second_meter = _continuation_meter(limits, meter, prefix_usage)
     with _preserve_actor_rng():
         torch.manual_seed(second_cont_seed)
         second = rollout(
             policy, env, task_info, config, second_meter, seed=seed, method=method, training=True,
             context=context, prefix=prefix, prefix_messages=messages,
-            prefix_seconds=prefix_trajectory.elapsed_seconds,
+            prefix_seconds=probe_trajectory.elapsed_seconds,
             forced_mode=forced_second,
             stop_after=cont_stop_after,
-            stop_after_termination="dcc_short_horizon",
+            stop_after_termination="budget:episode_environment_steps",
             first_decision_messages=root_messages,
             progress_supervisor=progress_supervisor,
         )
     second.metadata["continuation_seed"] = second_cont_seed
+
+    # Collect unique physical transitions across shared prefix + factual suffix + counterfactual suffix
+    u_global_lim = bool(first.metadata.get("global_budget_limited"))
+    v_global_lim = bool(second.metadata.get("global_budget_limited"))
+    u_nat_outcome: bool | None = None if u_global_lim else bool(first.success)
+    v_nat_outcome: bool | None = None if v_global_lim else bool(second.success)
+
+    cluster_transitions = _extract_public_transitions(
+        first.events,
+        task_id=str(task_info["task_id"]),
+        episode_id=f"{task_info['task_id']}:factual_u",
+        cluster_id=cluster_id,
+        benchmark=benchmark_name,
+        goal_text=task_instruction,
+        max_env_steps=limits.max_env_steps,
+        terminal_outcome=u_nat_outcome,
+        global_budget_limited=u_global_lim,
+        start_index=0,
+    )
+    if len(second.events) > split_step:
+        cluster_transitions.extend(
+            _extract_public_transitions(
+                second.events,
+                task_id=str(task_info["task_id"]),
+                episode_id=f"{task_info['task_id']}:counterfactual_v",
+                cluster_id=cluster_id,
+                benchmark=benchmark_name,
+                goal_text=task_instruction,
+                max_env_steps=limits.max_env_steps,
+                terminal_outcome=v_nat_outcome,
+                global_budget_limited=v_global_lim,
+                start_index=split_step,
+            )
+        )
+    first.metadata["dcc_cluster_transitions"] = [t.to_dict() for t in cluster_transitions]
+
     if (len(first.events) <= split_step or len(second.events) <= split_step
             or second.metadata.get("global_budget_limited")):
         return BranchPair(prefix, first, second, split_step, 0.0, stratified, "incomplete_branch_pair")
-    probability = float(first.events[split_step].generation.metadata["gate_probability"])
-    if not math.isfinite(probability) or not 0 <= probability <= 1:
-        raise FloatingPointError("The recorded gate probability is invalid.")
 
-    u_score = float(first.metadata.get("dcc_public_goal_readout", first.utility))
-    v_score = float(second.metadata.get("dcc_public_goal_readout", second.utility))
-    action_diff_d = u_score - v_score
-    u_pass = u_score >= 0.35 or bool(first.success)
-    v_pass = v_score >= 0.35 or bool(second.success)
-    paired_cat = (
-        0 if (not u_pass and not v_pass)
-        else 1 if (u_pass and v_pass)
-        else 2 if (u_pass and not v_pass)
-        else 3
+    probability = float(first.events[split_step].generation.metadata.get("gate_probability", 0.5))
+    if not math.isfinite(probability) or not 0 <= probability <= 1:
+        probability = 0.5
+
+    # Sole utility objective U_B(Y, C): never substitute hand-crafted progress integral for terminal utility
+    u_score = float(first.utility)
+    v_score = float(second.utility)
+    d_real: float | None = (
+        float(u_score - v_score)
+        if (u_nat_outcome is not None and v_nat_outcome is not None)
+        else None
     )
-    outcome_bin = 4 * z_parity_bit + paired_cat
+    action_diff_d = float(d_real if d_real is not None else 0.0)
+
+    # Separate model-estimated continuation difference d_model (never written into d_real)
+    u_first_act = first.events[split_step].generation.text.strip()
+    v_first_act = second.events[split_step].generation.text.strip()
+    post_q_belief = post_q_controller_state.get("belief", policy.dcc_active_belief)
+    q_u_est = policy.dcc_ensemble.evaluate_candidate_q(
+        goal_text=task_instruction,
+        public_fields=public_readout_z,
+        belief=post_q_belief,
+        candidate_action=u_first_act,
+        program=selected_prog,
+    )["q_mean"]
+    q_v_est = policy.dcc_ensemble.evaluate_candidate_q(
+        goal_text=task_instruction,
+        public_fields=public_readout_z,
+        belief=post_q_belief,
+        candidate_action=v_first_act,
+        program=selected_prog,
+    )["q_mean"]
+    d_model = float(q_u_est - q_v_est)
+
+    outcome_bin = PublicBenchmarkBinder.encode_response_outcome_bin(
+        anchor_fields,
+        public_readout_z,
+        had_error=bool(prefix[-1].metadata.get("public_error")) if prefix else False,
+        terminal_done=bool(first.success or second.success),
+        terminal_success=bool(first.success or second.success),
+    )
     rebound_templates = tuple(
-        PublicBenchmarkBinder.abstract_action_to_template(benchmark_name, ev.generation.text)
+        PublicBenchmarkBinder.abstract_action_to_template(
+            benchmark_name, ev.generation.text, post_q_bindings
+        )
         for ev in prefix[-max_probe_steps:]
     ) or selected_prog.step_templates
-    rebound_fields = tuple(sorted(public_readout_z.keys()))[:4] or selected_prog.readout_fields
+    rebound_fields = tuple(
+        sorted(k for k, v in public_readout_z.items() if v != "unknown")
+    )[:4] or selected_prog.readout_fields
 
+    u_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark_name, u_first_act, post_q_bindings)
+    v_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark_name, v_first_act, post_q_bindings)
     record = MeasurementRecord(
         record_id=_short_hash((task_info["task_id"], seed, split_step, selected_prog.program_id)),
         benchmark=benchmark_name,
@@ -1099,7 +1452,7 @@ def collect_branch_pair(
         readout_fields=selected_prog.readout_fields,
         public_readout_z=public_readout_z,
         z_parity_bit=z_parity_bit,
-        continuation_pair_key="I_vs_E_post_probe",
+        continuation_pair_key=f"{u_tmpl}__vs__{v_tmpl}",
         u_score=u_score,
         v_score=v_score,
         u_cost=len(first.events) - split_step,
@@ -1111,9 +1464,23 @@ def collect_branch_pair(
         surprise=0.0,
         rebound_trace_templates=rebound_templates,
         rebound_trace_fields=rebound_fields,
+        post_q_checkpoint_id=post_q_checkpoint_id,
+        u_policy_id=u_tmpl,
+        v_policy_id=v_tmpl,
+        tail_policy_version=TAIL_POLICY_VERSION,
+        factual_tail_ref=f"{task_info['task_id']}:factual_u:{split_step}:{len(first.events)}",
+        counterfactual_tail_ref=f"{task_info['task_id']}:counterfactual_v:{split_step}:{len(second.events)}",
+        u_native_outcome=u_nat_outcome,
+        v_native_outcome=v_nat_outcome,
+        d_real=d_real,
+        d_model=d_model,
+        d_source="observed_native_terminal" if d_real is not None else "missing_unobserved",
+        role_bindings=post_q_bindings,
     )
     first.metadata["dcc_measurement_record"] = record.to_dict()
     first.metadata["dcc_selected_program"] = selected_prog.to_dict()
+    first.metadata["dcc_anchor_fields"] = dict(anchor_fields)
+    first.metadata["dcc_post_q_checkpoint_id"] = post_q_checkpoint_id
     return BranchPair(prefix, first, second, split_step, probability, stratified)
 
 
@@ -1189,11 +1556,39 @@ def _update_dcc_block(
     config: Mapping[str, Any],
     *,
     allow_program_growth: bool = True,
+    fixed_d_proposer: Any | None = None,
+    fixed_d_library: Any | None = None,
 ) -> dict[str, Any]:
-    """Update shared controlled response ensemble K_phi and grow program library Xi (DCC v2)."""
-    from .native_dcc import BoundedObservationProgram, MeasurementRecord
+    """Update shared controlled response ensemble K_phi on real physical transitions and grow library Xi."""
+    from .native_dcc import ExecutableProgram, MeasurementRecord, PublicTransition
 
-    if sample.partial_reason is not None or sample.second is None:
+    raw_transitions = sample.first.metadata.get("dcc_cluster_transitions", ())
+    transitions = [
+        PublicTransition(
+            transition_id=str(t["transition_id"]),
+            task_id=str(t["task_id"]),
+            episode_id=str(t["episode_id"]),
+            cluster_id=str(t["cluster_id"]),
+            benchmark=str(t["benchmark"]),
+            step_index=int(t["step_index"]),
+            goal_text=str(t["goal_text"]),
+            pre_history_ref=str(t["pre_history_ref"]),
+            pre_public_fields=dict(t["pre_public_fields"]),
+            action_text=str(t["action_text"]),
+            action_template=str(t["action_template"]),
+            role_bindings=dict(t["role_bindings"]),
+            raw_response=str(t["raw_response"]),
+            typed_response=dict(t["typed_response"]),
+            resource_delta={str(k): float(v) for k, v in dict(t["resource_delta"]).items()},
+            remaining_budget={str(k): float(v) for k, v in dict(t["remaining_budget"]).items()},
+            termination=str(t["termination"]),
+            native_outcome=t.get("native_outcome"),
+        )
+        for t in raw_transitions
+        if isinstance(t, Mapping)
+    ]
+
+    if not transitions and (sample.partial_reason is not None or sample.second is None):
         return {
             "updated": False,
             "learning_outcome": "incomplete_pair_budget",
@@ -1202,9 +1597,52 @@ def _update_dcc_block(
             "parameters_changed": False,
             "parameter_delta_l2": 0.0,
         }
+
+    # Charge exact forward tokens proportional to unique physical transitions (never a fixed 32-token stub)
+    forward_tokens_to_charge = max(
+        1,
+        sum(
+            max(1, int(len(tr.action_text.split()) + len(tr.raw_response.split())))
+            for tr in transitions
+        ) if transitions else 16,
+    )
+    meter.ensure_forward(forward_tokens_to_charge, role="dcc_response_ensemble_update")
+    started = monotonic_seconds()
+    optimizer.zero_grad(set_to_none=True)
+
+    # Cluster-level Poisson(1) / Dirichlet bootstrap weights over the measurement cluster
+    M = int(policy.dcc_ensemble.ensemble_size)
+    cluster_seed = int(hash(transitions[0].cluster_id) & 0x7FFFFFFF) if transitions else 42
+    gen_rng = torch.Generator(device="cpu").manual_seed(cluster_seed)
+    poisson_counts = torch.poisson(torch.ones(M, dtype=torch.float32), generator=gen_rng)
+    if float(poisson_counts.sum().item()) <= 0.0:
+        poisson_counts = torch.ones(M, dtype=torch.float32)
+    bootstrap_w = poisson_counts.to(policy.device)
+
     rec_dict = sample.first.metadata.get("dcc_measurement_record")
     prog_dict = sample.first.metadata.get("dcc_selected_program")
-    if not isinstance(rec_dict, Mapping) or not isinstance(prog_dict, Mapping):
+    anchor_fields = dict(sample.first.metadata.get("dcc_anchor_fields", {}))
+
+    if transitions:
+        loss_tensor, next_belief, trans_stats = policy.dcc_ensemble.transition_negative_log_likelihood(
+            transitions, bootstrap_weights=bootstrap_w
+        )
+    elif isinstance(rec_dict, Mapping) and isinstance(prog_dict, Mapping):
+        program_tmp = ExecutableProgram.from_dict(prog_dict)
+        belief_init = policy.dcc_ensemble.reset_intra_task_belief(device=policy.device)
+        loss_tensor, next_belief = policy.dcc_ensemble.block_negative_log_likelihood(
+            program_tmp,
+            anchor_fields or dict(rec_dict.get("public_readout_z", {})),
+            belief_init,
+            int(rec_dict.get("outcome_bin", 0)),
+            float(rec_dict.get("u_score", 0.0)),
+            float(rec_dict.get("v_score", 0.0)),
+            u_native_outcome=rec_dict.get("u_native_outcome"),
+            v_native_outcome=rec_dict.get("v_native_outcome"),
+            bootstrap_weights=bootstrap_w,
+        )
+        trans_stats = {"num_transitions": 1.0, "observed_terminal_outcomes": 0.0}
+    else:
         return {
             "updated": False,
             "learning_outcome": "missing_dcc_measurement",
@@ -1214,7 +1652,43 @@ def _update_dcc_block(
             "parameter_delta_l2": 0.0,
         }
 
-    program = BoundedObservationProgram.from_dict(prog_dict)
+    policy.dcc_active_belief = next_belief
+    loss_val = float(loss_tensor.detach().item())
+
+    parameters = [p for p in policy.dcc_ensemble.parameters() if p.requires_grad]
+    before = [p.detach().clone() for p in parameters]
+    loss_tensor.backward()
+    clip = float(config.get("grad_clip_norm", 1.0))
+    grad_norm = float(
+        torch.nn.utils.clip_grad_norm_(
+            parameters, clip if clip > 0 else float("inf"), error_if_nonfinite=True
+        ).detach().item()
+    )
+    optimizer.step()
+    with torch.no_grad():
+        param_delta = math.sqrt(
+            sum(float((p.detach() - prev).float().square().sum().item()) for p, prev in zip(parameters, before))
+        )
+    del before
+    meter.record_update(monotonic_seconds() - started)
+    optimizer.zero_grad(set_to_none=True)
+
+    if not isinstance(rec_dict, Mapping) or not isinstance(prog_dict, Mapping):
+        return {
+            "updated": param_delta > 0,
+            "learning_outcome": "parameters_updated_partial_trajectory" if param_delta > 0 else "no_parameter_change",
+            "loss": loss_val,
+            "score_terms": len(transitions),
+            "scoring_forward_tokens": forward_tokens_to_charge,
+            "gradient_l2_norm_before_clip": grad_norm,
+            "nonzero_gradient": grad_norm > 0,
+            "parameters_changed": param_delta > 0,
+            "parameter_delta_l2": param_delta,
+            "optimizer_step": meter.gradient_steps,
+            "dcc_transitions_updated": len(transitions),
+        }
+
+    program = ExecutableProgram.from_dict(prog_dict)
     record = MeasurementRecord(
         record_id=str(rec_dict["record_id"]),
         benchmark=str(rec_dict["benchmark"]),
@@ -1235,70 +1709,65 @@ def _update_dcc_block(
         v_done=bool(rec_dict["v_done"]),
         action_diff_d=float(rec_dict["action_diff_d"]),
         outcome_bin=int(rec_dict["outcome_bin"]),
-        surprise=0.0,
+        surprise=max(0.0, loss_val),
         rebound_trace_templates=tuple(rec_dict["rebound_trace_templates"]),
         rebound_trace_fields=tuple(rec_dict["rebound_trace_fields"]),
+        post_q_checkpoint_id=str(rec_dict.get("post_q_checkpoint_id", "")),
+        u_policy_id=str(rec_dict.get("u_policy_id", "u_continuation")),
+        v_policy_id=str(rec_dict.get("v_policy_id", "v_continuation")),
+        tail_policy_version=str(rec_dict.get("tail_policy_version", "frozen-prior-tail-v1")),
+        factual_tail_ref=str(rec_dict.get("factual_tail_ref", "")),
+        counterfactual_tail_ref=str(rec_dict.get("counterfactual_tail_ref", "")),
+        u_native_outcome=rec_dict.get("u_native_outcome"),
+        v_native_outcome=rec_dict.get("v_native_outcome"),
+        d_real=rec_dict.get("d_real"),
+        d_model=rec_dict.get("d_model"),
+        d_source=str(rec_dict.get("d_source", "observed_native_terminal")),
+        role_bindings=dict(rec_dict.get("role_bindings", {})),
     )
-
-    meter.ensure_forward(32, role="dcc_response_ensemble_update")
-    started = monotonic_seconds()
-    optimizer.zero_grad(set_to_none=True)
-    belief = (
-        policy.dcc_active_belief.detach()
-        if getattr(policy, "dcc_active_belief", None) is not None
-        else policy.dcc_ensemble.reset_intra_task_belief(device=policy.device)
-    )
-    loss_tensor, next_belief = policy.dcc_ensemble.block_negative_log_likelihood(
-        program,
-        record.public_readout_z,
-        belief,
-        record.outcome_bin,
-        record.u_score,
-        record.v_score,
-    )
-    policy.dcc_active_belief = next_belief
-    loss_val = float(loss_tensor.detach().item())
-    record.surprise = max(0.0, loss_val)
-
-    parameters = [p for p in policy.dcc_ensemble.parameters() if p.requires_grad]
-    before = [p.detach().clone() for p in parameters]
-    loss_tensor.backward()
-    clip = float(config.get("grad_clip_norm", 1.0))
-    grad_norm = float(
-        torch.nn.utils.clip_grad_norm_(
-            parameters, clip if clip > 0 else float("inf"), error_if_nonfinite=True
-        ).detach().item()
-    )
-    optimizer.step()
-    with torch.no_grad():
-        param_delta = math.sqrt(
-            sum(float((p.detach() - prev).float().square().sum().item()) for p, prev in zip(parameters, before))
-        )
-    del before
-    meter.record_update(monotonic_seconds() - started)
-    optimizer.zero_grad(set_to_none=True)
 
     proposer.record_measurement(record)
-    grown = proposer.grow_library(library) if allow_program_growth else []
+    grown = (
+        proposer.grow_library(
+            library,
+            dataset_version=f"step_{meter.gradient_steps}",
+            model_version=f"step_{meter.gradient_steps}",
+        )
+        if allow_program_growth else []
+    )
+    # Synchronously advance the matched fixed-D shuffled proposer with the exact same call count and record prefix (fixes E01)
+    if fixed_d_proposer is not None and fixed_d_library is not None:
+        fixed_d_proposer.record_measurement(record)
+        if allow_program_growth:
+            fixed_d_proposer.grow_library(
+                fixed_d_library,
+                dataset_version=f"step_{meter.gradient_steps}",
+                model_version=f"step_{meter.gradient_steps}",
+            )
+
     return {
         "updated": param_delta > 0,
         "learning_outcome": "parameters_updated" if param_delta > 0 else "no_parameter_change",
         "loss": loss_val,
-        "score_terms": 1,
-        "scoring_forward_tokens": 32,
+        "score_terms": max(1, len(transitions)),
+        "scoring_forward_tokens": forward_tokens_to_charge,
         "gradient_l2_norm_before_clip": grad_norm,
         "nonzero_gradient": grad_norm > 0,
         "parameters_changed": param_delta > 0,
         "parameter_delta_l2": param_delta,
         "optimizer_step": meter.gradient_steps,
+        "dcc_d_real": record.d_real,
+        "dcc_d_model": record.d_model,
         "dcc_action_diff_d": record.action_diff_d,
-        "dcc_u_public_readout": record.u_score,
-        "dcc_v_public_readout": record.v_score,
+        "dcc_u_utility": record.u_score,
+        "dcc_v_utility": record.v_score,
         "dcc_selected_program_id": program.program_id,
         "dcc_selected_program_origin": program.origin,
         "dcc_grown_programs": [p.program_id for p in grown],
         "dcc_library_size": len(library.active_programs()),
-        "dcc_witness_pairs_found": proposer.witness_pairs_found,
+        "dcc_unique_witness_pairs": proposer.witness_pairs_found,
+        "dcc_cumulative_witness_visits": proposer.cumulative_witness_visits,
+        "dcc_transitions_updated": int(trans_stats.get("num_transitions", len(transitions))),
     }
 
 
@@ -1983,16 +2452,27 @@ def run_training(
     is_dcc = method in DCC_METHODS and hasattr(policy, "configure_dcc_trainable_mode")
     dcc_proposer = None
     dcc_library = None
+    fixed_d_shuffled_proposer = None
+    fixed_d_shuffled_library = None
     if is_dcc:
-        from .native_dcc import ActionContrastProposer
+        from .native_dcc import ActionContrastProposer, ProgramLibrary
         policy.configure_dcc_trainable_mode(True)
         dcc_library = policy.get_dcc_library(benchmark_name)
         dcc_proposer = ActionContrastProposer(
             benchmark_name,
             max_probe_steps=int(config.get("dcc_max_probe_steps", 3)),
             proposal_budget=int(config.get("dcc_proposal_budget", 3)),
-            shuffle_witness_labels=(method == "dcc_label_shuffled"),
+            shuffle_witness_labels=(method in ("dcc_label_shuffled", "dcc_fixed_d_shuffled")),
             seed=seed,
+        )
+        # Matched fixed-D shuffled proposer that grows at the exact same call frequency on the exact same record prefix
+        fixed_d_shuffled_library = ProgramLibrary(benchmark_name)
+        fixed_d_shuffled_proposer = ActionContrastProposer(
+            benchmark_name,
+            max_probe_steps=int(config.get("dcc_max_probe_steps", 3)),
+            proposal_budget=int(config.get("dcc_proposal_budget", 3)),
+            shuffle_witness_labels=True,
+            seed=seed + 999,
         )
     elif hasattr(policy, "configure_dcc_trainable_mode"):
         policy.configure_dcc_trainable_mode(False)
@@ -2082,13 +2562,16 @@ def run_training(
                         complete_groups += 1
                         branch_pairs += int(sample.second is not None)
                         if is_dcc and dcc_proposer is not None and dcc_library is not None:
-                            entry.update(_update_dcc_block(
-                                policy, optimizer, sample, dcc_proposer, dcc_library, meter, config,
-                                allow_program_growth=(method != "dcc_no_program_growth"),
-                            ))
+                            # Save pre-first-success checkpoint BEFORE updating on the first successful block
                             if any(bool(t.success) for t in group_trajectories):
                                 first_terminal_success_seen = True
-                            elif not first_terminal_success_seen:
+                            entry.update(_update_dcc_block(
+                                policy, optimizer, sample, dcc_proposer, dcc_library, meter, config,
+                                allow_program_growth=(method not in ("dcc_no_program_growth", "dcc_k0_planner")),
+                                fixed_d_proposer=fixed_d_shuffled_proposer,
+                                fixed_d_library=fixed_d_shuffled_library,
+                            ))
+                            if not first_terminal_success_seen:
                                 import shutil as _shutil
                                 if pre_first_success_dir.exists():
                                     _shutil.rmtree(pre_first_success_dir)
@@ -2254,82 +2737,156 @@ def run_training(
         "actor_contract": actor_contract(method, classic_text=bool(env.action_schema.get("classic_text"))),
     }
     if is_dcc and dcc_library is not None and dcc_proposer is not None:
-        from .native_dcc import ActionContrastProposer, ProgramLibrary
-        # Compute analytical & empirical mechanism ablation comparisons across the 5 DCC v2 variants
+        from .native_dcc import DCC_CONTRACT_VERSION, ActionContrastProposer, ProgramLibrary
+
         belief_eval = policy.dcc_ensemble.reset_intra_task_belief(device=policy.device)
-        empty_fields: dict[str, str] = {}
+        # Use observed anchor fields from the latest recorded measurement when available
+        ref_fields = (
+            dict(dcc_proposer.records[-1].public_readout_z)
+            if dcc_proposer.records else {}
+        )
         full_progs = dcc_library.active_programs(starter_only=False)
         starter_progs = dcc_library.active_programs(starter_only=True)
         full_scores = [
-            policy.dcc_ensemble.score_program_evsi(p, empty_fields, belief_eval, use_Temporary_Initial_Params=False)
+            policy.dcc_ensemble.score_program_evsi(p, ref_fields, belief_eval, use_Temporary_Initial_Params=False)
             for p in full_progs
         ]
         no_growth_scores = [
-            policy.dcc_ensemble.score_program_evsi(p, empty_fields, belief_eval, use_Temporary_Initial_Params=False)
+            policy.dcc_ensemble.score_program_evsi(p, ref_fields, belief_eval, use_Temporary_Initial_Params=False)
             for p in starter_progs
         ]
         reset_param_scores = [
-            policy.dcc_ensemble.score_program_evsi(p, empty_fields, belief_eval, use_Temporary_Initial_Params=True)
+            policy.dcc_ensemble.score_program_evsi(p, ref_fields, belief_eval, use_Temporary_Initial_Params=True)
             for p in full_progs
         ]
-        shuffled_lib = ProgramLibrary(benchmark_name)
-        shuffled_prop = ActionContrastProposer(
-            benchmark_name,
-            max_probe_steps=int(config.get("dcc_max_probe_steps", 3)),
-            proposal_budget=int(config.get("dcc_proposal_budget", 3)),
-            shuffle_witness_labels=True,
-            seed=seed + 999,
-        )
-        for rec in dcc_proposer.records:
-            shuffled_prop.record_measurement(rec)
-        shuffled_prop.grow_library(shuffled_lib)
-        shuffled_progs = shuffled_lib.active_programs(starter_only=False)
+        k0_starter_scores = [
+            policy.dcc_ensemble.score_program_evsi(p, ref_fields, belief_eval, use_Temporary_Initial_Params=True)
+            for p in starter_progs
+        ]
+
+        if fixed_d_shuffled_library is None or fixed_d_shuffled_proposer is None:
+            fixed_d_shuffled_library = ProgramLibrary(benchmark_name)
+            fixed_d_shuffled_proposer = ActionContrastProposer(
+                benchmark_name,
+                max_probe_steps=int(config.get("dcc_max_probe_steps", 3)),
+                proposal_budget=int(config.get("dcc_proposal_budget", 3)),
+                shuffle_witness_labels=True,
+                seed=seed + 999,
+            )
+            for idx_rec, rec in enumerate(dcc_proposer.records, start=1):
+                fixed_d_shuffled_proposer.record_measurement(rec)
+                fixed_d_shuffled_proposer.grow_library(
+                    fixed_d_shuffled_library,
+                    dataset_version=f"replay_{idx_rec}",
+                    model_version=f"replay_{idx_rec}",
+                )
+
+        shuffled_progs = fixed_d_shuffled_library.active_programs(starter_only=False)
         shuffled_scores = [
-            policy.dcc_ensemble.score_program_evsi(p, empty_fields, belief_eval, use_Temporary_Initial_Params=False)
+            policy.dcc_ensemble.score_program_evsi(p, ref_fields, belief_eval, use_Temporary_Initial_Params=False)
             for p in shuffled_progs
         ]
+
+        fixed_d_ckpt_dir = output / "fixed_d_shuffled_adapter"
+        if not fixed_d_ckpt_dir.exists():
+            orig_lib = policy.dcc_libraries.get(benchmark_name)
+            try:
+                policy.dcc_libraries[benchmark_name] = fixed_d_shuffled_library
+                policy.save_adapter(fixed_d_ckpt_dir)
+            finally:
+                if orig_lib is not None:
+                    policy.dcc_libraries[benchmark_name] = orig_lib
+
         ablations_payload = {
+            "diagnostic_scope": "internal_model_scoring_diagnostic_only; native_trajectory_cells_required_for_performance_claims",
             "benchmark": benchmark_name,
             "seed": seed,
             "complete_dcc_v2": {
+                "cell": "phi_T_Xi_T",
                 "library_size": len(full_progs),
+                "grow_calls": int(dcc_proposer.call_index),
+                "unique_witness_pairs": int(dcc_proposer.witness_pairs_found),
+                "cumulative_witness_visits": int(dcc_proposer.cumulative_witness_visits),
+                "max_unified_q": max((s.get("unified_q", 0.0) for s in full_scores), default=0.0),
                 "max_evsi_per_cost": max((s["evsi_per_cost"] for s in full_scores), default=0.0),
                 "max_dual_control_j": max((s["dual_control_j"] for s in full_scores), default=0.0),
                 "max_feedback_use_value_i": max((s["feedback_use_value_i"] for s in full_scores), default=0.0),
             },
             "dcc_no_program_growth": {
+                "cell": "phi_T_Xi_0",
                 "library_size": len(starter_progs),
+                "max_unified_q": max((s.get("unified_q", 0.0) for s in no_growth_scores), default=0.0),
                 "max_evsi_per_cost": max((s["evsi_per_cost"] for s in no_growth_scores), default=0.0),
                 "max_dual_control_j": max((s["dual_control_j"] for s in no_growth_scores), default=0.0),
                 "max_feedback_use_value_i": max((s["feedback_use_value_i"] for s in no_growth_scores), default=0.0),
             },
             "dcc_reset_parameters": {
+                "cell": "phi_0_Xi_T",
                 "library_size": len(full_progs),
+                "max_unified_q": max((s.get("unified_q", 0.0) for s in reset_param_scores), default=0.0),
                 "max_evsi_per_cost": max((s["evsi_per_cost"] for s in reset_param_scores), default=0.0),
                 "max_dual_control_j": max((s["dual_control_j"] for s in reset_param_scores), default=0.0),
                 "max_feedback_use_value_i": max((s["feedback_use_value_i"] for s in reset_param_scores), default=0.0),
             },
+            "dcc_k0_planner": {
+                "cell": "phi_0_Xi_0",
+                "library_size": len(starter_progs),
+                "max_unified_q": max((s.get("unified_q", 0.0) for s in k0_starter_scores), default=0.0),
+                "max_evsi_per_cost": max((s["evsi_per_cost"] for s in k0_starter_scores), default=0.0),
+                "max_dual_control_j": max((s["dual_control_j"] for s in k0_starter_scores), default=0.0),
+                "max_feedback_use_value_i": max((s["feedback_use_value_i"] for s in k0_starter_scores), default=0.0),
+            },
+            "dcc_fixed_d_shuffled": {
+                "library_size": len(shuffled_progs),
+                "grow_calls": int(fixed_d_shuffled_proposer.call_index),
+                "unique_witness_pairs": int(fixed_d_shuffled_proposer.witness_pairs_found),
+                "cumulative_witness_visits": int(fixed_d_shuffled_proposer.cumulative_witness_visits),
+                "witness_pairs_found": int(fixed_d_shuffled_proposer.witness_pairs_found),
+                "max_unified_q": max((s.get("unified_q", 0.0) for s in shuffled_scores), default=0.0),
+                "max_evsi_per_cost": max((s["evsi_per_cost"] for s in shuffled_scores), default=0.0),
+                "max_dual_control_j": max((s["dual_control_j"] for s in shuffled_scores), default=0.0),
+                "max_feedback_use_value_i": max((s["feedback_use_value_i"] for s in shuffled_scores), default=0.0),
+                "checkpoint": str(fixed_d_ckpt_dir),
+            },
             "dcc_label_shuffled": {
                 "library_size": len(shuffled_progs),
-                "witness_pairs_found": int(shuffled_prop.witness_pairs_found),
+                "grow_calls": int(fixed_d_shuffled_proposer.call_index),
+                "unique_witness_pairs": int(fixed_d_shuffled_proposer.witness_pairs_found),
+                "cumulative_witness_visits": int(fixed_d_shuffled_proposer.cumulative_witness_visits),
+                "witness_pairs_found": int(fixed_d_shuffled_proposer.witness_pairs_found),
                 "max_evsi_per_cost": max((s["evsi_per_cost"] for s in shuffled_scores), default=0.0),
                 "max_dual_control_j": max((s["dual_control_j"] for s in shuffled_scores), default=0.0),
                 "max_feedback_use_value_i": max((s["feedback_use_value_i"] for s in shuffled_scores), default=0.0),
             },
             "pre_first_success_checkpoint": str(pre_first_success_dir) if pre_first_success_dir.exists() else None,
+            "zero_success_throughout_training": not bool(first_terminal_success_seen),
         }
+        summary["fixed_d_shuffled_checkpoint"] = str(fixed_d_ckpt_dir)
+        summary["zero_success_throughout_training"] = not bool(first_terminal_success_seen)
         summary["dcc_summary"] = {
-            "contract_version": "prism-dcc-v2",
+            "contract_version": DCC_CONTRACT_VERSION,
             "frozen_language_backbone": True,
             "ensemble_size": int(policy.dcc_ensemble.ensemble_size),
             "final_mechanism_weights": [float(x) for x in policy.dcc_ensemble.mechanism_weights.detach().cpu().tolist()],
             "library_size": len(dcc_library.active_programs()),
+            "grow_calls": int(dcc_proposer.call_index),
+            "unique_witness_pairs": int(dcc_proposer.witness_pairs_found),
+            "cumulative_witness_visits": int(dcc_proposer.cumulative_witness_visits),
             "witness_pairs_found": int(dcc_proposer.witness_pairs_found),
             "proposed_counts": dict(dcc_proposer.proposed_counts),
             "shuffle_witness_labels": bool(dcc_proposer.shuffle_witness_labels),
+            "zero_success_throughout_training": not bool(first_terminal_success_seen),
             "mechanism_ablations": ablations_payload,
         }
         _write_json(output / "dcc_program_library.json", dcc_library.to_dict())
+        _write_json(output / "dcc_fixed_d_shuffled_library.json", fixed_d_shuffled_library.to_dict())
+        _write_json(
+            output / "dcc_proposal_runs.json",
+            {
+                "full": [r.to_dict() for r in dcc_proposer.proposal_runs],
+                "fixed_d_shuffled": [r.to_dict() for r in fixed_d_shuffled_proposer.proposal_runs],
+            },
+        )
         _write_json(output / "dcc_mechanism_ablations.json", ablations_payload)
     summary["program_outcomes"]["counting_unit"] = "physically_executed_actor_events; shared_prefix_counted_once"
     _write_json(output / "training_summary.json", summary)
