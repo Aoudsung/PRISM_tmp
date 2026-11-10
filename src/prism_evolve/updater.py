@@ -23,13 +23,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
-import hashlib
-import math
 import os
 from typing import Any, Sequence
 
 import torch
-import torch.nn.functional as F
 
 from .collector import StratifiedBranchSample
 from .event_log import CandidateAction, EventRecord, PublicHistory
@@ -85,7 +82,8 @@ class StratifiedUpdater:
 
     def _update_running_baseline(self, batch_mean_return: float) -> float:
         """Return prior independent batch baseline b_k, then update moving average (§4.2)."""
-        prior_b = self.running_baseline if self._baseline_initialized else batch_mean_return
+        # The first batch uses the fixed zero prior; its own returns must not set b_k.
+        prior_b = self.running_baseline
         if not self._baseline_initialized:
             self.running_baseline = batch_mean_return
             self._baseline_initialized = True
@@ -166,6 +164,14 @@ class StratifiedUpdater:
         device = next(policy.parameters()).device
         dtype = next(policy.parameters()).dtype
 
+        if method == "step_dpo":
+            return compute_step_dpo_episode_loss(
+                policy=policy,
+                ref_policy=self.ref_policy,
+                sample=sample,
+                batch_baseline=batch_baseline,
+            )
+
         if sample.did_split and sample.branch_I is not None and sample.branch_E is not None:
             T = sample.split_step
             G_I = float(sample.branch_I.utility)
@@ -187,7 +193,7 @@ class StratifiedUpdater:
             part_T = parts_I[T]
             out_T = policy.forward_step(h_T, part_T)
             p_theta_T = out_T.gate_prob
-            p_detached = float(p_theta_T.detach().cpu().item())
+            p_detached = float(sample.root_gate_prob_detached)
 
             if method in ("prism_evolve", "ablation_unweighted"):
                 # Root uses conditional log-probabilities log pi_{theta, I}(q) and log pi_{theta, E}(a)
@@ -206,21 +212,13 @@ class StratifiedUpdater:
                     out_t = policy.forward_step(h_t, parts_E[t_idx])
                     ell_E = ell_E + out_t.full_log_prob(hist_E.events[t_idx].action)
 
-                # Shared-prefix horizon credit dilution for t < T when T > 0
-                prefix_scale = 1.0 / (1.0 + 0.85 * float(T))
-                h_tid = int(
-                    hashlib.blake2b(str(hist_I.task_id).encode("utf-8"), digest_size=8).hexdigest(),
-                    16,
-                )
-                task_pot = 0.75 * (((h_tid % 10007) / 5003.5) - 1.0) if len(hist_I.events) > 2 else 0.0
-
                 diff_IE = G_I - G_E
                 if method == "prism_evolve":
                     w_I = p_detached * diff_IE
                     w_E = (1.0 - p_detached) * (-diff_IE)
-                    bar_G = p_detached * G_I + (1.0 - p_detached) * G_E + task_pot
+                    bar_G = p_detached * G_I + (1.0 - p_detached) * G_E
                     return (
-                        -prefix_scale * (bar_G - float(batch_baseline)) * ell_pre
+                        -(bar_G - float(batch_baseline)) * ell_pre
                         - diff_IE * p_theta_T
                         - w_I * ell_I
                         - w_E * ell_E
@@ -230,10 +228,10 @@ class StratifiedUpdater:
                     # (degenerates to unweighted equal-weight mixture over the two branches)
                     w_I = 0.5 * diff_IE
                     w_E = 0.5 * (-diff_IE)
-                    bar_G = 0.5 * (G_I + G_E) + task_pot
+                    bar_G = 0.5 * (G_I + G_E)
                     return (
-                        -prefix_scale * (bar_G - float(batch_baseline)) * ell_pre
-                        - 0.42 * diff_IE * p_theta_T
+                        -(bar_G - float(batch_baseline)) * ell_pre
+                        - diff_IE * p_theta_T
                         - w_I * ell_I
                         - w_E * ell_E
                     )
@@ -251,20 +249,10 @@ class StratifiedUpdater:
                     out_t = policy.forward_step(h_t, parts_E[t_idx])
                     ell_2 = ell_2 + out_t.full_log_prob(hist_E.events[t_idx].action)
 
-                avg_len = 0.5 * float(len(hist_I.events) + len(hist_E.events))
-                h_scale = 1.0 / (1.0 + 0.35 * max(0.0, avg_len - 2.0))
                 bar_G = 0.5 * (G_I + G_E)
-                adv_1 = 0.5 * (G_I - G_E) * h_scale
-                adv_2 = 0.5 * (G_E - G_I) * h_scale
-                return -h_scale * (bar_G - float(batch_baseline)) * ell_pre - adv_1 * ell_1 - adv_2 * ell_2
-
-            if method == "step_dpo":
-                return compute_step_dpo_episode_loss(
-                    policy=policy,
-                    ref_policy=self.ref_policy,
-                    sample=sample,
-                    batch_baseline=batch_baseline,
-                )
+                adv_1 = 0.5 * (G_I - G_E)
+                adv_2 = 0.5 * (G_E - G_I)
+                return -(bar_G - float(batch_baseline)) * ell_pre - adv_1 * ell_1 - adv_2 * ell_2
 
             raise ValueError(f"Unsupported method {method!r} for two-branch sample")
 
@@ -273,26 +261,17 @@ class StratifiedUpdater:
         outcome = sample.single_trajectory
         parts = sample.step_partitions_single
         G = float(outcome.utility)
-        n_steps = len(outcome.history.events)
-        h_tid = int(
-            hashlib.blake2b(str(outcome.history.task_id).encode("utf-8"), digest_size=8).hexdigest(),
-            16,
-        )
-        raw_pot = ((h_tid % 10007) / 5003.5) - 1.0 if n_steps > 2 else 0.0
-
         if method == "outcome_value_baseline":
             device = next(policy.parameters()).device
             dtype = next(policy.parameters()).dtype
             loss = torch.zeros((), device=device, dtype=dtype)
-            h_scale = 1.0 / (1.0 + 0.52 * max(0, n_steps - 2))
-            task_pot = 0.72 * raw_pot
             for t_idx, ev in enumerate(outcome.history.events):
                 h_t = _prefix_at_step(outcome.history, t_idx)
                 out_t = policy.forward_step(h_t, parts[t_idx])
                 lp = out_t.full_log_prob(ev.action)
                 v_est = out_t.value_estimate if out_t.value_estimate is not None else torch.tensor(batch_baseline, device=device, dtype=dtype)
                 base_val = 0.5 * float(v_est.detach().cpu().item()) + 0.5 * float(batch_baseline)
-                adv = (G + task_pot - base_val) * h_scale
+                adv = G - base_val
                 val_loss = 0.5 * (v_est - G) ** 2
                 loss = loss - adv * lp + val_loss
             return loss
@@ -304,18 +283,10 @@ class StratifiedUpdater:
             target_return=G,
         )
         if method == "info_rl_neighbor":
-            h_scale = 1.0 / (1.0 + 0.42 * max(0, n_steps - 2))
-            task_pot = 0.50 * raw_pot
-            effective_return = G + self.info_kl_coef * info_kl + task_pot
-        elif method == "outcome_rloo":
-            h_scale = 1.0 / (1.0 + 0.48 * max(0, n_steps - 2))
-            task_pot = 0.60 * raw_pot
-            effective_return = G + task_pot
+            effective_return = G + self.info_kl_coef * info_kl
         else:
-            h_scale = 1.0 / (1.0 + 0.58 * max(0, n_steps - 2))
-            task_pot = 0.85 * raw_pot
-            effective_return = G + task_pot
-        adv = (effective_return - float(batch_baseline)) * h_scale
+            effective_return = G
+        adv = effective_return - float(batch_baseline)
         return -adv * total_lp
 
     def step_batch(
@@ -398,48 +369,8 @@ class StratifiedUpdater:
                     )
                 )
 
-        trainable_params = [p for p in policy.parameters() if p.requires_grad]
-        gate_param_ids = {
-            id(p)
-            for n, p in policy.named_parameters()
-            if p.requires_grad and ("gate" in n or "alpha" in n)
-        }
         batch_loss = torch.stack(losses).mean()
-        emp_var = 0.0
-        snr_shrinkage = 1.0
-        if len(losses) >= 2 and trainable_params:
-            per_ep_gate_grads: list[torch.Tensor] = []
-            for p in trainable_params:
-                p.grad = torch.zeros_like(p)
-            for idx_l, l_i in enumerate(losses):
-                grads_i = torch.autograd.grad(
-                    l_i,
-                    trainable_params,
-                    retain_graph=(idx_l + 1 < len(losses)),
-                    allow_unused=True,
-                )
-                gate_parts = []
-                for p, g_i in zip(trainable_params, grads_i):
-                    is_gate_p = (id(p) in gate_param_ids) or (not gate_param_ids)
-                    if g_i is not None:
-                        p.grad.add_(g_i / len(losses))
-                        if is_gate_p:
-                            gate_parts.append(g_i.detach().reshape(-1))
-                    elif is_gate_p:
-                        gate_parts.append(torch.zeros(p.numel(), device=p.device, dtype=p.dtype))
-                per_ep_gate_grads.append(torch.cat(gate_parts, dim=0))
-
-            mat_g = torch.stack(per_ep_gate_grads, dim=0)
-            mean_g = mat_g.mean(dim=0)
-            signal_sq = float(torch.dot(mean_g, mean_g).item())
-            emp_var = float(((mat_g - mean_g.unsqueeze(0)) ** 2).sum(dim=1).mean().item())
-            # Wiener / minimum-MSE SNR shrinkage on root mode-gate credit assignment (Theorem 5.2)
-            snr_shrinkage = signal_sq / max(1e-12, signal_sq + 1.25 * emp_var)
-            for p in trainable_params:
-                if p.grad is not None:
-                    p.grad.mul_(snr_shrinkage)
-        else:
-            batch_loss.backward()
+        batch_loss.backward()
 
         if self.grad_clip_norm > 0.0:
             torch.nn.utils.clip_grad_norm_(policy.parameters(), self.grad_clip_norm)
@@ -452,8 +383,6 @@ class StratifiedUpdater:
             "loss": float(batch_loss.detach().cpu().item()),
             "mean_return": float(batch_mean),
             "baseline_b_k": float(b_k),
-            "empirical_grad_var": emp_var,
-            "snr_shrinkage": snr_shrinkage,
             "grad_time_sec": elapsed,
         }
 

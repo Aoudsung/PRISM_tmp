@@ -1,0 +1,92 @@
+[
+  {
+    "fields": 4,
+    "comparison": "complete_program_evsi minus uniform_programs",
+    "mean_difference": 0.07285156250000001,
+    "paired_standard_error": 0.006505491221265164,
+    "normal_95_interval": [
+      0.06010079970632029,
+      0.08560232529367973
+    ]
+  },
+  {
+    "fields": 4,
+    "comparison": "complete_program_evsi minus model_information",
+    "mean_difference": -0.024218750000000004,
+    "paired_standard_error": 0.004548740200464941,
+    "normal_95_interval": [
+      -0.03313428079291129,
+      -0.01530321920708872
+    ]
+  },
+  {
+    "fields": 4,
+    "comparison": "complete_program_evsi minus predictive_entropy",
+    "mean_difference": 0.18939453125000008,
+    "paired_standard_error": 0.0053593330758401345,
+    "normal_95_interval": [
+      0.17889023842135343,
+      0.19989882407864673
+    ]
+  },
+  {
+    "fields": 6,
+    "comparison": "complete_program_evsi minus uniform_programs",
+    "mean_difference": 0.07662434895833335,
+    "paired_standard_error": 0.006330431336992653,
+    "normal_95_interval": [
+      0.06421670353782775,
+      0.08903199437883895
+    ]
+  },
+  {
+    "fields": 6,
+    "comparison": "complete_program_evsi minus model_information",
+    "mean_difference": 0.07586463829139611,
+    "paired_standard_error": 0.007671099413039088,
+    "normal_95_interval": [
+      0.0608292834418395,
+      0.09089999314095272
+    ]
+  },
+  {
+    "fields": 6,
+    "comparison": "complete_program_evsi minus predictive_entropy",
+    "mean_difference": 0.10738195398351648,
+    "paired_standard_error": 0.006779726485347243,
+    "normal_95_interval": [
+      0.09409369007223588,
+      0.12067021789479708
+    ]
+  },
+  {
+    "fields": 8,
+    "comparison": "complete_program_evsi minus uniform_programs",
+    "mean_difference": 0.05621796799057255,
+    "paired_standard_error": 0.005938843367518524,
+    "normal_95_interval": [
+      0.04457783499023624,
+      0.06785810099090886
+    ]
+  },
+  {
+    "fields": 8,
+    "comparison": "complete_program_evsi minus model_information",
+    "mean_difference": 0.06767897952602062,
+    "paired_standard_error": 0.0057188352266389405,
+    "normal_95_interval": [
+      0.05647006248180829,
+      0.07888789657023294
+    ]
+  },
+  {
+    "fields": 8,
+    "comparison": "complete_program_evsi minus predictive_entropy",
+    "mean_difference": 0.06767897952602062,
+    "paired_standard_error": 0.0057188352266389405,
+    "normal_95_interval": [
+      0.05647006248180829,
+      0.07888789657023294
+    ]
+  }
+]

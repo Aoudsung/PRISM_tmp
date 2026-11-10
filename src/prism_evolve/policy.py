@@ -413,13 +413,11 @@ class LoRALinear(nn.Module):
 
 
 class ContextualLoRADualModePolicy(DualModePolicy):
-    """Dual-mode policy with frozen base representations + persistent trainable LoRA adapters.
+    """Legacy controlled scorer with frozen features and trainable low-rank projections.
 
-    Supports either:
-    1. A pre-loaded HuggingFace Transformer encoder/causal LM backbone on GPU (when `backbone` is supplied), or
-    2. Deterministic multi-resolution token/n-gram feature hashing into the frozen base projection +
-       trainable LoRA layers, providing fast, exact, GPU-accelerated contextual scoring over public
-       histories h_t and candidate tool signatures in AppWorld and PlanBench-XL.
+    Frozen features may come from a supplied encoder or deterministic text hashing.
+    The structured macro-action features below belong to the controlled environment;
+    this class does not train a generative LLM policy or implement a native benchmark agent.
     """
 
     def __init__(
@@ -437,7 +435,6 @@ class ContextualLoRADualModePolicy(DualModePolicy):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.initial_gate_bias = float(initial_gate_bias)
-        self._regime_configured: bool | None = None
         self.device_obj = torch.device(device)
         self.dtype = dtype
         self.backbone = backbone
@@ -481,17 +478,13 @@ class ContextualLoRADualModePolicy(DualModePolicy):
         )
         with torch.no_grad():
             t1 = math.tanh(1.0)
-            cap = self._backbone_capacity_bonus()
             self.gate_proj.base_weight.zero_()
-            # Cold-start premature execution bias on Subspace A (initial state):
-            # gate_logit(h_0) = (initial_gate_bias + 0.11 * cap) + 1.45 * tanh(z_task) / t1
-            self.gate_proj.base_weight[0, 0] = float(initial_gate_bias + 0.11 * cap) / t1
+            # Shared controlled-scorer initialization, independent of backbone metadata.
+            self.gate_proj.base_weight[0, 0] = float(initial_gate_bias) / t1
             if hidden_dim >= 8:
                 self.gate_proj.base_weight[0, 7] = 1.45 / t1
             # Subspace B (post-probe / continuation state):
             # Clean transition to Mode E when unrecovered_failure == 0: gate_logit = -9.0 << 0
-            # Keep Stage-0 unrecovered_failure bias at -1.1 / t1 so Branch E does not prematurely
-            # self-recover at Stage 0 and dilute the counterfactual root advantage (G_I - G_E).
             if hidden_dim >= 16:
                 self.gate_proj.base_weight[0, 8] = -5.0 / t1
                 self.gate_proj.base_weight[0, 14] = -4.0 / t1
@@ -499,9 +492,9 @@ class ContextualLoRADualModePolicy(DualModePolicy):
                 self.gate_proj.base_weight[0, 15] = 0.65 / t1
             half_g = max(1, self.gate_proj.rank // 2)
             self.gate_proj.lora_A.data.zero_()
-            self.gate_proj.lora_A.data[:half_g, 0] = 0.65 + 0.55 * cap
+            self.gate_proj.lora_A.data[:half_g, 0] = 0.65
             if hidden_dim >= 6:
-                self.gate_proj.lora_A.data[:half_g, 5] = 0.65 + 0.55 * cap
+                self.gate_proj.lora_A.data[:half_g, 5] = 0.65
         self.register_buffer(
             "gate_bias",
             torch.zeros(1, dtype=dtype, device=self.device_obj),
@@ -530,56 +523,6 @@ class ContextualLoRADualModePolicy(DualModePolicy):
                 cls._GLOBAL_LLM_MEAN_VEC = stacked.mean(dim=0)
         else:
             cls._GLOBAL_LLM_MEAN_VEC = None
-
-    @classmethod
-    def _backbone_capacity_bonus(cls, planbench: bool = False) -> float:
-        """Normalized log-capacity gain relative to the 7B reference backbone (0.0 for <=7B)."""
-        meta = cls._GLOBAL_LLM_META
-        if not meta:
-            return 0.0
-        h = float(meta.get("hidden_size", 3584) or 3584)
-        layers = float(meta.get("num_hidden_layers", 28) or 28)
-        if h <= 3584.0 and layers <= 28.0:
-            return 0.0
-        if planbench:
-            return max(
-                0.0,
-                min(
-                    0.40,
-                    0.55 * math.log(max(1.0, h / 3584.0))
-                    + 0.16 * math.log(max(1.0, layers / 28.0)),
-                ),
-            )
-        return max(
-            0.0,
-            min(
-                0.60,
-                0.55 * math.log(max(1.0, h / 3584.0))
-                + 0.45 * math.log(max(1.0, layers / 28.0)),
-            ),
-        )
-
-    def _configure_benchmark_regime(self, is_planbench: bool) -> None:
-        if self._regime_configured == is_planbench:
-            return
-        self._regime_configured = is_planbench
-        with torch.no_grad():
-            t1 = math.tanh(1.0)
-            cap = self._backbone_capacity_bonus(planbench=is_planbench)
-            if is_planbench:
-                self.gate_proj.base_weight[0, 0] = float(self.initial_gate_bias + 0.11 * cap) / t1
-                if self.hidden_dim >= 16:
-                    self.gate_proj.base_weight[0, 11] = -1.1 / t1
-                lora_scale = 0.65 + 0.55 * cap
-            else:
-                self.gate_proj.base_weight[0, 0] = float(self.initial_gate_bias + 0.28 * cap) / t1
-                if self.hidden_dim >= 16:
-                    self.gate_proj.base_weight[0, 11] = (-1.1 + 0.45 * cap) / t1
-                lora_scale = 0.65 + 0.35 * cap
-            half_g = max(1, self.gate_proj.rank // 2)
-            self.gate_proj.lora_A.data[:half_g, 0] = lora_scale
-            if self.hidden_dim >= 6:
-                self.gate_proj.lora_A.data[:half_g, 5] = lora_scale
 
     @staticmethod
     def _hash_text_static(text: str, hidden_dim: int = 512) -> torch.Tensor:
@@ -729,11 +672,9 @@ class ContextualLoRADualModePolicy(DualModePolicy):
                 precond = -1.0
 
         # Block A (0..7): Aligned with initial pre-execution state (Subspace A)
-        is_planbench = "planbench" in history.task_id.lower()
-        cap = self._backbone_capacity_bonus(planbench=is_planbench)
         s0 = 0.5 if (cand.mode == "I" and not already_called) else -0.4
         if cand.intent == "probe":
-            s1 = (0.9 + 0.30 * cap) if (target_domain_match and not already_called) else -0.9
+            s1 = 0.9 if (target_domain_match and not already_called) else -0.9
         else:
             s1 = 0.0
         if cand.intent == "discover":
@@ -762,7 +703,7 @@ class ContextualLoRADualModePolicy(DualModePolicy):
         s8 = 1.0 if (cand.mode == "E" and not already_called and not failed_before) else -1.0
         if cand.intent == "execute":
             if corroboration > 0.0 and not already_called:
-                s9 = 2.5 + 0.55 * cap
+                s9 = 2.5
             elif corroboration < 0.0 or already_called or failed_before:
                 s9 = -2.5
             elif ("unfiltered" in act_id_lower or "shortcut" in act_id_lower) and not already_called:
@@ -778,7 +719,7 @@ class ContextualLoRADualModePolicy(DualModePolicy):
             s9 = -1.0
 
         if cand.intent == "submit" and ready_to_submit and not already_called:
-            s10 = 3.0 + 0.35 * cap
+            s10 = 3.0
         else:
             s10 = -2.5
 
@@ -913,24 +854,10 @@ class ContextualLoRADualModePolicy(DualModePolicy):
         budget_frac = history.budget_fraction_remaining
         step_prog = min(1.0, history.step_count / 10.0)
 
-        h_goal = int(
-            hashlib.blake2b(
-                f"{history.task_id}:{history.goal}".encode("utf-8"),
-                digest_size=8,
-            ).hexdigest(),
-            16,
-        )
-        u_goal = ((h_goal % 10003) / 5001.5) - 1.0
-        is_planbench = "planbench" in history.task_id.lower()
-        self._configure_benchmark_regime(is_planbench)
-        cap = self._backbone_capacity_bonus(planbench=is_planbench)
+        # The content feature has no task-ID perturbation or model-size bonus.
         lin_goal = float(torch.dot(goal_vec, self.task_prior_dir).item())
-        if is_planbench:
-            z_task = max(-1.0, min(1.0, 0.85 * u_goal + 0.35 * lin_goal + 0.08 * cap))
-            step0_feat = (1.0 + 0.08 * cap) if history.step_count == 0 else (0.5 + 0.04 * cap)
-        else:
-            z_task = max(-1.0, min(1.0, 0.85 * u_goal + 0.35 * lin_goal + 0.20 * cap))
-            step0_feat = (1.0 + 0.15 * cap) if history.step_count == 0 else (0.5 + 0.08 * cap)
+        z_task = max(-1.0, min(1.0, 0.35 * lin_goal))
+        step0_feat = 1.0 if history.step_count == 0 else 0.5
 
         mid_h = 16 + max(0, self.hidden_dim - 16) // 2
         ctx_input = (raw_ctx_vec * 0.15).clone()

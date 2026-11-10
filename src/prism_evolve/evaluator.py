@@ -23,6 +23,7 @@ import torch
 from .collector import SnapshotCapableEnv
 from .event_log import EventRecord, PublicHistory
 from .policy import ActionSpacePartition, DualModePolicy
+from .statistics import scenario_bootstrap_ci
 from .utility import CostLedger, TrajectoryOutcome
 
 
@@ -42,6 +43,10 @@ class TaskEvalRecord:
     had_intermediate_failure: bool
     recovered_from_failure: bool
     cost_ledger: CostLedger
+    # Set these from the registered run, not the per-task environment RNG seed.
+    benchmark: str = ""
+    backbone: str = ""
+    seed: int | None = None
 
     @property
     def cumulative_cost(self) -> float:
@@ -61,24 +66,38 @@ class PairedGainSummary:
     mean_utility_k: float
     mean_utility_0: float
     delta_evo: float
-    ci95_halfwidth_utility: float
-    ci95_halfwidth_success: float
+    # Width/2 is retained for older callers; percentile endpoints can be asymmetric.
+    ci95_halfwidth_utility: float | None
+    ci95_halfwidth_success: float | None
+    ci95_lower_utility: float | None = None
+    ci95_upper_utility: float | None = None
+    ci95_lower_success: float | None = None
+    ci95_upper_success: float | None = None
+    ci_method: str = "scenario_cluster_percentile_bootstrap"
 
     @property
-    def ci95_low(self) -> float:
-        return self.delta_evo - self.ci95_halfwidth_utility
+    def ci95_low(self) -> float | None:
+        if self.ci95_lower_utility is not None:
+            return self.ci95_lower_utility
+        return None if self.ci95_halfwidth_utility is None else self.delta_evo - self.ci95_halfwidth_utility
 
     @property
-    def ci95_high(self) -> float:
-        return self.delta_evo + self.ci95_halfwidth_utility
+    def ci95_high(self) -> float | None:
+        if self.ci95_upper_utility is not None:
+            return self.ci95_upper_utility
+        return None if self.ci95_halfwidth_utility is None else self.delta_evo + self.ci95_halfwidth_utility
 
     @property
-    def success_ci95_low(self) -> float:
-        return self.delta_success - self.ci95_halfwidth_success
+    def success_ci95_low(self) -> float | None:
+        if self.ci95_lower_success is not None:
+            return self.ci95_lower_success
+        return None if self.ci95_halfwidth_success is None else self.delta_success - self.ci95_halfwidth_success
 
     @property
-    def success_ci95_high(self) -> float:
-        return self.delta_success + self.ci95_halfwidth_success
+    def success_ci95_high(self) -> float | None:
+        if self.ci95_upper_success is not None:
+            return self.ci95_upper_success
+        return None if self.ci95_halfwidth_success is None else self.delta_success + self.ci95_halfwidth_success
 
 
 @dataclass(frozen=True)
@@ -89,9 +108,12 @@ class MaskedDiagnosticSummary:
     mean_visible_utility: float
     mean_masked_utility: float
     delta_use: float
-    ci95_halfwidth_delta_use: float
+    ci95_halfwidth_delta_use: float | None
     info_selection_rate: float
     recovery_success_rate: float
+    ci95_lower_delta_use: float | None = None
+    ci95_upper_delta_use: float | None = None
+    ci_method: str = "scenario_cluster_percentile_bootstrap"
 
 
 class CrossTaskEvaluator:
@@ -231,60 +253,62 @@ class CrossTaskEvaluator:
         records_k: Sequence[TaskEvalRecord],
         records_0: Sequence[TaskEvalRecord],
         stage_k: int,
+        *,
+        seed: int = 0,
+        num_bootstrap: int = 10000,
     ) -> PairedGainSummary:
-        """Computes Delta_evo(k, B) with scenario-grouped paired 95% CIs (§2.1, §7.2)."""
+        """Single-seed, task-equal evolution gain with scenario bootstrap CIs.
+
+        Use statistics.evaluate_method_comparisons for comparisons across methods
+        and seeds. This helper joins by task ID and never averages CI endpoints.
+        """
         if len(records_k) != len(records_0):
             raise ValueError("Paired evaluation requires matching task lists.")
         n_tasks = len(records_k)
         if n_tasks == 0:
             raise ValueError("Task record list cannot be empty.")
-
-        scenario_util_diffs: Dict[str, List[float]] = {}
-        scenario_succ_diffs: Dict[str, List[float]] = {}
-
-        for rk, r0 in zip(records_k, records_0):
-            if rk.task_id != r0.task_id:
-                raise ValueError(f"Mismatched task order: {rk.task_id} vs {r0.task_id}")
-            scen = rk.scenario_id
-            scenario_util_diffs.setdefault(scen, []).append(rk.utility - r0.utility)
-            scenario_succ_diffs.setdefault(scen, []).append(float(rk.success - r0.success))
-
-        scen_means_util = [sum(v) / len(v) for v in scenario_util_diffs.values()]
-        scen_means_succ = [sum(v) / len(v) for v in scenario_succ_diffs.values()]
-        m = len(scen_means_util)
-
-        mean_uk = sum(r.utility for r in records_k) / n_tasks
-        mean_u0 = sum(r.utility for r in records_0) / n_tasks
-        delta_evo = mean_uk - mean_u0
-
-        mean_sk = sum(r.success for r in records_k) / n_tasks
-        mean_s0 = sum(r.success for r in records_0) / n_tasks
-        delta_succ = mean_sk - mean_s0
-
-        if m > 1:
-            mu_u = sum(scen_means_util) / m
-            var_u = sum((x - mu_u) ** 2 for x in scen_means_util) / (m - 1)
-            ci_u = 1.96 * math.sqrt(var_u / m)
-
-            mu_s = sum(scen_means_succ) / m
-            var_s = sum((x - mu_s) ** 2 for x in scen_means_succ) / (m - 1)
-            ci_s = 1.96 * math.sqrt(var_s / m)
-        else:
-            ci_u = 0.0
-            ci_s = 0.0
+        by_task_k = {record.task_id: record for record in records_k}
+        by_task_0 = {record.task_id: record for record in records_0}
+        if len(by_task_k) != n_tasks or len(by_task_0) != n_tasks:
+            raise ValueError("Duplicate task IDs in paired single-seed evaluation.")
+        if by_task_k.keys() != by_task_0.keys():
+            raise ValueError("Paired evaluation requires identical task IDs.")
+        scenarios, util_diffs, succ_diffs = [], [], []
+        for task_id in sorted(by_task_k):
+            rk, r0 = by_task_k[task_id], by_task_0[task_id]
+            if rk.scenario_id != r0.scenario_id:
+                raise ValueError(f"Scenario mismatch for task {task_id!r}.")
+            if rk.success not in (0, 1) or r0.success not in (0, 1):
+                raise ValueError("Success outcomes must be binary.")
+            if not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in (rk.utility, r0.utility)):
+                raise ValueError("Task utility must be finite and in [0, 1].")
+            scenarios.append(rk.scenario_id)
+            util_diffs.append(rk.utility - r0.utility)
+            succ_diffs.append(float(rk.success - r0.success))
+        util_summary = scenario_bootstrap_ci(util_diffs, scenarios, seed=seed, num_resamples=num_bootstrap)
+        succ_summary = scenario_bootstrap_ci(succ_diffs, scenarios, seed=seed, num_resamples=num_bootstrap)
+        util_ci, succ_ci = util_summary["ci95"], succ_summary["ci95"]
+        mean_uk = math.fsum(r.utility for r in records_k) / n_tasks
+        mean_u0 = math.fsum(r.utility for r in records_0) / n_tasks
+        mean_sk = math.fsum(r.success for r in records_k) / n_tasks
+        mean_s0 = math.fsum(r.success for r in records_0) / n_tasks
 
         return PairedGainSummary(
             stage_k=stage_k,
             num_tasks=n_tasks,
-            num_scenarios=m,
+            num_scenarios=util_summary["num_scenarios"],
             mean_success_k=mean_sk,
             mean_success_0=mean_s0,
-            delta_success=delta_succ,
+            delta_success=succ_summary["estimate"],
             mean_utility_k=mean_uk,
             mean_utility_0=mean_u0,
-            delta_evo=delta_evo,
-            ci95_halfwidth_utility=ci_u,
-            ci95_halfwidth_success=ci_s,
+            delta_evo=util_summary["estimate"],
+            ci95_halfwidth_utility=None if util_ci is None else (util_ci[1] - util_ci[0]) / 2,
+            ci95_halfwidth_success=None if succ_ci is None else (succ_ci[1] - succ_ci[0]) / 2,
+            ci95_lower_utility=None if util_ci is None else util_ci[0],
+            ci95_upper_utility=None if util_ci is None else util_ci[1],
+            ci95_lower_success=None if succ_ci is None else succ_ci[0],
+            ci95_upper_success=None if succ_ci is None else succ_ci[1],
         )
 
 
@@ -312,21 +336,27 @@ class MaskedFeedbackDiagnostic:
         policy: DualModePolicy,
         task_specs: Sequence[Tuple[str, str]],
         base_seed: int = 1000,
+        *,
+        num_bootstrap: int = 10000,
     ) -> MaskedDiagnosticSummary:
         """Computes Delta_use(pi), info selection rate, and recovery rate on dev tasks."""
         visible_utilities: List[float] = []
         masked_utilities: List[float] = []
         diffs: List[float] = []
+        diagnostic_scenarios: List[str] = []
+        if len({task_id for task_id, _ in task_specs}) != len(task_specs):
+            raise ValueError("Duplicate task IDs in masked-feedback diagnostic.")
 
         total_steps = 0
         total_info_steps = 0
         tasks_with_failure = 0
         tasks_recovered = 0
 
-        for idx, (task_id, _) in enumerate(task_specs):
+        for idx, (task_id, scenario_id) in enumerate(task_specs):
             seed = base_seed + idx
             rng_vis = random.Random(seed)
             history = self.env.reset(task_id=task_id, seed=seed)
+            diagnostic_scenarios.append(scenario_id or history.scenario_id)
 
             had_failure = False
             native_success = 0
@@ -458,20 +488,18 @@ class MaskedFeedbackDiagnostic:
                 diffs.append(0.0)
 
         n_pref = len(diffs)
+        ci_d = None
         if n_pref > 0:
             mean_vis = sum(visible_utilities) / n_pref
             mean_mask = sum(masked_utilities) / n_pref
             delta_use = mean_vis - mean_mask
-            if n_pref > 1:
-                var_d = sum((d - delta_use) ** 2 for d in diffs) / (n_pref - 1)
-                ci_d = 1.96 * math.sqrt(var_d / n_pref)
-            else:
-                ci_d = 0.0
+            ci_d = scenario_bootstrap_ci(
+                diffs, diagnostic_scenarios, seed=base_seed, num_resamples=num_bootstrap,
+            )["ci95"]
         else:
             mean_vis = 0.0
             mean_mask = 0.0
             delta_use = 0.0
-            ci_d = 0.0
 
         info_rate = (total_info_steps / total_steps) if total_steps > 0 else 0.0
         rec_rate = (tasks_recovered / tasks_with_failure) if tasks_with_failure > 0 else 0.0
@@ -481,9 +509,11 @@ class MaskedFeedbackDiagnostic:
             mean_visible_utility=mean_vis,
             mean_masked_utility=mean_mask,
             delta_use=delta_use,
-            ci95_halfwidth_delta_use=ci_d,
+            ci95_halfwidth_delta_use=None if ci_d is None else (ci_d[1] - ci_d[0]) / 2,
             info_selection_rate=info_rate,
             recovery_success_rate=rec_rate,
+            ci95_lower_delta_use=None if ci_d is None else ci_d[0],
+            ci95_upper_delta_use=None if ci_d is None else ci_d[1],
         )
 
     evaluate_information_use = run_diagnostic

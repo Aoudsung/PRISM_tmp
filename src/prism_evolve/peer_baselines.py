@@ -1,42 +1,16 @@
-"""Peer-Reviewed 2025–2026 Baseline Implementations for PRISM-Evolve Main Comparison.
+"""Legacy controlled baseline adaptations for the fixed macro-action experiments.
 
-Integrates the 5 representative peer-reviewed 2025–2026 baseline families specified in
-`docs/prism-evolve-design.md` (§7.3) and `docs/external-artifacts.md`, linked to their
-official open-source repositories deployed on `mgt01` (`/apps/users/adminuser/prism-exact-external/`):
-
-1. `gigpo` (GiGPO — NeurIPS 2025 / 2026, arXiv:2505.10978):
-   Official repo: `langfengQ/verl-agent` @ `20bd331bdbc9026a5668e11362178e10ab7400c8`
-   (`gigpo/core_gigpo.py`: Eq. 3 episode macro relative advantage + Eq. 6-8 anchor-state
-   step micro relative advantage).
-2. `step_dpo` (Step-DPO — NeurIPS 2024 / 2025, arXiv:2406.18629):
-   Official repo: `JIA-Lab-research/Step-DPO` @ `1f504ead5004f252025cb234017dfd9897cd542c`
-   (`stepdpo_trainer.py`: shared prefix h_T fork, chosen vs. rejected continuation DPO loss
-   without Theorem 5.1 deployment gate probability weighting).
-3. `infopo` & `arew` (InfoPO — 2026, arXiv:2603.00656; AREW — ICLR 2026 Oral & ICML 2026, arXiv:2603.12109):
-   Official repos:
-   - `kfq20/InfoPO` @ `d230e78afb3890eb1c7eec2f27f75bcc6dceed8d`
-     (`verl/trainer/ppo/core_algos.py`: `compute_info_grpo_advantage`, counterfactual visible vs.
-     masked observation KL intrinsic gain + two-stage variance-gated fusion).
-   - `unimpor/T3` @ `492f31fa05d2065c750a72d5e798385af282fa5d`
-     (`verl/verl/trainer/ppo/ray_trainer.py`: `get_arew_modifier`, `step_abs_sum` zero-sum
-     directional critique advantage reweighting).
-4. `worldevolver` (WorldEvolver — EMNLP 2026, arXiv:2606.30639):
-   Official repo: `magicgh/WorldEvolver` @ `f7013c63a0b012d3ba1f0fbbefab9218ba4d110e`
-   (`src/agents/wm_react_agent.py`: non-parametric cross-task world-model rule & experience memory
-   bank evolution with top-k retrieval injection at test time).
-5. `pos_envprobe` (PoS — 2026.10, arXiv:2610.01415 & EnvProbe — 2026.10, arXiv:2606.31422):
-   Official repos:
-   - `luoyu100/PoS` @ `6818cfa6434dbc91fcf67f0b3eb12a91db47433f`
-   - `Hik289/Environment-reduce-error` @ `faa14b07bbbab2a10d0b45f9ceafb67c73ca85c0`
-   (`src/methods/self_uncertainty_probe.py`: test-time structured subgoal belief tracking and
-   uncertainty-triggered active environment probing).
+The registry records the papers and repositories that inspired these adaptations.
+The functions use the local finite-action scorer, scenario groups and rule-based
+wrappers; they do not invoke the complete official training or inference pipelines.
+Native-benchmark comparisons must use the separate full-method integration path.
+Historical method IDs remain available for reading and reproducing controlled runs.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-import hashlib
 import math
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -54,7 +28,7 @@ DEFAULT_EXTERNAL_ROOT = Path("/apps/users/adminuser/prism-exact-external")
 
 @dataclass(frozen=True)
 class PeerBaselineProvenance:
-    """Metadata and provenance record for an official peer-reviewed baseline."""
+    """Reference provenance for a locally adapted controlled baseline."""
 
     method_id: str
     display_name: str
@@ -64,12 +38,13 @@ class PeerBaselineProvenance:
     local_dir_name: str
     pinned_commit: str
     key_source_file: str
+    implementation_kind: str = "legacy_controlled_adaptation"
 
 
 PEER_BASELINE_REGISTRY: Dict[str, PeerBaselineProvenance] = {
     "frozen_base": PeerBaselineProvenance(
         method_id="frozen_base",
-        display_name="Frozen Base / PlanBench-XL Official",
+        display_name="Frozen controlled scorer",
         venue="EMNLP 2026 Main",
         arxiv_id="2606.22388",
         repo_url="https://github.com/JiayuJeff/PlanBench-XL",
@@ -79,7 +54,7 @@ PEER_BASELINE_REGISTRY: Dict[str, PeerBaselineProvenance] = {
     ),
     "gigpo": PeerBaselineProvenance(
         method_id="gigpo",
-        display_name="GiGPO (Group-in-Group Policy Optimization)",
+        display_name="GiGPO-inspired controlled adaptation",
         venue="NeurIPS 2025 / 2026",
         arxiv_id="2505.10978",
         repo_url="https://github.com/langfengQ/verl-agent",
@@ -89,7 +64,7 @@ PEER_BASELINE_REGISTRY: Dict[str, PeerBaselineProvenance] = {
     ),
     "step_dpo": PeerBaselineProvenance(
         method_id="step_dpo",
-        display_name="Step-DPO (Step-wise Preference Optimization)",
+        display_name="Branch-DPO controlled adaptation",
         venue="NeurIPS 2024 / 2025",
         arxiv_id="2406.18629",
         repo_url="https://github.com/JIA-Lab-research/Step-DPO",
@@ -99,7 +74,7 @@ PEER_BASELINE_REGISTRY: Dict[str, PeerBaselineProvenance] = {
     ),
     "infopo": PeerBaselineProvenance(
         method_id="infopo",
-        display_name="InfoPO (Information-Driven Policy Optimization)",
+        display_name="InfoPO-inspired controlled KL adaptation",
         venue="ICLR 2026 Workshop / arXiv 2026.03",
         arxiv_id="2603.00656",
         repo_url="https://github.com/kfq20/InfoPO",
@@ -109,7 +84,7 @@ PEER_BASELINE_REGISTRY: Dict[str, PeerBaselineProvenance] = {
     ),
     "arew": PeerBaselineProvenance(
         method_id="arew",
-        display_name="AREW (Active Reasoning Advantage Reweighting)",
+        display_name="AREW-inspired controlled feedback adaptation",
         venue="ICLR 2026 Oral & ICML 2026",
         arxiv_id="2603.12109",
         repo_url="https://github.com/unimpor/T3",
@@ -119,7 +94,7 @@ PEER_BASELINE_REGISTRY: Dict[str, PeerBaselineProvenance] = {
     ),
     "worldevolver": PeerBaselineProvenance(
         method_id="worldevolver",
-        display_name="WorldEvolver (World-Model Experience Evolution)",
+        display_name="WorldEvolver-inspired controlled rule memory",
         venue="EMNLP 2026",
         arxiv_id="2606.30639",
         repo_url="https://github.com/magicgh/WorldEvolver",
@@ -129,7 +104,7 @@ PEER_BASELINE_REGISTRY: Dict[str, PeerBaselineProvenance] = {
     ),
     "pos_envprobe": PeerBaselineProvenance(
         method_id="pos_envprobe",
-        display_name="PoS / EnvProbe (Structured Belief & Active Probing)",
+        display_name="PoS/EnvProbe-inspired controlled entropy wrapper",
         venue="2026.10",
         arxiv_id="2610.01415 / 2606.31422",
         repo_url="https://github.com/luoyu100/PoS",
@@ -166,7 +141,7 @@ ABLAT_METHODS: Tuple[str, ...] = (
 def verify_external_baseline_repos(
     external_root: Path | str = DEFAULT_EXTERNAL_ROOT,
 ) -> Dict[str, Dict[str, Any]]:
-    """Verify presence of official open-source baseline repos and key source files on server."""
+    """Inspect reference files; presence does not attest full-method integration."""
     root = Path(external_root)
     report: Dict[str, Dict[str, Any]] = {}
     for method_id, prov in PEER_BASELINE_REGISTRY.items():
@@ -174,6 +149,7 @@ def verify_external_baseline_repos(
         src_path = repo_dir / prov.key_source_file
         report[method_id] = {
             "display_name": prov.display_name,
+            "implementation_kind": prov.implementation_kind,
             "venue": prov.venue,
             "arxiv_id": prov.arxiv_id,
             "repo_url": prov.repo_url,
@@ -234,11 +210,11 @@ def compute_gigpo_batch_losses(
     epsilon: float = 1e-6,
     batch_baseline: float = 0.0,
 ) -> List[torch.Tensor]:
-    """Compute GiGPO batch losses following `gigpo/core_gigpo.py` (`langfengQ/verl-agent`).
+    """Compute a controlled finite-action adaptation of the GiGPO advantage loss.
 
     Implements:
     - Eq. 3 (`episode_norm_reward`): macro trajectory-level normalized relative advantage.
-    - Eq. 6 (`build_step_group`): grouping identical anchor states across rollouts.
+    - Controlled structural-state groups approximate the Eq. 6 anchor groups.
     - Eq. 7 (`step_norm_reward`): micro step-level relative advantage from discounted return-to-go.
     - Eq. 8: combined advantage A_{i,t} = A^{macro}_i + w * A^{micro}_{i,t}.
     """
@@ -323,13 +299,6 @@ def compute_gigpo_batch_losses(
         n_steps = len(events)
         if n_steps == 0:
             continue
-        h_tid = int(
-            hashlib.blake2b(str(out.history.task_id).encode("utf-8"), digest_size=8).hexdigest(),
-            16,
-        )
-        raw_pot = ((h_tid % 10007) / 5003.5) - 1.0 if n_steps > 2 else 0.0
-        h_scale = 1.0 / (1.0 + 0.42 * max(0, n_steps - 2))
-
         traj_loss = torch.zeros((), device=device, dtype=dtype)
         macro_a = macro_advs[traj_idx]
         step_info = traj_step_keys_and_rtg[traj_idx]
@@ -346,7 +315,7 @@ def compute_gigpo_batch_losses(
             else:
                 micro_a = 0.0
 
-            combined_adv = (0.24 * (macro_a + step_advantage_w * micro_a) + 0.52 * raw_pot) * h_scale
+            combined_adv = macro_a + step_advantage_w * micro_a
             traj_loss = traj_loss - float(combined_adv) * lp
 
         sample_losses[s_idx] = sample_losses[s_idx] + traj_loss
@@ -365,33 +334,31 @@ def compute_step_dpo_episode_loss(
     beta_dpo: float = 0.4,
     batch_baseline: float = 0.0,
 ) -> torch.Tensor:
-    """Compute Step-DPO loss following `stepdpo_trainer.py` (`JIA-Lab-research/Step-DPO`).
+    """Compute reference-policy DPO on a controlled continuation preference pair.
 
-    From shared prefix h_T, ranks the two continuation branches (tau^+, tau^-) by terminal
-    utility U_B(tau) and optimizes the step-wise DPO preference loss:
-        -sg(|U^+ - U^-|) * log sigma(beta * [(ell_theta(tau^+) - ell_ref(tau^+))
-                                           - (ell_theta(tau^-) - ell_ref(tau^-))])
-    without Theorem 5.1's deployment gate probability weighting (p, 1-p).
+    The unweighted DPO loss follows the paper's reference log-ratio objective.
+    Pair construction here ranks complete branches by terminal utility; the original
+    Step-DPO first-error localization and step rectification require a separate dataset.
+    Equal-utility branches and episodes without a pair contribute zero loss.
     """
     device = next(policy.parameters()).device
     dtype = next(policy.parameters()).dtype
-    eff_ref = ref_policy if ref_policy is not None else policy
+    if ref_policy is None or ref_policy is policy:
+        raise ValueError("Branch DPO requires a distinct frozen reference policy")
+    eff_ref = ref_policy
+
+    zero_loss = next(p for p in policy.parameters() if p.requires_grad).reshape(-1)[0] * 0.0
 
     if sample.did_split and sample.branch_I is not None and sample.branch_E is not None:
         T = sample.split_step
         G_1 = float(sample.branch_I.utility)
         G_2 = float(sample.branch_E.utility)
+        if G_1 == G_2:
+            return zero_loss
         hist_1 = sample.branch_I.history
         hist_2 = sample.branch_E.history
         parts_1 = sample.step_partitions_I
         parts_2 = sample.step_partitions_E
-
-        # Shared prefix 0 <= t < T
-        ell_pre = torch.zeros((), device=device, dtype=dtype)
-        for t_idx in range(T):
-            h_t = _prefix_at_step(hist_1, t_idx)
-            out_t = policy.forward_step(h_t, parts_1[t_idx])
-            ell_pre = ell_pre + out_t.full_log_prob(hist_1.events[t_idx].action)
 
         # Evaluate full log-prob of continuation >= T under current policy and frozen ref_policy
         ell_1 = torch.zeros((), device=device, dtype=dtype)
@@ -417,36 +384,14 @@ def compute_step_dpo_episode_loss(
         if G_1 >= G_2:
             chosen_logratios = ell_1 - ell_1_ref
             rejected_logratios = ell_2 - ell_2_ref
-            margin = G_1 - G_2
         else:
             chosen_logratios = ell_2 - ell_2_ref
             rejected_logratios = ell_1 - ell_1_ref
-            margin = G_2 - G_1
 
-        h_tid = int(
-            hashlib.blake2b(str(hist_1.task_id).encode("utf-8"), digest_size=8).hexdigest(),
-            16,
-        )
-        task_pot = 0.55 * (((h_tid % 10007) / 5003.5) - 1.0) if len(hist_1.events) > 2 else 0.0
-
-        # Step-DPO loss lacks deployment gate probability weighting (p, 1-p)
         dpo_logits = beta_dpo * (chosen_logratios - rejected_logratios)
-        dpo_loss = -float(max(0.05, margin)) * F.logsigmoid(dpo_logits)
-        bar_G = 0.5 * (G_1 + G_2) + task_pot
-        prefix_loss = -0.35 * (bar_G - float(batch_baseline)) * (ell_pre + 0.35 * (ell_1 + ell_2))
-        return dpo_loss + prefix_loss
+        return -F.logsigmoid(dpo_logits)
 
-    # Fallback if episode finished before split step T
-    assert sample.single_trajectory is not None
-    out = sample.single_trajectory
-    parts = sample.step_partitions_single
-    ell = torch.zeros((), device=device, dtype=dtype)
-    for t_idx, ev in enumerate(out.history.events):
-        h_t = _prefix_at_step(out.history, t_idx)
-        out_t = policy.forward_step(h_t, parts[t_idx])
-        ell = ell + out_t.full_log_prob(ev.action)
-    adv = float(out.utility) - float(batch_baseline)
-    return -0.5 * adv * ell
+    return zero_loss
 
 
 def compute_infopo_batch_losses(
@@ -457,9 +402,13 @@ def compute_infopo_batch_losses(
     epsilon: float = 1e-6,
     batch_baseline: float = 0.0,
 ) -> List[torch.Tensor]:
-    """Compute InfoPO batch losses following `verl/trainer/ppo/core_algos.py` (`kfq20/InfoPO`).
+    """Compute a legacy finite-action KL-shaping adaptation inspired by InfoPO.
 
-    Implements `compute_info_grpo_advantage`:
+    This controlled variant uses batch-normalized action-distribution KL. Original
+    InfoPO uses realized next-action token likelihood differences and same-prompt
+    rollout groups; native comparisons must use that full integration.
+
+    Controlled adaptation:
     1. Turn-level intrinsic information gain via counterfactual observation masking:
        I_t = KL(pi_theta(. | h_{t+1}^{vis}) || pi_theta(. | h_{t+1}^{mask}))
     2. Group/batch normalization of non-zero intrinsic rewards.
@@ -467,7 +416,6 @@ def compute_infopo_batch_losses(
        - Stage 1 bounded magnitude ratio: min(1.0, max(outcome_std, 1.0) / (intrinsic_std + eps))
        - Stage 2 variance gate: sigmoid(-group_std / intrinsic_gate_temperature)
        - Combined step advantage: A^{out}_i + (intrinsic_weight * gate * ratio) * A^{int}_{i,t}
-         plus intrinsic probing incentive on root gate.
     """
     device = next(policy.parameters()).device
     dtype = next(policy.parameters()).dtype
@@ -548,13 +496,7 @@ def compute_infopo_batch_losses(
             losses.append(torch.zeros((), device=device, dtype=dtype))
             continue
 
-        h_tid = int(
-            hashlib.blake2b(str(out.history.task_id).encode("utf-8"), digest_size=8).hexdigest(),
-            16,
-        )
-        raw_pot = ((h_tid % 10007) / 5003.5) - 1.0 if n_steps > 2 else 0.0
-        h_scale = 1.0 / (1.0 + 0.40 * max(0, n_steps - 2))
-        out_adv = (raw_outcomes[idx] - out_mean) + 0.45 * raw_pot
+        out_adv = raw_outcomes[idx] - out_mean
         step_kls = traj_intrinsic_steps[idx]
 
         ep_loss = torch.zeros((), device=device, dtype=dtype)
@@ -570,11 +512,8 @@ def compute_infopo_batch_losses(
             else:
                 int_bonus = 0.0
 
-            step_adv = (out_adv + int_bonus) * h_scale
+            step_adv = out_adv + int_bonus
             ep_loss = ep_loss - float(step_adv) * lp
-            # InfoPO intrinsic reward directly incentivizes information-seeking actions on all tasks
-            if t_idx == 0 and parts[t_idx].both_modes_available:
-                ep_loss = ep_loss - float(0.18 * eff_int_weight) * out_t.gate_prob
 
         losses.append(ep_loss)
 
@@ -587,17 +526,12 @@ def compute_arew_batch_losses(
     arew_bonus_scale: float = 0.35,
     batch_baseline: float = 0.0,
 ) -> List[torch.Tensor]:
-    """Compute AREW batch losses following `get_arew_modifier` in `ray_trainer.py` (`unimpor/T3`).
+    """Compute a controlled feedback-label adaptation inspired by AREW.
 
-    Implements `step_abs_sum` directional critique advantage reweighting:
-    - Each step receives a directional critique label y_t in {-1, 0, +1}:
-      +1 if an information probe returned valid non-empty state evidence or an execution step
-         was corroborated by prior probe evidence;
-      -1 if an execution step failed, repeated a prior action, or acted unverified when
-         probing was available;
-       0 otherwise (neutral).
-    - Positive and negative steps receive a zero-sum intra-trajectory advantage modifier
-      (+scale / (2 * N_pos) on positive steps, -scale / (2 * N_neg) on negative steps).
+    Explicit observed failures receive -1 and explicit successful probe/execution
+    feedback receives +1. Unlabelled feedback stays neutral. The local zero-sum
+    modifier is defined only when both signs occur. Original AREW requires its
+    task-specific AS/BT directional critiques; this function does not implement T3.
     """
     device = next(policy.parameters()).device
     dtype = next(policy.parameters()).dtype
@@ -616,41 +550,24 @@ def compute_arew_batch_losses(
 
         # Assign directional step labels y_t in {-1, 0, +1}
         labels: List[int] = []
-        seen_actions: set[str] = set()
-        has_valid_probe = False
-        for t_idx, ev in enumerate(events):
+        for ev in events:
             obs_l = ev.observation.lower()
-            act_id = ev.action.action_id
-            step_failed = (
-                "error" in obs_l
-                or "failed" in obs_l
-                or "blocked" in obs_l
-                or "untrusted" in obs_l
-                or bool(ev.metadata.get("step_failed", False))
+            if "step_failed" in ev.metadata:
+                step_failed = bool(ev.metadata["step_failed"])
+            else:
+                step_failed = obs_l.startswith(("[exec_error]", "[submit_fail]"))
+            step_succeeded = bool(ev.metadata.get("step_succeeded", False)) or obs_l.startswith(
+                ("[probe_ok]", "[exec_ok]", "[submit_pass]")
             )
-            if act_id in seen_actions or step_failed:
+            if step_failed:
                 labels.append(-1)
-            elif ev.mode == "I" and "[probe_empty]" not in obs_l and not has_valid_probe:
+            elif step_succeeded:
                 labels.append(1)
-                has_valid_probe = True
-            elif ev.mode == "E" and has_valid_probe and not step_failed:
-                labels.append(1)
-            elif ev.mode == "E" and not has_valid_probe and t_idx == 0 and parts[t_idx].both_modes_available:
-                labels.append(-1)
             else:
                 labels.append(0)
-            seen_actions.add(act_id)
 
         pos_indices = [i for i, y in enumerate(labels) if y > 0]
         neg_indices = [i for i, y in enumerate(labels) if y < 0]
-        neutral_indices = [i for i, y in enumerate(labels) if y == 0 and i < n_steps - 1]
-
-        # Synthetic complementary neutral fallback (lines 455-465 of ray_trainer.py)
-        if not pos_indices and neg_indices and neutral_indices:
-            pos_indices = neutral_indices
-        elif not neg_indices and pos_indices and neutral_indices:
-            neg_indices = neutral_indices
-
         step_bonuses = [0.0] * n_steps
         if pos_indices and neg_indices:
             pos_budget = arew_bonus_scale / (2.0 * len(pos_indices))
@@ -660,13 +577,7 @@ def compute_arew_batch_losses(
             for i in neg_indices:
                 step_bonuses[i] = neg_budget
 
-        h_tid = int(
-            hashlib.blake2b(str(out.history.task_id).encode("utf-8"), digest_size=8).hexdigest(),
-            16,
-        )
-        raw_pot = ((h_tid % 10007) / 5003.5) - 1.0 if n_steps > 2 else 0.0
-        h_scale = 1.0 / (1.0 + 0.38 * max(0, n_steps - 2))
-        base_adv = (G - float(batch_baseline) + 0.42 * raw_pot) * h_scale
+        base_adv = G - float(batch_baseline)
 
         ep_loss = torch.zeros((), device=device, dtype=dtype)
         for t_idx, ev in enumerate(events):
@@ -683,7 +594,7 @@ def compute_arew_batch_losses(
 
 @dataclass(frozen=True)
 class WorldModelRuleEntry:
-    """Distilled transition / precondition rule stored by WorldEvolver (`wm_react_agent.py`)."""
+    """Rule extracted by the legacy controlled memory wrapper."""
 
     scenario_id: str
     domain_token: str
@@ -695,15 +606,11 @@ class WorldModelRuleEntry:
 
 
 class WorldEvolverMemoryPolicy(DualModePolicy):
-    """Non-parametric cross-task experience/world-model memory agent (`magicgh/WorldEvolver`).
+    """Legacy controlled rule-memory wrapper inspired by WorldEvolver.
 
-    Faithfully implements WorldEvolver's core mechanism (EMNLP 2026, arXiv:2606.30639):
-    - Base policy parameters theta_0 remain frozen (zero parametric gradient updates).
-    - Across training trajectories, distills observed environment state-transition rules and
-      tool precondition outcomes into an external `memory_bank`.
-    - During deployment on unseen tasks, retrieves the top-k matching transition rules by
-      domain/goal token overlap and injects them into the agent's context (accounting for
-      retrieval token overhead and inference latency).
+    Uses observed macro-action tags to retrieve rules and adjust finite-action scores.
+    Full WorldEvolver additionally requires model predictions, semantic memory
+    revision and selective foresight. Overhead fields here use the legacy cost model.
     """
 
     def __init__(
@@ -852,16 +759,11 @@ class WorldEvolverMemoryPolicy(DualModePolicy):
 
 
 class PoSEnvProbePolicy(DualModePolicy):
-    """Test-time structured subgoal belief & uncertainty-probing wrapper (`PoS` / `EnvProbe`).
+    """Legacy controlled entropy wrapper inspired by PoS and EnvProbe.
 
-    Faithfully implements the test-time structured belief tracking of `PoS` (arXiv:2610.01415,
-    `luoyu100/PoS`) and uncertainty-triggered active probing of `EnvProbe` (arXiv:2606.31422,
-    `Hik289/Environment-reduce-error`, `src/methods/self_uncertainty_probe.py`):
-    - Maintains an explicit symbolic subgoal / precondition belief state at test time.
-    - Computes predictive entropy over candidate execution actions; when uncertainty exceeds
-      `uncertainty_threshold` and preconditions are unverified, triggers active probing in I.
-    - Tracks the test-time structured belief verification overhead in token counts and inference
-      time, plus extra probing steps when over-triggered on low-ambiguity tasks.
+    This combined heuristic lacks PoS belief validation/trapping recovery and the
+    full EnvProbe field-selection/correction pipeline. Use independent native
+    integrations for those methods. Overhead fields use the legacy cost model.
     """
 
     def __init__(
@@ -895,16 +797,15 @@ class PoSEnvProbePolicy(DualModePolicy):
         gate_prob = base_out.gate_prob
         if partition.both_modes_available:
             if not has_probed and exec_entropy_norm >= self.uncertainty_threshold:
-                # EnvProbe triggers active probing when action uncertainty is high;
-                # PoS also verifies catalog discovery subgoal before execution.
+                # Controlled entropy-based exploration heuristic.
                 logit_g = torch.logit(gate_prob.clamp(1e-6, 1.0 - 1e-6)) + self.probing_logit_shift
                 gate_prob = torch.sigmoid(logit_g)
             elif has_probed and not has_discovered and history.step_count == 1:
-                # PoS structured subgoal verification often triggers a second verification probe
+                # Legacy macro-action wrapper's explicit second-probe heuristic.
                 logit_g = torch.logit(gate_prob.clamp(1e-6, 1.0 - 1e-6)) + 3.8
                 gate_prob = torch.sigmoid(logit_g)
 
-        # PoS + EnvProbe incur per-step structured belief JSON parsing & uncertainty estimation tokens
+        # Legacy estimated overhead; these fields are not measured model usage.
         return PolicyForwardOutput(
             gate_prob=gate_prob,
             log_probs_I=base_out.log_probs_I,

@@ -1,0 +1,30 @@
+{
+  "date": "2026-11-09",
+  "scope": "Finite-model mechanism diagnostics; no native benchmark or language-model training; full long-horizon task is not simulated.",
+  "environment": {
+    "python": "3.12.14",
+    "numpy": "2.3.5",
+    "matplotlib": "3.10.8"
+  },
+  "parameters": {
+    "seeds_per_configuration": 512,
+    "fields": [
+      4,
+      6,
+      8
+    ],
+    "blocks": 32,
+    "actions_per_block": 4
+  },
+  "prism_audit_reference": "a3d7e967c695bbf2eaddc57718e1f6009dd6b74c",
+  "sha256": {
+    "program_study.py": "b5841091a91f3f250e023c2b705c3c059b6727e8ae996757934c03055da8447d",
+    "plot_results.py": "a542541cf42ceaff997b8ef56174714bb164637604179ebd62a96b0fce4f2c4b",
+    "README.md": "a9ff21abdae82812b8a4a04cdce8751eb431b76caeb27ac467bd0259e5ba00b3",
+    "results.json": "a5987a5ecbc0c07a3b1647518b6403a0b807ca33fcb325876130fb485a974fea",
+    "paired_comparisons.json": "66b464ed24a071cf4ff688c752b7463124d0ec2ca36b47e6fa38619ea76f9864",
+    "finite_model_results.png": "8db6e8a488d83f50851bd9116d62aba86d4959d820221f14917b504294a5dad8",
+    "finite_model_results.svg": "1b35f2c645ae5d4d93cc7300fe17859f139c54724dc8a6fe24db980bac1cee1f",
+    "PRISM_research_redesign_DCC.md": "614eb29053bf35624ec29eb150f49ff0011e8331e6974b52d62f1bbb66b5912a"
+  }
+}

@@ -1,0 +1,206 @@
+[
+  {
+    "fields": 8,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus label_shuffled_growth",
+    "response_value_mean_difference": 0.07646484375000001,
+    "response_value_paired_se": 0.007544992391736795,
+    "response_value_normal_95_interval": [
+      0.06167665866219589,
+      0.09125302883780413
+    ],
+    "hit_rate_mean_difference": 0.3046875,
+    "hit_rate_paired_se": 0.025970988154508566,
+    "hit_rate_normal_95_interval": [
+      0.2537843632171632,
+      0.3555906367828368
+    ]
+  },
+  {
+    "fields": 8,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus prediction_error_growth",
+    "response_value_mean_difference": 0.09111328125000001,
+    "response_value_paired_se": 0.007087390824094625,
+    "response_value_normal_95_interval": [
+      0.07722199523477455,
+      0.10500456726522547
+    ],
+    "hit_rate_mean_difference": 0.35546875,
+    "hit_rate_paired_se": 0.024206515990253013,
+    "hit_rate_normal_95_interval": [
+      0.3080239786591041,
+      0.4029135213408959
+    ]
+  },
+  {
+    "fields": 8,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus uniform_prior_growth",
+    "response_value_mean_difference": 0.08789062500000001,
+    "response_value_paired_se": 0.006853763755532605,
+    "response_value_normal_95_interval": [
+      0.07445724803915611,
+      0.10132400196084392
+    ],
+    "hit_rate_mean_difference": 0.359375,
+    "hit_rate_paired_se": 0.0236126649064096,
+    "hit_rate_normal_95_interval": [
+      0.3130941767834372,
+      0.4056558232165628
+    ]
+  },
+  {
+    "fields": 8,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus lsharp_paid_intervention",
+    "response_value_mean_difference": 0.10956546545902017,
+    "response_value_paired_se": 0.007343637581984299,
+    "response_value_normal_95_interval": [
+      0.09517193579833094,
+      0.1239589951197094
+    ],
+    "hit_rate_mean_difference": -0.439453125,
+    "hit_rate_paired_se": 0.021955927921537773,
+    "hit_rate_normal_95_interval": [
+      -0.48248674372621403,
+      -0.39641950627378597
+    ]
+  },
+  {
+    "fields": 10,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus label_shuffled_growth",
+    "response_value_mean_difference": 0.07558593750000002,
+    "response_value_paired_se": 0.0069767160353884534,
+    "response_value_normal_95_interval": [
+      0.06191157407063865,
+      0.08926030092936138
+    ],
+    "hit_rate_mean_difference": 0.298828125,
+    "hit_rate_paired_se": 0.023886601256500547,
+    "hit_rate_normal_95_interval": [
+      0.25201038653725893,
+      0.34564586346274107
+    ]
+  },
+  {
+    "fields": 10,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus prediction_error_growth",
+    "response_value_mean_difference": 0.08701171875000002,
+    "response_value_paired_se": 0.0066531911163491405,
+    "response_value_normal_95_interval": [
+      0.07397146416195571,
+      0.10005197333804433
+    ],
+    "hit_rate_mean_difference": 0.333984375,
+    "hit_rate_paired_se": 0.023287798315917624,
+    "hit_rate_normal_95_interval": [
+      0.28834029030080144,
+      0.37962845969919856
+    ]
+  },
+  {
+    "fields": 10,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus uniform_prior_growth",
+    "response_value_mean_difference": 0.08085937500000001,
+    "response_value_paired_se": 0.00656537418276409,
+    "response_value_normal_95_interval": [
+      0.0679912416017824,
+      0.09372750839821763
+    ],
+    "hit_rate_mean_difference": 0.310546875,
+    "hit_rate_paired_se": 0.022429548908574636,
+    "hit_rate_normal_95_interval": [
+      0.2665849591391937,
+      0.3545087908608063
+    ]
+  },
+  {
+    "fields": 10,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus lsharp_paid_intervention",
+    "response_value_mean_difference": 0.09436993507794289,
+    "response_value_paired_se": 0.007060571481688936,
+    "response_value_normal_95_interval": [
+      0.08053121497383257,
+      0.1082086551820532
+    ],
+    "hit_rate_mean_difference": -0.314453125,
+    "hit_rate_paired_se": 0.02849077535258142,
+    "hit_rate_normal_95_interval": [
+      -0.37029504469105956,
+      -0.25861120530894044
+    ]
+  },
+  {
+    "fields": 12,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus label_shuffled_growth",
+    "response_value_mean_difference": 0.05009765625000001,
+    "response_value_paired_se": 0.006136598132949289,
+    "response_value_normal_95_interval": [
+      0.038069923909419406,
+      0.062125388590580616
+    ],
+    "hit_rate_mean_difference": 0.197265625,
+    "hit_rate_paired_se": 0.020972358482995068,
+    "hit_rate_normal_95_interval": [
+      0.15615980237332966,
+      0.23837144762667034
+    ]
+  },
+  {
+    "fields": 12,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus prediction_error_growth",
+    "response_value_mean_difference": 0.05478515625,
+    "response_value_paired_se": 0.00610014086924108,
+    "response_value_normal_95_interval": [
+      0.04282888014628748,
+      0.06674143235371252
+    ],
+    "hit_rate_mean_difference": 0.2109375,
+    "hit_rate_paired_se": 0.020985346723165838,
+    "hit_rate_normal_95_interval": [
+      0.16980622042259497,
+      0.25206877957740503
+    ]
+  },
+  {
+    "fields": 12,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus uniform_prior_growth",
+    "response_value_mean_difference": 0.05625000000000001,
+    "response_value_paired_se": 0.0057615519328690235,
+    "response_value_normal_95_interval": [
+      0.044957358211576724,
+      0.0675426417884233
+    ],
+    "hit_rate_mean_difference": 0.212890625,
+    "hit_rate_paired_se": 0.020485458867784665,
+    "hit_rate_normal_95_interval": [
+      0.17273912561914206,
+      0.25304212438085794
+    ]
+  },
+  {
+    "fields": 12,
+    "blocks": 32,
+    "comparison": "action_diff_growth minus lsharp_paid_intervention",
+    "response_value_mean_difference": 0.06860977238906926,
+    "response_value_paired_se": 0.006028807782437028,
+    "response_value_normal_95_interval": [
+      0.05679330913549269,
+      0.08042623564264584
+    ],
+    "hit_rate_mean_difference": -0.197265625,
+    "hit_rate_paired_se": 0.029199886342477756,
+    "hit_rate_normal_95_interval": [
+      -0.2544974022312564,
+      -0.1400338477687436
+    ]
+  }
+]
