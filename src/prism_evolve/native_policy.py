@@ -1633,6 +1633,11 @@ class NativeCausalPolicy(nn.Module):
             self.dcc_libraries[name] = ProgramLibrary(name)
         return self.dcc_libraries[name]
 
+    def get_active_dcc_model_view(self):
+        """Return the immutable episode-fixed ModelView (phi_0 for reset_parameters/k0_planner, phi_T otherwise)."""
+        use_init = self.dcc_eval_variant in ("reset_parameters", "k0_planner")
+        return self.dcc_ensemble.active_model_view(use_initial_params=use_init)
+
     def reset_dcc_episode(
         self,
         benchmark: str,
@@ -1642,13 +1647,81 @@ class NativeCausalPolicy(nn.Module):
     ) -> None:
         """Reset intra-task state s_{0,phi}(h_0) and active program state while retaining cross-task phi and Xi."""
         self.get_dcc_library(benchmark)
-        self.dcc_active_belief = self.dcc_ensemble.reset_intra_task_belief(device=self.device)
+        view = self.get_active_dcc_model_view()
+        self.dcc_active_belief = view.reset_intra_task_belief(device=self.device)
         self.dcc_active_program_state = None
-        self.dcc_active_member_index = member_index
+        if member_index is not None:
+            self.dcc_active_member_index = member_index
         self.dcc_episode_events = []
         if task_instruction:
             self.dcc_task_instruction = str(task_instruction)
         self.dcc_remaining_budget_ratio = 1.0
+        self._dcc_context_cache_key: str | None = None
+        self._dcc_context_cache_vec: tuple[float, ...] = ()
+
+    @torch.no_grad()
+    def extract_frozen_semantic_context(
+        self,
+        goal_text: str,
+        public_fields: Mapping[str, str],
+    ) -> tuple[float, ...]:
+        """Extract 32-dim shared semantic representation from the frozen Qwen input embedding matrix."""
+        from .native_dcc import FROZEN_HISTORY_DIM, _canonical_json
+
+        cache_key = f"{goal_text}||{_canonical_json(dict(public_fields))}"
+        if getattr(self, "_dcc_context_cache_key", None) == cache_key and getattr(self, "_dcc_context_cache_vec", ()):
+            return self._dcc_context_cache_vec
+
+        emb_layer = self.model.get_input_embeddings()
+        text = f"Goal: {goal_text}\nObserved: {_canonical_json(dict(public_fields))}"
+        tok_ids = self.tokenizer.encode(text, add_special_tokens=False)[:256]
+        if not tok_ids or emb_layer is None:
+            from .native_dcc import ControlledResponseEnsemble
+            vec = ControlledResponseEnsemble.deterministic_semantic_projection(text, FROZEN_HISTORY_DIM)
+            self._dcc_context_cache_key = cache_key
+            self._dcc_context_cache_vec = vec
+            return vec
+
+        ids_t = torch.tensor(tok_ids, dtype=torch.long, device=emb_layer.weight.device)
+        embeds = emb_layer(ids_t).float()  # (L, D)
+        mean_emb = embeds.mean(dim=0)      # (D,)
+        chunks = mean_emb.tensor_split(FROZEN_HISTORY_DIM)
+        pooled = torch.stack([c.mean() for c in chunks])
+        norm = pooled.norm().clamp(min=1e-6)
+        vec = tuple(float(x) for x in (pooled / norm).detach().cpu().tolist())
+        self._dcc_context_cache_key = cache_key
+        self._dcc_context_cache_vec = vec
+        return vec
+
+    @torch.no_grad()
+    def extract_frozen_action_embeddings(
+        self,
+        action_texts: Sequence[str],
+    ) -> list[tuple[float, ...]]:
+        """Batch-extract 16-dim semantic action embeddings from the frozen Qwen input embedding matrix."""
+        from .native_dcc import FROZEN_ACTION_DIM, ControlledResponseEnsemble
+
+        emb_layer = self.model.get_input_embeddings()
+        results: list[tuple[float, ...]] = []
+        if emb_layer is None:
+            return [
+                ControlledResponseEnsemble.deterministic_semantic_projection(act, FROZEN_ACTION_DIM)
+                for act in action_texts
+            ]
+        dev = emb_layer.weight.device
+        for act in action_texts:
+            tok_ids = self.tokenizer.encode(act, add_special_tokens=False)[:64]
+            if not tok_ids:
+                results.append(tuple(0.0 for _ in range(FROZEN_ACTION_DIM)))
+                continue
+            ids_t = torch.tensor(tok_ids, dtype=torch.long, device=dev)
+            embeds = emb_layer(ids_t).float()
+            mean_emb = embeds.mean(dim=0)
+            chunks = mean_emb.tensor_split(FROZEN_ACTION_DIM)
+            pooled = torch.stack([c.mean() for c in chunks])
+            norm = pooled.norm().clamp(min=1e-6)
+            results.append(tuple(float(x) for x in (pooled / norm).detach().cpu().tolist()))
+        return results
 
     def snapshot_dcc_controller_state(self) -> dict[str, Any]:
         """Capture complete intra-task controller state (belief, residual program state, bindings, events)."""
@@ -1665,6 +1738,7 @@ class NativeCausalPolicy(nn.Module):
             "episode_events": list(self.dcc_episode_events),
             "task_instruction": str(self.dcc_task_instruction),
             "remaining_budget_ratio": float(self.dcc_remaining_budget_ratio),
+            "eval_variant": str(self.dcc_eval_variant),
         }
 
     def restore_dcc_controller_state(self, state: Mapping[str, Any]) -> None:
@@ -1692,7 +1766,11 @@ class NativeCausalPolicy(nn.Module):
         terminal_done: bool = False,
         terminal_success: bool = False,
     ) -> dict[str, Any]:
-        """Unified intra-task update `next_state = observe(previous_state, actual_action, actual_public_response)`."""
+        """Unified intra-task update `next_state = observe(previous_state, actual_action, actual_public_response)`.
+
+        Uses the episode's fixed `ModelView` (phi_0 for reset_parameters/k0_planner, phi_T otherwise)
+        so filtering and Q-evaluation never mix phi_T states with phi_0 values (fixes F14).
+        """
         from .native_dcc import PublicBenchmarkBinder
 
         if self.dcc_active_belief is None:
@@ -1704,13 +1782,18 @@ class NativeCausalPolicy(nn.Module):
         post_fields = PublicBenchmarkBinder.extract_public_fields(
             benchmark, task_instruction, events, action_schema
         )
-        next_belief, outcome_bin, outcome_probs = self.dcc_ensemble.observe(
+        frozen_ctx = self.extract_frozen_semantic_context(task_instruction, pre_fields)
+        frozen_act = self.extract_frozen_action_embeddings([actual_action])[0]
+        active_view = self.get_active_dcc_model_view()
+        next_belief, outcome_bin, outcome_probs = active_view.observe(
             self.dcc_active_belief,
             goal_text=task_instruction,
             pre_public_fields=pre_fields,
             actual_action=actual_action,
             post_public_fields=post_fields,
             remaining_budget_ratio=remaining_budget_ratio,
+            frozen_context_vec=frozen_ctx,
+            frozen_action_vec=frozen_act,
             had_error=had_error,
             terminal_done=terminal_done,
             terminal_success=terminal_success,
@@ -1720,7 +1803,8 @@ class NativeCausalPolicy(nn.Module):
         self.dcc_task_instruction = str(task_instruction)
         self.dcc_remaining_budget_ratio = float(remaining_budget_ratio)
         if self.dcc_active_program_state is not None:
-            self.dcc_active_program_state.observed_readouts = dict(post_fields)
+            raw_obs = str(getattr(events[-1], "observation", "")) if events else ""
+            self.dcc_active_program_state.record_call_return(raw_obs, post_fields)
             self.dcc_active_program_state.bound_variables.update(
                 PublicBenchmarkBinder.extract_role_bindings(
                     benchmark, task_instruction, events, action_schema
@@ -1733,6 +1817,8 @@ class NativeCausalPolicy(nn.Module):
             "post_public_fields": post_fields,
             "outcome_bin": int(outcome_bin),
             "mean_predicted_prob": float(outcome_probs[:, outcome_bin].mean().item()),
+            "frozen_context_vec": frozen_ctx,
+            "frozen_action_vec": frozen_act,
         }
 
     def configure_dcc_trainable_mode(self, dcc_only: bool) -> None:
@@ -1910,127 +1996,124 @@ class NativeCausalPolicy(nn.Module):
             use_init_params = self.dcc_eval_variant in ("reset_parameters", "k0_planner")
             starter_only = self.dcc_eval_variant in ("no_program_growth", "k0_planner")
 
-            # If a forced_program is actively executing during probe collection, step its interpreter directly
+            # If a forced_program is actively executing during probe collection, step its AST frame directly (fixes F24)
             if forced_program is not None:
-                prog_state = (
+                prog_frame = (
                     forced_program
                     if isinstance(forced_program, ProgramExecutionState)
                     else ProgramExecutionState(program=forced_program, bound_variables=dict(role_bindings))
                 )
-                concrete_act, next_prog_state = PublicBenchmarkBinder.step_program_interpreter(
-                    prog_state, action_schema, goal_text, hist_events
+                step_res = PublicBenchmarkBinder.step_ast_frame(
+                    prog_frame, action_schema, goal_text, hist_events
                 )
-                self.dcc_active_program_state = next_prog_state
-                if concrete_act is not None and action_schema.get("classic_text"):
+                self.dcc_active_program_state = step_res.frame
+                if step_res.status == "Action" and step_res.concrete_action is not None and action_schema.get("classic_text"):
                     planning_elapsed = max(0.0, monotonic_seconds() - planning_started)
                     gen = self._build_bound_native_generation(
                         messages,
                         action_schema,
-                        concrete_act,
+                        step_res.concrete_action,
                         role=f"{role}.action",
                         greedy=greedy,
                         planning_elapsed=planning_elapsed,
                     )
                     gen.metadata["dcc_decision"] = {
-                        "selected_program_id": next_prog_state.program.program_id,
-                        "selected_program_origin": next_prog_state.program.origin,
-                        "selected_program_steps": list(next_prog_state.program.step_templates),
-                        "selected_program_fields": list(next_prog_state.program.readout_fields),
-                        "executed_concrete_action": concrete_act,
+                        "selected_program_id": step_res.frame.program.program_id,
+                        "selected_program_origin": step_res.frame.program.origin,
+                        "selected_program_steps": list(step_res.frame.program.step_templates),
+                        "selected_program_fields": list(step_res.frame.program.readout_fields),
+                        "executed_concrete_action": step_res.concrete_action,
                         "program_interpreter_executed": True,
-                        "residual_program_state": next_prog_state.to_dict(),
+                        "program_interpreter_status": "Action",
+                        "program_attributed": True,
+                        "residual_program_state": step_res.frame.to_dict(),
                         "dcc_eval_variant": self.dcc_eval_variant,
                     }
                     return gen
 
-            # Sample one concrete proposal from the frozen backbone prior p_0 over the full action union
+            forced_program_failed = bool(
+                forced_program is not None
+                and self.dcc_active_program_state is not None
+                and self.dcc_active_program_state.binding_failed
+            )
+
+            # Sample one concrete proposal from the frozen backbone prior p_0 over the full action union (mode=None, fixes F08)
             prior_generation: NativeGeneration | None = None
             if action_schema.get("classic_text"):
-                prior_mode = forced_mode
-                if prior_mode is None:
-                    # Evaluate full action union without I/E partition unless forced_mode is specified
-                    prior_mode = "I" if "I" in feasible else feasible[0]
-                    if len(feasible) == 2:
-                        mode_prompt_ids = self._tokenize_messages(self._mode_messages(messages, action_schema))
-                        mode_log_probs, mode_elapsed = self._mode_log_probs(
-                            mode_prompt_ids, role=f"{role}.mode", generating=True, temperature=mode_temp
-                        )
-                        prior_mode = (
-                            "I" if int(mode_log_probs.argmax().item()) == 0 else "E"
-                        ) if greedy else (
-                            "I" if int(torch.multinomial(mode_log_probs.exp(), 1).item()) == 0 else "E"
-                        )
                 prior_generation = self._generate_native_text(
                     messages,
                     action_schema,
-                    mode=prior_mode,
+                    mode=forced_mode,
                     greedy=greedy,
                     role=f"{role}.action",
                     max_new_tokens=max_new_tokens,
                 )
             else:
-                prior_mode = forced_mode or feasible[0]
                 prior_generation = self._generate_program(
                     messages,
                     action_schema,
-                    mode=prior_mode,
+                    mode=forced_mode,
                     greedy=greedy,
                     role=f"{role}.action",
                     max_new_tokens=max_new_tokens,
                 )
 
             prior_action_text = prior_generation.text.strip()
-            prior_logprob = float(sum(prior_generation.metadata.get("sampling_log_probs", (0.0,))))
+            frozen_ctx_vec = self.extract_frozen_semantic_context(goal_text, public_fields)
 
             # Build unified candidate pool E(h) = {admissible native actions} U {executable condition programs}
-            candidates: list[tuple[str, str, ExecutableProgram | None, float]] = []
+            # No fake candidate-origin logprobs (-0.5/-1.0/-1.5) are injected (fixes F10).
+            candidates: list[tuple[str, str, ExecutableProgram | None]] = []
             seen_actions: set[str] = set()
 
             # 1. Residual program from previous step (if still active and bindable)
-            if self.dcc_active_program_state is not None:
+            if self.dcc_active_program_state is not None and not forced_program_failed:
                 res_prog = self.dcc_active_program_state.residual_program()
                 if res_prog is not None:
-                    res_act, _ = PublicBenchmarkBinder.step_program_interpreter(
+                    res_step = PublicBenchmarkBinder.step_ast_frame(
                         self.dcc_active_program_state, action_schema, goal_text, hist_events
                     )
-                    if res_act:
-                        candidates.append(
-                            (res_prog.program_id, res_act, res_prog, prior_logprob if res_act == prior_action_text else -0.5)
-                        )
-                        seen_actions.add(res_act)
+                    if res_step.status == "Action" and res_step.concrete_action:
+                        candidates.append((res_prog.program_id, res_step.concrete_action, res_prog))
+                        seen_actions.add(res_step.concrete_action)
 
             # 2. Active library programs bound in current public state
             progs = library.active_programs(starter_only=starter_only)
             for prog in progs:
-                temp_state = ProgramExecutionState(program=prog, bound_variables=dict(role_bindings))
-                bound_act, _ = PublicBenchmarkBinder.step_program_interpreter(
-                    temp_state, action_schema, goal_text, hist_events
+                temp_frame = ProgramExecutionState(program=prog, bound_variables=dict(role_bindings))
+                step_res = PublicBenchmarkBinder.step_ast_frame(
+                    temp_frame, action_schema, goal_text, hist_events
                 )
-                if bound_act and (bound_act not in seen_actions or prog.origin != "starter"):
-                    candidates.append(
-                        (prog.program_id, bound_act, prog, prior_logprob if bound_act == prior_action_text else -1.0)
-                    )
-                    seen_actions.add(bound_act)
+                if step_res.status == "Action" and step_res.concrete_action and (
+                    step_res.concrete_action not in seen_actions or prog.origin != "starter"
+                ):
+                    candidates.append((prog.program_id, step_res.concrete_action, prog))
+                    seen_actions.add(step_res.concrete_action)
 
             # 3. Prior-proposed concrete action (always included)
             if prior_action_text:
                 candidates.insert(
                     0,
-                    (f"native_prior:{_short_hash(prior_action_text)}", prior_action_text, None, prior_logprob),
+                    (f"native_prior:{_short_hash(prior_action_text)}", prior_action_text, None),
                 )
                 seen_actions.add(prior_action_text)
 
-            # 4. Admissible native actions from current public schema (bounded to top 12 for planning budget)
+            # 4. Complete unbiased admissible native actions from current public schema (fixes F08)
             for adm_act in PublicBenchmarkBinder.enumerate_admissible_actions(
                 benchmark, action_schema, goal_text, role_bindings
-            )[:12]:
+            )[:32]:
                 if adm_act not in seen_actions:
-                    candidates.append(
-                        (f"native_atomic:{_short_hash(adm_act)}", adm_act, None, -1.5)
-                    )
+                    candidates.append((f"native_atomic:{_short_hash(adm_act)}", adm_act, None))
                     seen_actions.add(adm_act)
 
-            # Evaluate each candidate rho under unified terminal objective Q_m^rho(g, h, beta)
+            cand_action_texts = [c[1] for c in candidates]
+            cand_action_vecs = self.extract_frozen_action_embeddings(cand_action_texts)
+            active_view = self.get_active_dcc_model_view()
+
+            # Compute semantic prior success logit from frozen goal-action embedding alignment (fixes F01)
+            goal_only_vec = np.asarray(frozen_ctx_vec[:16], dtype=np.float32)
+            goal_norm = float(np.linalg.norm(goal_only_vec))
+
             best_idx = 0
             best_q = -1e9
             cand_ids: list[str] = []
@@ -2038,20 +2121,30 @@ class NativeCausalPolicy(nn.Module):
             cand_qs: list[float] = []
             cand_member_qs: list[tuple[float, ...]] = []
 
-            for idx, (cid, c_act, c_prog, c_logp) in enumerate(candidates):
-                q_eval = self.dcc_ensemble.evaluate_candidate_q(
+            for idx, ((cid, c_act, c_prog), act_vec) in enumerate(zip(candidates, cand_action_vecs)):
+                act_arr = np.asarray(act_vec[:16], dtype=np.float32)
+                act_norm = float(np.linalg.norm(act_arr))
+                sem_cos = (
+                    float(np.dot(goal_only_vec, act_arr) / (goal_norm * act_norm))
+                    if (goal_norm > 1e-6 and act_norm > 1e-6)
+                    else 0.0
+                )
+                prior_succ_logit = 0.5 * sem_cos
+
+                q_eval = active_view.evaluate_candidate_q(
                     goal_text=goal_text,
                     public_fields=public_fields,
                     belief=self.dcc_active_belief,
                     candidate_action=c_act,
                     program=c_prog,
                     remaining_budget_ratio=rem_ratio,
-                    prior_action_logprob=c_logp,
+                    frozen_context_vec=frozen_ctx_vec,
+                    frozen_action_vec=act_vec,
+                    prior_success_logit=prior_succ_logit,
                     member_index=self.dcc_active_member_index,
-                    use_initial_params=use_init_params,
+                    use_initial_params=False,
                 )
-                # At phi_0 (zero residual), tie-break toward the frozen backbone's sampled prior action
-                q_score = float(q_eval["q_selected"]) + (1e-4 if c_act == prior_action_text else 0.0)
+                q_score = float(q_eval["q_selected"])
                 cand_ids.append(cid)
                 cand_acts.append(c_act)
                 cand_qs.append(q_score)
@@ -2060,38 +2153,18 @@ class NativeCausalPolicy(nn.Module):
                     best_q = q_score
                     best_idx = idx
 
-            sel_id, sel_act, sel_prog, _ = candidates[best_idx]
+            sel_id, sel_act, sel_prog = candidates[best_idx]
             if sel_prog is not None:
-                _, next_p_state = PublicBenchmarkBinder.step_program_interpreter(
+                step_res = PublicBenchmarkBinder.step_ast_frame(
                     ProgramExecutionState(program=sel_prog, bound_variables=dict(role_bindings)),
                     action_schema,
                     goal_text,
                     hist_events,
                 )
-                self.dcc_active_program_state = next_p_state if not next_p_state.completed else None
+                self.dcc_active_program_state = step_res.frame if not step_res.frame.completed else None
             else:
                 self.dcc_active_program_state = None
 
-            # Also compute reference EVSI diagnostics for the selected or top library program
-            ref_prog = sel_prog or (progs[0] if progs else None)
-            ref_metrics = (
-                self.dcc_ensemble.score_program_evsi(
-                    ref_prog,
-                    public_fields,
-                    self.dcc_active_belief,
-                    use_Temporary_Initial_Params=use_init_params,
-                    goal_text=goal_text,
-                )
-                if ref_prog is not None
-                else {
-                    "evsi_delta": 0.0,
-                    "evsi_per_cost": 0.0,
-                    "dual_control_j": best_q,
-                    "feedback_use_value_i": 0.0,
-                    "expected_cost": 1.0,
-                    "unified_q": best_q,
-                }
-            )
             planning_elapsed = max(0.0, monotonic_seconds() - planning_started)
             plan_record = PlanningDecision(
                 decision_id=_short_hash((goal_text, len(hist_events), sel_id, sel_act)),
@@ -2123,9 +2196,13 @@ class NativeCausalPolicy(nn.Module):
                 "selected_program_fields": list(sel_prog.readout_fields) if sel_prog is not None else [],
                 "executed_concrete_action": sel_act,
                 "program_interpreter_executed": bool(sel_prog is not None),
+                "program_interpreter_status": "BindingFailureFallback" if forced_program_failed else (
+                    "Action" if sel_prog is not None else "AtomicAction"
+                ),
+                "program_attributed": bool(sel_prog is not None and not forced_program_failed),
                 "dcc_eval_variant": self.dcc_eval_variant,
                 "planning_decision": plan_record.to_dict(),
-                **ref_metrics,
+                "unified_q": best_q,
             }
 
             if sel_act != prior_action_text and action_schema.get("classic_text"):
@@ -2462,6 +2539,10 @@ class NativeCausalPolicy(nn.Module):
         self.tokenizer.save_pretrained(output)
         torch.save(self.value_head.state_dict(), output / "native_value_head.pt")
         torch.save(self.dcc_ensemble.state_dict(), output / "dcc_response_ensemble.pt")
+        torch.save(
+            self.dcc_ensemble.initial_state_dict_snapshot(),
+            output / "dcc_initial_response_ensemble.pt",
+        )
         (output / "dcc_program_libraries.json").write_text(
             json.dumps(
                 {name: lib.to_dict() for name, lib in self.dcc_libraries.items()},
@@ -2515,6 +2596,12 @@ class NativeCausalPolicy(nn.Module):
             }
             current_dcc.update(compatible_dcc)
             self.dcc_ensemble.load_state_dict(current_dcc, strict=True)
+        dcc_init_pt = source / "dcc_initial_response_ensemble.pt"
+        if dcc_init_pt.is_file():
+            loaded_init = torch.load(
+                dcc_init_pt, map_location=self.dcc_ensemble.transition_logits.device, weights_only=True,
+            )
+            self.dcc_ensemble.load_initial_state_dict_snapshot(loaded_init)
         dcc_lib_path = source / "dcc_program_libraries.json"
         if dcc_lib_path.is_file():
             from .native_dcc import ProgramLibrary

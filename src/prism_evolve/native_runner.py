@@ -486,27 +486,25 @@ def _train_cell(policy, config, manifest, cell, directory, initial):
         elif method in {"dcc_no_program_growth", "dcc_reset_parameters", "dcc_pre_first_success", "dcc_fixed_d_shuffled"}:
             slug = cell["cell_id"].split(".", 1)[0]
             sibling = directory.parent / f"{slug}.{benchmark}.prism_evolve.s{seed}"
-            if (sibling / "training_phase.json").is_file():
-                sib_phase = json.loads((sibling / "training_phase.json").read_text())
-                sib_train = sib_phase.get("training", {})
-                if method == "dcc_pre_first_success" and sib_train.get("pre_first_success_checkpoint"):
-                    checkpoint = sib_train["pre_first_success_checkpoint"]
-                elif method == "dcc_fixed_d_shuffled" and sib_train.get("fixed_d_shuffled_checkpoint"):
-                    checkpoint = sib_train["fixed_d_shuffled_checkpoint"]
-                else:
-                    checkpoint = sib_phase["selected_checkpoint"]
-                summary["training_reuse"] = {
-                    "source_cell": str(sibling),
-                    "ablation_mode": method,
-                    "new_training_model_calls": 0,
-                    "zero_success_throughout_training": bool(sib_train.get("zero_success_throughout_training", False)),
-                }
+            if not (sibling / "training_phase.json").is_file():
+                raise RuntimeError(
+                    f"Deployment ablation cell '{method}' requires completed parent training cell '{sibling.name}'; "
+                    "silent fallback to independent run_training is forbidden."
+                )
+            sib_phase = json.loads((sibling / "training_phase.json").read_text())
+            sib_train = sib_phase.get("training", {})
+            if method == "dcc_pre_first_success" and sib_train.get("pre_first_success_checkpoint"):
+                checkpoint = sib_train["pre_first_success_checkpoint"]
+            elif method == "dcc_fixed_d_shuffled" and sib_train.get("fixed_d_shuffled_checkpoint"):
+                checkpoint = sib_train["fixed_d_shuffled_checkpoint"]
             else:
-                training_meter = BudgetMeter(BudgetLimits(**config["training_budget"]),
-                                             event_path=directory / "training_costs.jsonl")
-                summary["training"] = run_training(method, policy, env, train, dev, local_config,
-                                                    training_meter, directory / "training", seed)
-                checkpoint = summary["training"].get("selected_checkpoint")
+                checkpoint = sib_phase["selected_checkpoint"]
+            summary["training_reuse"] = {
+                "source_cell": str(sibling),
+                "ablation_mode": method,
+                "new_training_model_calls": 0,
+                "zero_success_throughout_training": bool(sib_train.get("zero_success_throughout_training", False)),
+            }
         elif method not in INFERENCE_METHODS and method not in {"frozen_base", "dcc_k0_planner"}:
             training_meter = BudgetMeter(BudgetLimits(**config["training_budget"]),
                                          event_path=directory / "training_costs.jsonl")

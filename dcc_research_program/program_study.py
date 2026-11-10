@@ -660,10 +660,12 @@ def growth_study(
                 "query_privilege": (
                     "free_noiseless_action_direction_oracle_on_observed_fields"
                     if method == "noiseless_version_space_elimination"
-                    else "paid_paired_intervention_4_actions_plus_4_trace_reads"
+                    else "paid_paired_intervention_4_actions_plus_4_trace_reads_8_actions_per_block"
                 ),
                 "blocks": n,
-                "physical_actions": 4 * n,
+                "paired_probe_actions": 4 * n,
+                "trace_read_actions": 4 * n,
+                "physical_actions": 8 * n,
                 "mean_candidates_checked": float(checks_arr.mean()),
                 "training_full_task_successes": 0,
                 "mean_deployment_response_value": mean,
@@ -728,6 +730,7 @@ def unknown_k_delayed_goal_study(
     for method in methods:
         terminal_success_rates = {n: [] for n in checkpoints}
         hit_rates = {n: [] for n in checkpoints}
+        checked_counts = {n: [] for n in checkpoints}
 
         for seed in range(seeds):
             world_rng = np.random.default_rng(400009 * num_fields + seed)
@@ -751,6 +754,7 @@ def unknown_k_delayed_goal_study(
             succ_counts = np.ones((num_programs, 2, 2), dtype=np.float64)
             total_counts = np.full((num_programs, 2, 2), 2.0, dtype=np.float64)
             records = []
+            cum_candidates_checked = 0
 
             for block in range(max_blocks + 1):
                 if block in terminal_success_rates:
@@ -763,7 +767,7 @@ def unknown_k_delayed_goal_study(
                     }
                     max_v = max(prog_expected_v.values())
                     best_progs = [q_idx for q_idx, v in prog_expected_v.items() if v >= max_v - 1e-12]
-                    # Compute exact delayed terminal success rate of the chosen policy on unseen instances
+                    # Compute exact conditional success rate of the chosen policy on unseen instances
                     eval_succ = 0.0
                     for q_sel in best_progs:
                         if q_sel == true_program:
@@ -777,13 +781,14 @@ def unknown_k_delayed_goal_study(
                             eval_succ += 0.5
                     terminal_success_rates[block].append(eval_succ / len(best_progs))
                     hit_rates[block].append(float(true_program in active_pool))
+                    checked_counts[block].append(float(cum_candidates_checked))
                 if block == max_blocks:
                     break
 
                 max_active_pool = initial_pool_size + 2 * proposal_budget
                 if block in (2, 4, 6, 8, 12, 16) and len(active_pool) < max_active_pool:
                     step_budget = min(1, max_active_pool - len(active_pool))
-                    new_programs, _ = _propose_programs(
+                    new_programs, prop_stats = _propose_programs(
                         pairs,
                         active_pool,
                         records,
@@ -792,6 +797,7 @@ def unknown_k_delayed_goal_study(
                         proposer_rng,
                         max_candidate_checks=max_candidate_checks,
                     )
+                    cum_candidates_checked += int(prop_stats["candidates_checked"])
                     active_pool.update(new_programs)
 
                 # Select query program from active_pool using optimistic empirical value + exploration bonus
@@ -815,7 +821,7 @@ def unknown_k_delayed_goal_study(
                 obs_bit = anchor_bits[q_i] ^ anchor_bits[q_j]
                 true_action = anchor_bits[true_i] ^ anchor_bits[true_j] ^ true_polarity
 
-                # Coupled delayed terminal outcomes (Y_0, Y_1) under shared exogenous uniform U
+                # Coupled outcomes (Y_0, Y_1) under shared exogenous uniform U
                 u_rand = outcome_rng.random()
                 y_correct = 1 if u_rand < 0.85 else 0
                 y_wrong = 1 if u_rand < 0.15 else 0
@@ -823,10 +829,10 @@ def unknown_k_delayed_goal_study(
                 y_1 = y_correct if true_action == 1 else y_wrong
                 d_real = int(y_0 - y_1)
 
-                # Predictive surprise under current empirical K_hat before update
+                # Mean of the two conditional marginal negative log-likelihoods (fixes F21 surprise definition)
                 p0 = float(q_hat[query, obs_bit, 0]) if y_0 == 1 else (1.0 - float(q_hat[query, obs_bit, 0]))
                 p1 = float(q_hat[query, obs_bit, 1]) if y_1 == 1 else (1.0 - float(q_hat[query, obs_bit, 1]))
-                surprise = float(-math.log(max(0.5 * (p0 + p1), 1e-6)))
+                surprise = float(0.5 * (-math.log(max(p0, 1e-6)) - math.log(max(p1, 1e-6))))
 
                 # Update empirical response/terminal model K_hat
                 succ_counts[query, obs_bit, 0] += y_0
@@ -848,12 +854,15 @@ def unknown_k_delayed_goal_study(
         for n in checkpoints:
             arr = np.array(terminal_success_rates[n])
             hits = np.array(hit_rates[n])
+            checks_arr = np.array(checked_counts[n])
             mean = float(arr.mean())
             se = float(arr.std(ddof=1) / math.sqrt(seeds)) if seeds > 1 else 0.0
             summary.append({
                 "fields": num_fields,
                 "method": method,
                 "blocks": n,
+                "physical_actions": 8 * n,
+                "mean_candidates_checked": float(checks_arr.mean()),
                 "mean_delayed_terminal_success": mean,
                 "seed_standard_error": se,
                 "normal_95_ci": [mean - 1.96 * se, mean + 1.96 * se],
@@ -864,9 +873,230 @@ def unknown_k_delayed_goal_study(
         "fields": num_fields,
         "seeds": seeds,
         "max_blocks": max_blocks,
-        "prior_scope": "unknown_response_law_K_and_delayed_terminal_goal_Y",
+        "prior_scope": "unknown_conditional_success_rate_K_and_program_discovery",
         "ceiling_delayed_terminal_success": 0.85,
         "untrained_delayed_terminal_success": 0.50,
+        "summary": summary,
+    }
+
+
+def sequential_multistep_delayed_goal_study(
+    num_fields=8,
+    seeds=256,
+    max_blocks=32,
+    proposal_budget=2,
+    initial_pool_size=2,
+    max_candidate_checks=6,
+):
+    """Multi-step hidden-state evolution with local public readouts, AST Case execution, and terminal-only Y (fixes F21).
+
+    Environment dynamics:
+      - Stage 1 (Probe q = Read(i); Read(j)): reads two public fields `(b_i, b_j)` at cost 2 actions
+        (plus 4 paid trace reads = 8 total actions per block) and exposes local parity `z = b_i ^ b_j`.
+      - Stage 2 (Conditional action `a_stage1 = Case(z: u_0, u_1)`): modifies hidden state `s_hidden`.
+        Only when `(i, j) == (true_i, true_j)` and `a_stage1 == (b_{true_i} ^ b_{true_j} ^ true_polarity)`
+        does `s_hidden` transition to `"precondition_unlocked"` (with probability 0.90) and emit public
+        local feedback `r_stage1 = "ready"`; otherwise `s_hidden = "locked"` and `r_stage1 = "blocked"` (0.90).
+      - Stage 3 (Tail policy pi_0 commit step): observes `r_stage1` and executes `commit_goal` when
+        `"ready"` or `retry_prepare` when `"blocked"`. Official terminal outcome `Y in {0, 1}` is revealed
+        ONLY at the end of Stage 3 (`Y = 1` iff `s_hidden == "precondition_unlocked"` and `commit_goal` succeeds).
+      - Training, model Q-evaluation, and deployment share the same AST `Case(z: u_0, u_1)` interpreter:
+        the learner estimates Stage-2 transition probabilities `K_hat(r_stage1 = "ready" | q, z, a_stage1)`
+        from local public responses AND Stage-3 tail completion `H_hat^{pi_0}(Y = 1 | r_stage1)`, composing
+        them to rank candidate programs and execute conditional policies.
+    """
+    pairs = list(itertools.combinations(range(num_fields), 2))
+    num_programs = len(pairs)
+    methods = (
+        "action_diff_growth",
+        "label_shuffled_growth",
+        "prediction_error_growth",
+        "uniform_prior_growth",
+    )
+    checkpoints = [n for n in (0, 2, 4, 8, 16, 32) if n <= max_blocks]
+    checkpoints = sorted(set(checkpoints + [max_blocks]))
+    summary = []
+
+    for method in methods:
+        terminal_utilities = {n: [] for n in checkpoints}
+        hit_rates = {n: [] for n in checkpoints}
+        checked_counts = {n: [] for n in checkpoints}
+
+        for seed in range(seeds):
+            world_rng = np.random.default_rng(600011 * num_fields + seed)
+            true_model = int(world_rng.integers(2 * num_programs))
+            true_program, true_polarity = divmod(true_model, 2)
+            true_i, true_j = pairs[true_program]
+
+            init_rng = np.random.default_rng(700001 * num_fields + seed)
+            non_true = [idx for idx in range(num_programs) if idx != true_program]
+            active_pool = set(
+                int(x) for x in init_rng.choice(non_true, size=min(initial_pool_size, len(non_true)), replace=False)
+            )
+
+            anchor_rng = np.random.default_rng(200003 * num_fields + seed)
+            outcome_rng = np.random.default_rng(300007 * num_fields + seed)
+            choice_rng = np.random.default_rng(500009 * num_fields + seed)
+            proposer_rng = np.random.default_rng(900011 * num_fields + seed)
+
+            # Learned Stage-2 transition model K_hat(r_stage1="ready" | q, z_bit, a_stage1)
+            ready_counts = np.ones((num_programs, 2, 2), dtype=np.float64)
+            stage2_totals = np.full((num_programs, 2, 2), 2.0, dtype=np.float64)
+            # Learned Stage-3 tail model H_hat^{pi_0}(Y=1 | r_stage1 in {0="blocked", 1="ready"})
+            tail_y_succ = np.array([1.0, 1.0], dtype=np.float64)
+            tail_y_tot = np.array([2.0, 2.0], dtype=np.float64)
+
+            records = []
+            cum_candidates_checked = 0
+
+            def _compose_ast_program_q(q_idx: int, k_ready: np.ndarray, h_tail: np.ndarray) -> tuple[float, int, int]:
+                """Shared AST interpreter + composed Q-evaluator for `Seq(Read(i), Read(j), Case(z: a0, a1)) -> pi_0`."""
+                # For each branch z in {0, 1}, choose action a_z maximizing composed terminal Q
+                q_z0_a0 = k_ready[q_idx, 0, 0] * h_tail[1] + (1.0 - k_ready[q_idx, 0, 0]) * h_tail[0]
+                q_z0_a1 = k_ready[q_idx, 0, 1] * h_tail[1] + (1.0 - k_ready[q_idx, 0, 1]) * h_tail[0]
+                a_z0 = 0 if q_z0_a0 >= q_z0_a1 else 1
+                v_z0 = max(q_z0_a0, q_z0_a1)
+
+                q_z1_a0 = k_ready[q_idx, 1, 0] * h_tail[1] + (1.0 - k_ready[q_idx, 1, 0]) * h_tail[0]
+                q_z1_a1 = k_ready[q_idx, 1, 1] * h_tail[1] + (1.0 - k_ready[q_idx, 1, 1]) * h_tail[0]
+                a_z1 = 0 if q_z1_a0 >= q_z1_a1 else 1
+                v_z1 = max(q_z1_a0, q_z1_a1)
+
+                return 0.5 * (v_z0 + v_z1), a_z0, a_z1
+
+            for block in range(max_blocks + 1):
+                k_ready = ready_counts / stage2_totals
+                h_tail = tail_y_succ / tail_y_tot
+
+                if block in terminal_utilities:
+                    prog_evals = {
+                        q_idx: _compose_ast_program_q(q_idx, k_ready, h_tail)
+                        for q_idx in sorted(active_pool)
+                    }
+                    max_q = max(v[0] for v in prog_evals.values())
+                    best_progs = [q_idx for q_idx, v in prog_evals.items() if v[0] >= max_q - 1e-12]
+                    eval_u = 0.0
+                    for q_sel in best_progs:
+                        _, a_z0, a_z1 = prog_evals[q_sel]
+                        if q_sel == true_program:
+                            # True Stage-2 unlock prob is 0.90 on matching action, 0.10 on mismatch;
+                            # True Stage-3 tail Y=1 prob given unlocked is 0.95, given locked is 0.05.
+                            p_unlock_0 = 0.90 if a_z0 == (0 ^ true_polarity) else 0.10
+                            p_unlock_1 = 0.90 if a_z1 == (1 ^ true_polarity) else 0.10
+                            y_0 = p_unlock_0 * 0.95 + (1.0 - p_unlock_0) * 0.05
+                            y_1 = p_unlock_1 * 0.95 + (1.0 - p_unlock_1) * 0.05
+                            eval_u += 0.5 * (y_0 + y_1)
+                        else:
+                            eval_u += 0.5 * (0.95 + 0.05)
+                    terminal_utilities[block].append(eval_u / len(best_progs))
+                    hit_rates[block].append(float(true_program in active_pool))
+                    checked_counts[block].append(float(cum_candidates_checked))
+                if block == max_blocks:
+                    break
+
+                max_active_pool = initial_pool_size + 2 * proposal_budget
+                if block in (2, 4, 6, 8, 12, 16) and len(active_pool) < max_active_pool:
+                    step_budget = min(1, max_active_pool - len(active_pool))
+                    new_programs, prop_stats = _propose_programs(
+                        pairs,
+                        active_pool,
+                        records,
+                        step_budget,
+                        method,
+                        proposer_rng,
+                        max_candidate_checks=max_candidate_checks,
+                    )
+                    cum_candidates_checked += int(prop_stats["candidates_checked"])
+                    active_pool.update(new_programs)
+
+                # Select probe program q in active_pool maximizing composed Q + exploration bonus
+                best_q = None
+                best_sc = -1e9
+                for q_idx in sorted(active_pool):
+                    q_val, _, _ = _compose_ast_program_q(q_idx, k_ready, h_tail)
+                    uncert = 0.15 / math.sqrt(float(stage2_totals[q_idx].sum()))
+                    sc = q_val + uncert + float(choice_rng.uniform(0.0, 1e-9))
+                    if sc > best_sc:
+                        best_sc = sc
+                        best_q = q_idx
+                query = int(best_q)
+
+                anchor_bits = tuple(int(b) for b in anchor_rng.integers(0, 2, size=num_fields))
+                trace_subset = set(
+                    int(x) for x in anchor_rng.choice(num_fields, size=min(4, num_fields), replace=False)
+                )
+                q_i, q_j = pairs[query]
+                obs_bit = anchor_bits[q_i] ^ anchor_bits[q_j]
+                true_action = anchor_bits[true_i] ^ anchor_bits[true_j] ^ true_polarity
+
+                # Paired multi-step rollouts u (action 0 -> pi_0) and v (action 1 -> pi_0) from post-q state
+                u_stage2_rand = outcome_rng.random()
+                u_tail_rand = outcome_rng.random()
+
+                # Branch u (a_stage1 = 0)
+                p_ready_u = 0.90 if true_action == 0 else 0.10
+                r_stage1_u = 1 if u_stage2_rand < p_ready_u else 0
+                y_u = 1 if u_tail_rand < (0.95 if r_stage1_u == 1 else 0.05) else 0
+
+                # Branch v (a_stage1 = 1)
+                p_ready_v = 0.90 if true_action == 1 else 0.10
+                r_stage1_v = 1 if u_stage2_rand < p_ready_v else 0
+                y_v = 1 if u_tail_rand < (0.95 if r_stage1_v == 1 else 0.05) else 0
+
+                d_real = int(y_u - y_v)
+
+                # Local transition prediction error on Stage-2 response r_stage1
+                pred_r_u = float(k_ready[query, obs_bit, 0]) if r_stage1_u == 1 else (1.0 - float(k_ready[query, obs_bit, 0]))
+                pred_r_v = float(k_ready[query, obs_bit, 1]) if r_stage1_v == 1 else (1.0 - float(k_ready[query, obs_bit, 1]))
+                surprise = float(0.5 * (-math.log(max(pred_r_u, 1e-6)) - math.log(max(pred_r_v, 1e-6))))
+
+                # Update Stage-2 transition model K_hat and Stage-3 tail model H_hat^{pi_0}
+                ready_counts[query, obs_bit, 0] += r_stage1_u
+                stage2_totals[query, obs_bit, 0] += 1.0
+                ready_counts[query, obs_bit, 1] += r_stage1_v
+                stage2_totals[query, obs_bit, 1] += 1.0
+
+                tail_y_succ[r_stage1_u] += y_u
+                tail_y_tot[r_stage1_u] += 1.0
+                tail_y_succ[r_stage1_v] += y_v
+                tail_y_tot[r_stage1_v] += 1.0
+
+                paid_fields = trace_subset | {q_i, q_j}
+                observed_bits_dict = {int(f_idx): int(anchor_bits[f_idx]) for f_idx in paid_fields}
+                records.append({
+                    "query": query,
+                    "obs_bit": obs_bit,
+                    "d": d_real,
+                    "surprise": surprise,
+                    "observed_bits": observed_bits_dict,
+                    "trace_fields": paid_fields,
+                })
+
+        for n in checkpoints:
+            arr = np.array(terminal_utilities[n])
+            hits = np.array(hit_rates[n])
+            checks_arr = np.array(checked_counts[n])
+            mean = float(arr.mean())
+            se = float(arr.std(ddof=1) / math.sqrt(seeds)) if seeds > 1 else 0.0
+            summary.append({
+                "fields": num_fields,
+                "method": method,
+                "blocks": n,
+                "physical_actions": 10 * n,  # 2 probe reads + 4 trace reads + 2*(Stage-2 act + Stage-3 tail act)
+                "mean_candidates_checked": float(checks_arr.mean()),
+                "mean_sequential_terminal_success": mean,
+                "seed_standard_error": se,
+                "normal_95_ci": [mean - 1.96 * se, mean + 1.96 * se],
+                "relevant_program_hit_rate": float(hits.mean()),
+            })
+
+    return {
+        "fields": num_fields,
+        "seeds": seeds,
+        "max_blocks": max_blocks,
+        "prior_scope": "sequential_multistep_hidden_state_with_local_readout_and_tail_pi0_terminal_Y",
+        "ceiling_sequential_terminal_success": 0.90 * 0.95 + 0.10 * 0.05,  # 0.86
+        "untrained_sequential_terminal_success": 0.50,
         "summary": summary,
     }
 
@@ -914,11 +1144,12 @@ def main():
             **check_exhaustive_proposer_equivalence(),
         }
         growth_payload = {
-            "scope": "Bounded-budget program discovery study with strictly paid field access, candidate check budgets, unified active-pool policy support, and unknown-K delayed-goal evaluation.",
+            "scope": "Bounded-budget program discovery study with strictly paid field access, candidate check budgets, unified active-pool policy support, unknown-K conditional evaluation, and multi-step sequential hidden-state delayed-goal evaluation.",
             "date": "2026-11-10",
             "checks": growth_checks,
             "program_growth_runs": [],
             "unknown_k_delayed_goal_runs": [],
+            "sequential_multistep_delayed_goal_runs": [],
         }
         for g_fields in args.growth_fields:
             g_run = growth_study(
@@ -937,6 +1168,14 @@ def main():
                 max_candidate_checks=args.max_candidate_checks,
             )
             growth_payload["unknown_k_delayed_goal_runs"].append(u_run)
+            seq_run = sequential_multistep_delayed_goal_study(
+                num_fields=g_fields,
+                seeds=min(args.seeds, 256),
+                max_blocks=args.growth_blocks,
+                proposal_budget=args.proposal_budget,
+                max_candidate_checks=args.max_candidate_checks,
+            )
+            growth_payload["sequential_multistep_delayed_goal_runs"].append(seq_run)
             last = [r for r in g_run["summary"] if r["blocks"] == args.growth_blocks]
             print(json.dumps({"growth_fields": g_fields, "final": last}, ensure_ascii=False), flush=True)
         args.growth_output.parent.mkdir(parents=True, exist_ok=True)

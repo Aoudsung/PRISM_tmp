@@ -97,59 +97,54 @@ P_\phi^e(\tau\mid b_\phi(h)).
 
 公开响应 \(x=(r_{\mathrm{pub}}, c, d_{\mathrm{term}}, Y_{\mathrm{obs}})\) 提供丰富的过程监督：工具调用返回了什么标识符、哪个容器被打开、哪项属性被读取、发生了何种权限或语法错误、消耗了多少资源，以及是否触发终止。这些公开反馈直接用于训练响应模型 \(K_\phi(x_{t+1}\mid g,h_t,a_t,\beta_t)\)，不再通过手工加权积分为中间状态构造替代奖励。官方终局评分器只在原协议规定的终局时刻给出任务成败 \(Y\in\{0,1\}\)，未到达终局或因整个训练作业总预算耗尽而中断的轨迹，其原生终局标签保持缺失（`missing`），不能伪造为任务自身失败 \(Y=0\) 或手工进展分。
 
-控制与规划使用唯一的原生终局效用：
+控制与规划使用与 `NativeTrajectory.utility` 完全同口径的墙钟时间原生终局效用：
 
 \[
-U_B(Y,C)=Y\max(0,1-C/B),
+U_B(Y,C_{\mathrm{seconds}})=Y\max\!\left(0,1-\frac{C_{\mathrm{seconds}}}{B_{\mathrm{seconds}}}\right),
 \]
 
-其中 \(C,B\) 与原运行协议的成本口径严格一致，其余资源（环境步数、模型 token、墙钟时间）作为各自硬约束独立计量。候选空间统一包含当前合法原生动作（作为单步程序）与可绑定、可执行的条件程序：
+而环境步数、语言模型 token 与侧网络计算各自通过显式 `ResourceState(before, after)` 作为独立硬约束计量与披露。由于 \(0\le C\le B\) 时 \(\mathbb E[Y(1-C/B)]=P(Y=1)(1-\mathbb E[C\mid Y=1]/B)\)，终局估值必须保留成功事件与完成耗时的联合相关性。
+
+候选空间统一包含当前全部合法原生动作（有限集合完整进入批量评分；LOCA 开放参数空间从真实 `native_tools` 的 `function.name/parameters` 生成同预算多工具提案）与可绑定、可执行的条件程序：
 
 \[
 \mathcal E(h)=\{\text{合法原生动作}\}\cup\{\text{可执行条件程序}\}.
 \]
 
-令 \(\rho\in\mathcal E(h)\) 为候选动作或短程序，\(\pi_0\) 为版本固定、各方法共享的尾策略。程序 \(\rho\) 的长时程价值通过接续 \(\pi_0\) 延伸至原生终局或任务预算终点：
+令 \(\pi_0\) 为独立于 DCC 参数 \(\phi\) 和程序库 \(\Xi\) 的显式可调用冻结尾控制器（固定底模、公开提示、完整原生动作并集接口与采样规则）。对短程序叶端，定义由真实 \(\pi_0\) 后缀区间直接监督的固定尾策略联合终局分布：
+
+\[
+H_{\phi,m}^{\pi_0}(Y,C_{\mathrm{tail}}\mid h,g,\beta)
+=
+\Pr_{\phi,m}\!\bigl(Y,C_{\mathrm{tail}}\mid h,g,\beta,\operatorname{do}(\pi_0)\bigr),
+\]
+
+通过联合预测 \(P_m^{\pi_0}(Y=1\mid h,g,\beta)\) 与成功条件下的剩余耗时分布 \(P_m^{\pi_0}(C_{\mathrm{tail}}\mid Y=1,h,g,\beta)\) 计算截断期望效用。候选 \(\rho\in\mathcal E(h)\) 的价值沿真实 AST 展开（`Case` 节点按模型预测的对应公开字段取值概率加权展开 true/false 双子树；终止状态严格吸收，仅以归一化 `live` 概率推进存活质量），并在叶端调用 \(H_{\phi,m}^{\pi_0}\)：
 
 \[
 Q_m^\rho(g,h,\beta)
 =
 \mathbb E_{K_{\phi,m},\,\rho\rightarrow\pi_0}
-[U_B(Y,C)].
+\bigl[U_B(Y,C_{\mathrm{spent}}+C_{\mathrm{future}})\bigr].
 \]
 
-部署与控制先对同一公开历史依赖策略 \(\rho\) 求集成均值，再执行最优选择：
+每个集成成员 \(m\) 维护各自独立的私有状态、字段分布与资源轨迹（共享冻结语义编码器，成员间状态不做隐式平均），仅在末端汇总候选均值 \(\widehat Q^\rho=\frac1M\sum_{m=1}^M Q_m^\rho\) 并选取 \(\rho^*=\arg\max_\rho\widehat Q^\rho\)。整个 episode 在起点固定不可变模型视图 `ModelView`（\(\phi_0\) 或 \(\phi_T\)，其中 \(\phi_0\) 独立持久化保存），使过滤更新、短程序前瞻与尾估值全程使用同一参数身份。
 
-\[
-\widehat Q^\rho=\frac1M\sum_{m=1}^M\widehat Q_m^\rho,
-\qquad
-\rho^*=\arg\max_{\rho\in\mathcal E(h)}\widehat Q^\rho.
-\]
-
-所有成员评估同一个依赖公开历史的候选 \(\rho\)，不在各成员内部先取各自最优再平均。查询产生的信息价值已经包含在条件分支与后续重规划之中，无需再设 I/E 模式门控或给信息动作另加奖励偏置。执行 \(\rho^*\) 的第一步后，吸收真实反馈并更新任务内状态 `observe(previous_state, actual_action, actual_public_response)`；同时保留正在执行程序的变量绑定、程序计数器与剩余条件续行，使残余程序直接进入下一步候选集合。
-
-冻结底模提供共同的三个先验条件分布：语义表征、候选动作／程序提案先验，以及响应与终局成功先验 \(\ell_0\)。规范化响应侧网络在这些先验 logits 之上学习上下文相关的机制残差：
-
-\[
-p_{\phi,m}(x_i\mid c,x_{<i})
-=
-\operatorname{softmax}\!\bigl(
-\ell_0(c,x_{<i})+r_{\phi,m}(c,x_{<i})
-\bigr)_{x_i},
-\qquad c=(g,h,a,\beta),
-\]
-
-零残差初始化给出 \(K_{\phi_0}=p_0\)，独立保留的 \(K_0\) 规划基线负责单独测量预训练语义先验对规划的贡献。模型参数在真实测量簇上按唯一物理转移的序列负对数似然训练：
+冻结底模提供真实可调用的共享隐藏语义表示 `frozen_context(g, h)`、动作嵌入 `frozen_action_context(c, a)` 以及规范化响应先验 \(\ell_0\)。响应模型保留条件程序实际读取的类型化公开字段分布（而非三比特粗分桶），零基础项与零残差初始化严格满足 \(K_{\phi_0}=p_0\)。测量簇采用带 `parent_transition_id` 的分叉树表示：公共前缀前向一次并在分叉点保留可微 `fork_belief`，事实后缀 \(u\) 与反事实后缀 \(v\) 各自从 `fork_belief` 独立展开：
 
 \[
 \mathcal L_m(\phi)
 =
--\sum_{c\in\mathcal D_{\mathrm{cluster}}}b_{mc}
-\sum_{(h_t,a_t,x_{t+1})\in c,\,\mathrm{unique\ physical}}
-\log K_{\phi,m}(x_{t+1}\mid g,h_t,a_t,\beta_t),
+\mathcal L_{m,\mathrm{prefix}}(\phi)
++
+\mathcal L_{m,u\mid\mathrm{fork}}(\phi)
++
+\mathcal L_{m,v\mid\mathrm{fork}}(\phi)
++
+\mathcal L_{m,\mathrm{tail}}^{\pi_0}(\phi),
 \]
 
-其中 \(b_{mc}\) 来自对完整任务／共享前缀测量簇的 bootstrap 重采样。共享前缀只记录一次，真实分叉后缀各自贡献转移样本。
+配合簇级确定性种子 bootstrap 权重学习边缘条件响应与 \(\pi_0\) 联合终局分布；已付费的部分（删失）轨迹照常更新已观测转移并屏蔽缺失终局标签。
 
 在首次完整任务成功之前，若两条完整续行均失败（\(Y_u=Y_v=0\)），真实终局行动差 \(d_{\mathrm{real}}=U_B(\tau_u)-U_B(\tau_v)=0\)。此阶段由公开响应反馈驱动跨任务机制学习 \(K_\phi\)，提案器在零真实差下退化为各方法共享的语法先验；当配对完整续行产生非零 \(d_{\mathrm{real}}\) 后，真实行动差见证才驱动观测程序的消减与拼接。模型估计差 \(d_{\mathrm{model}}\) 与实测终局差 \(d_{\mathrm{real}}\) 分列存储，不将模型预测回填为实测标签。
 
@@ -246,11 +241,11 @@ I(q)=\mathbb E_Z\max_\rho Q_q(Z,\rho)-\max_\rho\mathbb E_ZQ_q(Z,\rho).
 \texttt{Stop}.
 \]
 
-变量引用严格指向公开任务输入或此前真实调用的返回值；实体身份通过可逆角色绑定表（如 `object_1`、返回标识符、商品 ASIN、工件路径）贯穿目标、参数与返回。每个程序均由解释器逐步绑定并真实执行，绑定失败时显式记录并终止该程序分支，不静默回退为列表首动作。
+程序库中的 `ExecutableProgram` 仅保存类型化 AST、形式角色槽与局部变量结构，绝不保存旧任务的具体对象 ID；具体实体绑定、调用返回值与已消费子树由每次真实执行或模型前瞻私有的执行栈帧 `ExecutionFrame` 维护。解释器沿显式 AST 栈逐节点求值（`Case` 消费所选分支子树后直接进入后续节点直至 `Stop`），明确返回 `Action`、`Complete` 或 `BindingFailure`，绑定失败时不冒充原程序继续归属。
 
-在相同目标语义、同一 \(u/v\) 续策略角色和同一尾策略版本下，当两条真实测量记录出现实测行动差符号翻转（\(d_{\mathrm{real},1}\cdot d_{\mathrm{real},2}<0\)）时，构成行动差见证。提案器在完整保留原始可重绑定程序片段（`witness_full`）的基础上，执行两类保持数据依赖的变换：`Delete` 依据真实 def-use 关系仅移除只服务于被删读出且无后续引用的调用；`Concat` 先统一角色变量与作用域，再按对象绑定顺序连接两个可执行片段（调用步数有界 \(\ell\le3\)，任务价值通过尾策略 \(\pi_0\) 延伸至终局）。
+比较对象 `Comparison` 在观测终局前规范化有序策略对 \((u,v)\)、目标语义与尾策略版本（交换 \(u,v\) 时同步反转 \(d\) 符号）。见证配对与 `Label-Shuffled` 标签置换严格共用同一个 `comparison_key`：仅在满足 \(d_{\mathrm{real}}(h_1;u,v)\cdot d_{\mathrm{real}}(h_2;u,v)<0\) 的同一比较键内构造见证，且单例比较组保持原样、绝不跨组扩充置换。`Delete` 依据从 AST 消费者图推导的真实依赖关系保护所有被后续节点引用的生产者；`Concat` 执行局部变量 \(\alpha\)-renaming 并保留写操作前后必要的重复读取调用。
 
-每次构造、语法检查与评分的候选均计入提案计算预算，不先穷举全部组合再仅限制返回数量。固定数据集 \(\mathcal D\) 的提案对照在相同记录顺序、相同 `grow` 调用次数与相同构造预算下比较真标签与组内标签置换（`Label-Shuffled`），且正负分组、幅度排序、记录优先级与算子选择全部读取同一置换标签视图；闭环对照则允许 Full 与 Shuffle 在相同总预算下各自在线采集并演化程序库。
+每次构造、语法检查与评分的候选均计入提案计算预算。固定数据集 \(\mathcal D\) 的提案对照在相同记录顺序、相同 `grow` 调用次数与相同构造预算下比较真标签与同键组内标签置换（`Label-Shuffled`），正负分组、幅度排序、记录优先级与算子选择全部读取同一置换标签视图；闭环对照则允许 Full 与 Shuffle 在相同总预算下各自在线采集并演化程序库。
 
 ## 本轮实际运行的机制实验
 

@@ -1,24 +1,24 @@
 """PRISM DCC v2 (Decision-Contrast Closure) unified mathematical and execution kernel.
 
-Implements the systematic revision contract (`docs/prism-dcc-v2-design.md`):
-1. One control objective: official native terminal utility U_B(Y, C) = Y * max(0, 1 - C / B).
-   Public responses (structured fields, resource deltas, termination category, and observed
-   terminal outcome) supervise the response model K_phi(x_{t+1} | g, h_t, a_t, beta_t);
-   no hand-crafted mid-episode progress integral is used as reward or value.
-2. Normalized context-conditioned residual response ensemble:
-   p_{phi,m}(x_i | c, x_{<i}) = softmax(ell_0(c, x_{<i}) + r_{phi,m}(c, x_{<i}))_{x_i},
-   with zero-residual initialization preserving the frozen backbone prior K_{phi_0} = p_0,
-   explicit (state x context x outcome) emission conditioning, and cluster-level bootstrap
-   negative log-likelihood over unique physical transitions.
-3. Typed executable observation/control programs (`Call`, `Read`, `Seq`, `Case`, `Stop`)
-   with reversible entity role bindings, step-by-step interpreter state (`ProgramExecutionState`),
-   def-use dependency `Delete`, and scope-unified `Concat`.
-4. Unified long-horizon candidate evaluation Q_m^rho(g, h, beta) = E_{K_{phi,m}, rho -> pi_0}[U_B(Y, C)]
-   averaged across ensemble members before argmax selection, with exact finite-table EVSI
-   retained strictly as a zero-modulation decision-theoretic reference.
-5. Witness-guided program discovery driven by observed terminal action differences d_real
-   (kept strictly separate from model estimates d_model), single-label-view isolation for
-   Label-Shuffled controls, and complete candidate construction/inspection budget accounting.
+Implements the complete revision specification (`docs/prism-dcc-v2-design.md`):
+1. Pure symbolic AST (`ExecutableProgram`: `Call`, `Read`, `Seq`, `Case`, `Stop`) separated
+   from task-local `ExecutionFrame` (`ProgramExecutionState`), with stack-based AST evaluation
+   (eliminating `Case` loops), AST-derived consumer def-use graph for `Delete`, local-variable
+   alpha-renaming for `Concat`, and explicit `Action | Complete | BindingFailure` outcomes.
+2. Full LOCA `native_tools` (`function.name` / `function.parameters`) schema adaptation and
+   unbiased candidate support across all feasible operations without I-before-E truncation.
+3. Explicit `ResourceState(before, after)` in wall-clock seconds, environment steps, and model
+   tokens aligned with official `NativeTrajectory.utility`: U_B = Y * max(0, 1 - C_seconds / B_seconds).
+4. Real frozen backbone semantic context & normalized response prior interface (zero SHA256
+   hashes, zero candidate-origin pseudo-logprobs), typed field-slot response predictions
+   supporting `Case` lookahead and parameter binding, strict ensemble-member independence,
+   absorbing termination, and persistent immutable `ModelView` (phi_0 vs phi_T).
+5. Fork-tree marginal NLL computation where shared prefix nodes are forwarded once and sibling
+   branches (u, v) both start from the differentiable post-q `fork_belief`, plus amortized
+   fixed-tail response distribution H_{phi,m}^{pi_0}(Y, C_tail | Y=1) supervised strictly by
+   genuine frozen pi_0 suffix intervals (`TailExample`).
+6. Canonical ordered `Comparison` key shared by witness pairing and `Label-Shuffled` within-group
+   permutation without singleton group expansion.
 """
 
 from __future__ import annotations
@@ -38,18 +38,28 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-DCC_CONTRACT_VERSION = "prism-dcc-v2-unified-r2"
-TAIL_POLICY_VERSION = "frozen-prior-tail-v1"
-GRAMMAR_VERSION = "typed-ast-v2"
+DCC_CONTRACT_VERSION = "prism-dcc-v2-unified-r3"
+TAIL_POLICY_VERSION = "frozen-prior-tail-v2"
+GRAMMAR_VERSION = "typed-ast-v3"
+RESPONSE_SCHEMA_VERSION = "typed-field-slots-v3"
 DEFAULT_ENSEMBLE_SIZE = 8
 DEFAULT_MAX_PROBE_STEPS = 3
-DEFAULT_CONTINUATION_STEPS = 4
+DEFAULT_CONTINUATION_STEPS = 50
 DEFAULT_PROPOSAL_BUDGET = 3
 DEFAULT_MAX_CANDIDATE_CHECKS = 24
 STATE_DIM = 16
-CONTEXT_DIM = 64
+FROZEN_HISTORY_DIM = 32
+FROZEN_ACTION_DIM = 16
+STRUCTURED_FIELD_DIM = 16
+CONTEXT_DIM = FROZEN_HISTORY_DIM + FROZEN_ACTION_DIM + STRUCTURED_FIELD_DIM  # 64
 OUTCOME_BINS = 8
+NUM_FIELD_SLOTS = 4
+NUM_SLOT_VALUES = 4
+TAIL_COST_BINS = 8
 TERMINATION_CATEGORIES = ("live", "native_terminal", "task_budget_terminal")
+
+# Canonical midpoints of 8 uniform wall-clock cost ratio bins in [0, 1]
+TAIL_COST_BIN_CENTERS = tuple((i + 0.5) / TAIL_COST_BINS for i in range(TAIL_COST_BINS))
 
 
 def _canonical_json(value: Any) -> str:
@@ -58,6 +68,76 @@ def _canonical_json(value: Any) -> str:
 
 def _short_hash(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()[:12]
+
+
+def _deterministic_seed(*parts: Any) -> int:
+    digest = hashlib.sha256(_canonical_json(parts).encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") & 0x7FFFFFFF
+
+
+@dataclass(frozen=True)
+class ResourceState:
+    """Explicit pre/post resource ledger aligned with official wall-clock utility U_B."""
+
+    elapsed_seconds: float = 0.0
+    budget_seconds: float = 1800.0
+    env_steps: int = 0
+    max_env_steps: int = 100
+    model_tokens: int = 0
+    max_model_tokens: int = 262144
+    side_forward_ops: int = 0
+
+    @property
+    def spent_seconds_ratio(self) -> float:
+        if self.budget_seconds <= 0:
+            return 1.0
+        return float(min(1.0, max(0.0, self.elapsed_seconds / self.budget_seconds)))
+
+    @property
+    def remaining_seconds_ratio(self) -> float:
+        return float(max(0.0, 1.0 - self.spent_seconds_ratio))
+
+    @property
+    def remaining_steps_ratio(self) -> float:
+        if self.max_env_steps <= 0:
+            return 0.0
+        return float(max(0.0, 1.0 - (self.env_steps / float(self.max_env_steps))))
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "elapsed_seconds": float(self.elapsed_seconds),
+            "budget_seconds": float(self.budget_seconds),
+            "spent_seconds_ratio": self.spent_seconds_ratio,
+            "remaining_seconds_ratio": self.remaining_seconds_ratio,
+            "env_steps": float(self.env_steps),
+            "max_env_steps": float(self.max_env_steps),
+            "remaining_steps_ratio": self.remaining_steps_ratio,
+            "model_tokens": float(self.model_tokens),
+            "max_model_tokens": float(self.max_model_tokens),
+            "side_forward_ops": float(self.side_forward_ops),
+            "ratio": self.remaining_seconds_ratio,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ResourceState":
+        b_sec = float(data.get("budget_seconds", 1800.0))
+        if "elapsed_seconds" in data:
+            e_sec = float(data["elapsed_seconds"])
+        elif "spent_seconds_ratio" in data:
+            e_sec = float(data["spent_seconds_ratio"]) * b_sec
+        elif "ratio" in data:
+            e_sec = (1.0 - float(data["ratio"])) * b_sec
+        else:
+            e_sec = 0.0
+        return cls(
+            elapsed_seconds=e_sec,
+            budget_seconds=b_sec,
+            env_steps=int(float(data.get("env_steps", 0))),
+            max_env_steps=int(float(data.get("max_env_steps", 100))),
+            model_tokens=int(float(data.get("model_tokens", 0))),
+            max_model_tokens=int(float(data.get("max_model_tokens", 262144))),
+            side_forward_ops=int(float(data.get("side_forward_ops", 0))),
+        )
 
 
 @dataclass(frozen=True)
@@ -104,17 +184,186 @@ class ASTNode:
 
 @dataclass(frozen=True)
 class DefUseEdge:
-    """Data-dependency edge linking a step index that produces a variable/field to its consumer."""
+    """Data-dependency edge derived from actual AST producer-consumer references."""
 
     producer_step: int
     variable_name: str
     field_path: str
-    consumer_step: int | None  # None means consumed by final program readout
+    consumer_step: int | None  # None means consumed by final program readout or Case
+
+
+def _derive_ast_and_def_use(
+    step_templates: Sequence[str],
+    readout_fields: Sequence[str],
+    *,
+    case_condition_field: str = "",
+    case_condition_value: str = "",
+    case_true_template: str = "",
+    case_false_template: str = "",
+    existing_ast: Sequence[ASTNode] = (),
+) -> tuple[tuple[ASTNode, ...], tuple[str, ...], tuple[DefUseEdge, ...]]:
+    """Build normalized AST and derive true producer->consumer def-use edges from AST nodes."""
+    if existing_ast:
+        nodes = list(existing_ast)
+    else:
+        nodes = []
+        for idx, tmpl in enumerate(step_templates):
+            var_name = f"ret_{idx}"
+            slots = re.findall(r"\{([a-zA-Z0-9_]+)\}", tmpl)
+            arg_map: dict[str, str] = {}
+            for slot in slots:
+                if slot.startswith("ret_") and "." in slot:
+                    arg_map[slot] = f"${slot}"
+                elif idx > 0 and slot in ("bound_id", "bound_path", "bound_token", "bound_key", "bound_record_id"):
+                    arg_map[slot] = f"$ret_{idx - 1}.{slot}"
+                else:
+                    arg_map[slot] = f"${slot}"
+            nodes.append(
+                ASTNode(
+                    op="Call",
+                    tool_or_action=tmpl,
+                    typed_arguments=arg_map,
+                    bind_return_to=var_name,
+                )
+            )
+            if idx < len(readout_fields):
+                fld = readout_fields[idx]
+                nodes.append(ASTNode(op="Read", variable=var_name, public_field_path=fld))
+        for extra_idx in range(len(step_templates), len(readout_fields)):
+            fld = readout_fields[extra_idx]
+            src_step = max(0, len(step_templates) - 1)
+            var_name = f"ret_{src_step}"
+            nodes.append(ASTNode(op="Read", variable=var_name, public_field_path=fld))
+        if case_condition_field and (case_true_template or case_false_template):
+            nodes.append(
+                ASTNode(
+                    op="Case",
+                    condition_field=case_condition_field,
+                    condition_equals=case_condition_value,
+                    children=(
+                        ASTNode(
+                            op="Call",
+                            tool_or_action=case_true_template,
+                            typed_arguments={
+                                s: f"${s}" for s in re.findall(r"\{([a-zA-Z0-9_]+)\}", case_true_template)
+                            },
+                            bind_return_to="ret_case_true",
+                        )
+                        if case_true_template
+                        else ASTNode(op="Stop"),
+                        ASTNode(
+                            op="Call",
+                            tool_or_action=case_false_template,
+                            typed_arguments={
+                                s: f"${s}" for s in re.findall(r"\{([a-zA-Z0-9_]+)\}", case_false_template)
+                            },
+                            bind_return_to="ret_case_false",
+                        )
+                        if case_false_template
+                        else ASTNode(op="Stop"),
+                    ),
+                )
+            )
+        if not nodes or nodes[-1].op != "Stop":
+            nodes.append(ASTNode(op="Stop"))
+
+    # Traverse AST to compute real producer -> consumer def-use edges
+    call_Step_by_var: dict[str, int] = {}
+    field_producer_step: dict[str, int] = {}
+    scope: list[str] = []
+    edges: list[DefUseEdge] = []
+    call_idx = 0
+
+    def _scan_nodes(seq: Sequence[ASTNode]) -> None:
+        nonlocal call_idx
+        for node in seq:
+            if node.op == "Seq":
+                _scan_nodes(node.children)
+            elif node.op == "Call":
+                cur_step = call_idx
+                call_idx += 1
+                if node.bind_return_to:
+                    call_Step_by_var[node.bind_return_to] = cur_step
+                    if node.bind_return_to not in scope:
+                        scope.append(node.bind_return_to)
+                for _, arg_ref in node.typed_arguments.items():
+                    ref_clean = arg_ref.lstrip("$")
+                    base_var = ref_clean.split(".", 1)[0]
+                    fld_part = ref_clean.split(".", 1)[1] if "." in ref_clean else "return_value"
+                    if base_var in call_Step_by_var:
+                        edges.append(
+                            DefUseEdge(
+                                producer_step=call_Step_by_var[base_var],
+                                variable_name=base_var,
+                                field_path=fld_part,
+                                consumer_step=cur_step,
+                            )
+                        )
+            elif node.op == "Read":
+                prod_step = call_Step_by_var.get(node.variable, max(0, call_idx - 1))
+                field_producer_step[node.public_field_path] = prod_step
+                edges.append(
+                    DefUseEdge(
+                        producer_step=prod_step,
+                        variable_name=node.variable or f"ret_{prod_step}",
+                        field_path=node.public_field_path,
+                        consumer_step=None,
+                    )
+                )
+            elif node.op == "Case":
+                if node.condition_field in field_producer_step:
+                    edges.append(
+                        DefUseEdge(
+                            producer_step=field_producer_step[node.condition_field],
+                            variable_name=f"ret_{field_producer_step[node.condition_field]}",
+                            field_path=node.condition_field,
+                            consumer_step=call_idx,
+                        )
+                    )
+                _scan_nodes(node.children)
+
+    _scan_nodes(nodes)
+    return tuple(nodes), tuple(scope), tuple(edges)
+
+
+def _alpha_rename_ast_nodes(nodes: Sequence[ASTNode], prefix: str) -> tuple[ASTNode, ...]:
+    """Perform local-variable alpha-renaming on AST nodes so concatenated scopes never collide."""
+    renamed: list[ASTNode] = []
+    for node in nodes:
+        if node.op == "Stop":
+            continue
+        new_bind = f"{prefix}_{node.bind_return_to}" if node.bind_return_to.startswith("ret_") else node.bind_return_to
+        new_var = f"{prefix}_{node.variable}" if node.variable.startswith("ret_") else node.variable
+        new_args: dict[str, str] = {}
+        for k, v in node.typed_arguments.items():
+            if v.startswith("$ret_"):
+                new_args[k] = f"${prefix}_{v[1:]}"
+            else:
+                new_args[k] = v
+        new_children = _alpha_rename_ast_nodes(node.children, prefix) if node.children else ()
+        renamed.append(
+            ASTNode(
+                op=node.op,
+                tool_or_action=node.tool_or_action,
+                typed_arguments=new_args,
+                bind_return_to=new_bind,
+                variable=new_var,
+                public_field_path=node.public_field_path,
+                children=new_children,
+                condition_field=node.condition_field,
+                condition_equals=node.condition_equals,
+            )
+        )
+    return tuple(renamed)
 
 
 @dataclass(frozen=True)
 class ExecutableProgram:
-    """Typed executable observation/control program e = (rho_e, chi_e) with depth l <= 3."""
+    """Pure symbolic executable program e = (rho_e, chi_e).
+
+    Stores ONLY structural AST, formal parameter slots, local variable scope, and AST-derived
+    def-use edges. Task-specific concrete object IDs are never stored on the program (fixes F23).
+    """
 
     program_id: str
     benchmark: str
@@ -125,6 +374,7 @@ class ExecutableProgram:
     expected_cost: float = 1.0
     ast_nodes: tuple[ASTNode, ...] = ()
     variable_scope: tuple[str, ...] = ()
+    formal_params: tuple[str, ...] = ()
     role_bindings: dict[str, str] = field(default_factory=dict)
     def_use_edges: tuple[DefUseEdge, ...] = ()
     case_condition_field: str = ""
@@ -133,67 +383,34 @@ class ExecutableProgram:
     case_false_template: str = ""
 
     def __post_init__(self) -> None:
-        if not self.ast_nodes and self.step_templates:
-            nodes: list[ASTNode] = []
-            scope: list[str] = []
-            edges: list[DefUseEdge] = []
-            for idx, tmpl in enumerate(self.step_templates):
-                var_name = f"ret_{idx}"
-                scope.append(var_name)
-                slots = re.findall(r"\{([a-zA-Z0-9_]+)\}", tmpl)
-                arg_map = {slot: f"${slot}" for slot in slots}
-                nodes.append(
-                    ASTNode(
-                        op="Call",
-                        tool_or_action=tmpl,
-                        typed_arguments=arg_map,
-                        bind_return_to=var_name,
-                    )
-                )
-                if idx < len(self.readout_fields):
-                    fld = self.readout_fields[idx]
-                    nodes.append(ASTNode(op="Read", variable=var_name, public_field_path=fld))
-                    edges.append(
-                        DefUseEdge(
-                            producer_step=idx,
-                            variable_name=var_name,
-                            field_path=fld,
-                            consumer_step=None,
-                        )
-                    )
-            for extra_idx in range(len(self.step_templates), len(self.readout_fields)):
-                fld = self.readout_fields[extra_idx]
-                src_step = max(0, len(self.step_templates) - 1)
-                var_name = f"ret_{src_step}"
-                nodes.append(ASTNode(op="Read", variable=var_name, public_field_path=fld))
-                edges.append(
-                    DefUseEdge(
-                        producer_step=src_step,
-                        variable_name=var_name,
-                        field_path=fld,
-                        consumer_step=None,
-                    )
-                )
-            if self.case_condition_field and (self.case_true_template or self.case_false_template):
-                nodes.append(
-                    ASTNode(
-                        op="Case",
-                        condition_field=self.case_condition_field,
-                        condition_equals=self.case_condition_value,
-                        children=(
-                            ASTNode(op="Call", tool_or_action=self.case_true_template)
-                            if self.case_true_template else ASTNode(op="Stop"),
-                            ASTNode(op="Call", tool_or_action=self.case_false_template)
-                            if self.case_false_template else ASTNode(op="Stop"),
-                        ),
-                    )
-                )
-            nodes.append(ASTNode(op="Stop"))
-            object.__setattr__(self, "ast_nodes", tuple(nodes))
-            if not self.variable_scope:
-                object.__setattr__(self, "variable_scope", tuple(scope))
-            if not self.def_use_edges:
-                object.__setattr__(self, "def_use_edges", tuple(edges))
+        # Strip any concrete task instance bindings from Program structure (F23):
+        # only symbolic formal parameter names may be retained.
+        if self.role_bindings:
+            object.__setattr__(self, "role_bindings", {})
+        nodes, scope, edges = _derive_ast_and_def_use(
+            self.step_templates,
+            self.readout_fields,
+            case_condition_field=self.case_condition_field,
+            case_condition_value=self.case_condition_value,
+            case_true_template=self.case_true_template,
+            case_false_template=self.case_false_template,
+            existing_ast=self.ast_nodes,
+        )
+        object.__setattr__(self, "ast_nodes", nodes)
+        if not self.variable_scope:
+            object.__setattr__(self, "variable_scope", scope)
+        if not self.def_use_edges:
+            object.__setattr__(self, "def_use_edges", edges)
+        if not self.formal_params:
+            slots: list[str] = []
+            for tmpl in (*self.step_templates, self.case_true_template, self.case_false_template):
+                for s in re.findall(r"\{([a-zA-Z0-9_]+)\}", tmpl):
+                    if s not in slots:
+                        slots.append(s)
+            object.__setattr__(self, "formal_params", tuple(slots))
+
+    def ast_signature(self) -> str:
+        return _canonical_json([n.to_dict() for n in self.ast_nodes])
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -206,7 +423,8 @@ class ExecutableProgram:
             "expected_cost": float(self.expected_cost),
             "ast_nodes": [node.to_dict() for node in self.ast_nodes],
             "variable_scope": list(self.variable_scope),
-            "role_bindings": dict(self.role_bindings),
+            "formal_params": list(self.formal_params),
+            "role_bindings": {},
             "def_use_edges": [asdict(e) for e in self.def_use_edges],
             "case_condition_field": self.case_condition_field,
             "case_condition_value": self.case_condition_value,
@@ -238,7 +456,8 @@ class ExecutableProgram:
             expected_cost=float(data.get("expected_cost", max(1, len(steps)))),
             ast_nodes=ast_nodes,
             variable_scope=tuple(str(v) for v in data.get("variable_scope", ())),
-            role_bindings={str(k): str(v) for k, v in dict(data.get("role_bindings", {})).items()},
+            formal_params=tuple(str(p) for p in data.get("formal_params", ())),
+            role_bindings={},
             def_use_edges=edges,
             case_condition_field=str(data.get("case_condition_field", "")),
             case_condition_value=str(data.get("case_condition_value", "")),
@@ -247,58 +466,102 @@ class ExecutableProgram:
         )
 
 
-# Backward-compatible alias for existing serialized libraries and imports
 BoundedObservationProgram = ExecutableProgram
 
 
 @dataclass
-class ProgramExecutionState:
-    """Step-by-step runtime interpreter state preserving residual continuation across replanning."""
+class ExecutionFrame:
+    """Private task-instance execution stack frame consuming `ExecutableProgram.ast_nodes`.
+
+    Fixes F05, F06, F23, F24:
+      - Maintains an explicit `node_stack` of `ASTNode` objects.
+      - When `Case` is evaluated, pushes ONLY the chosen branch child onto `node_stack`;
+        once that branch child executes, the stack advances to `Stop` and terminates (never loops).
+      - Stores concrete entity bindings (`bound_variables`) and `Call` return values (`local_env`)
+        strictly in this frame, never mutating `ExecutableProgram`.
+    """
 
     program: ExecutableProgram
     program_counter: int = 0
     bound_variables: dict[str, str] = field(default_factory=dict)
+    local_env: dict[str, dict[str, str]] = field(default_factory=dict)
     observed_readouts: dict[str, str] = field(default_factory=dict)
     executed_actions: list[str] = field(default_factory=list)
+    node_stack: list[ASTNode] = field(default_factory=list)
+    pending_return_var: str = ""
     binding_failed: bool = False
     completed: bool = False
+    last_status: str = "Ready"  # "Ready" | "Action" | "Complete" | "BindingFailure"
+
+    def __post_init__(self) -> None:
+        if not self.node_stack and not self.completed and not self.binding_failed:
+            self.node_stack = list(self.program.ast_nodes)
+            if self.program_counter > 0:
+                # Advance stack past `program_counter` Call nodes for legacy state restoration
+                calls_skipped = 0
+                while self.node_stack and calls_skipped < self.program_counter:
+                    head = self.node_stack.pop(0)
+                    if head.op == "Call":
+                        calls_skipped += 1
+                    elif head.op == "Seq":
+                        self.node_stack = list(head.children) + self.node_stack
+
+    def record_call_return(self, raw_observation: str, post_fields: Mapping[str, str]) -> None:
+        """Bind the return value of the most recently executed Call into `local_env`."""
+        self.observed_readouts.update({str(k): str(v) for k, v in post_fields.items()})
+        var_name = self.pending_return_var or f"ret_{max(0, self.program_counter - 1)}"
+        extracted: dict[str, str] = dict(self.observed_readouts)
+        for key_name, val in re.findall(r'"(id|path|file|token|key|record_id)"\s*:\s*"([^"]{1,64})"', raw_observation):
+            extracted[f"bound_{key_name}"] = val
+            self.bound_variables[f"bound_{key_name}"] = val
+        self.local_env[var_name] = extracted
+        self.pending_return_var = ""
+
+    def remaining_call_nodes(self) -> list[ASTNode]:
+        if self.completed or self.binding_failed:
+            return []
+        calls: list[ASTNode] = []
+        stack_copy = list(self.node_stack)
+        while stack_copy:
+            node = stack_copy.pop(0)
+            if node.op == "Stop":
+                break
+            if node.op == "Seq":
+                stack_copy = list(node.children) + stack_copy
+            elif node.op == "Call":
+                calls.append(node)
+            elif node.op == "Case" and node.children:
+                cond_val = self.observed_readouts.get(node.condition_field, "unknown")
+                branch_idx = 0 if (cond_val != "unknown" and cond_val == node.condition_equals) else (
+                    1 if (cond_val != "unknown" and len(node.children) > 1) else 0
+                )
+                if branch_idx < len(node.children):
+                    stack_copy = [node.children[branch_idx]] + stack_copy
+        return calls
 
     def remaining_templates(self) -> tuple[str, ...]:
-        if self.completed or self.binding_failed:
-            return ()
-        rem = list(self.program.step_templates[self.program_counter :])
-        if not rem and self.program.case_condition_field:
-            cond_val = self.observed_readouts.get(self.program.case_condition_field, "unknown")
-            if cond_val != "unknown":
-                branch_tmpl = (
-                    self.program.case_true_template
-                    if cond_val == self.program.case_condition_value
-                    else self.program.case_false_template
-                )
-                if branch_tmpl:
-                    rem.append(branch_tmpl)
-        return tuple(rem)
+        return tuple(n.tool_or_action for n in self.remaining_call_nodes() if n.tool_or_action)
 
     def residual_program(self) -> ExecutableProgram | None:
-        rem = self.remaining_templates()
-        if not rem:
+        if self.completed or self.binding_failed:
             return None
+        rem_calls = self.remaining_call_nodes()
+        if not rem_calls:
+            return None
+        rem_ast = tuple(self.node_stack)
+        rem_tmpls = tuple(n.tool_or_action for n in rem_calls if n.tool_or_action)
         return ExecutableProgram(
             program_id=f"{self.program.program_id}:pc{self.program_counter}",
             benchmark=self.program.benchmark,
-            step_templates=rem,
+            step_templates=rem_tmpls,
             readout_fields=self.program.readout_fields,
             origin=self.program.origin,
             parent_ids=(self.program.program_id,),
-            expected_cost=float(len(rem)),
-            role_bindings=dict(self.bound_variables),
-            case_condition_field=self.program.case_condition_field,
-            case_condition_value=self.program.case_condition_value,
-            case_true_template=self.program.case_true_template,
-            case_false_template=self.program.case_false_template,
+            expected_cost=float(len(rem_tmpls)),
+            ast_nodes=rem_ast,
         )
 
-    def clone(self) -> "ProgramExecutionState":
+    def clone(self) -> "ExecutionFrame":
         return deepcopy(self)
 
     def to_dict(self) -> dict[str, Any]:
@@ -306,17 +569,34 @@ class ProgramExecutionState:
             "program_id": self.program.program_id,
             "program_counter": self.program_counter,
             "bound_variables": dict(self.bound_variables),
+            "local_env": {k: dict(v) for k, v in self.local_env.items()},
             "observed_readouts": dict(self.observed_readouts),
             "executed_actions": list(self.executed_actions),
+            "node_stack": [n.to_dict() for n in self.node_stack],
+            "pending_return_var": self.pending_return_var,
             "binding_failed": self.binding_failed,
             "completed": self.completed,
+            "last_status": self.last_status,
             "remaining_templates": list(self.remaining_templates()),
         }
 
 
+ProgramExecutionState = ExecutionFrame
+
+
+@dataclass(frozen=True)
+class InterpreterStepResult:
+    """Explicit outcome of one AST interpreter step: Action, Complete, or BindingFailure."""
+
+    status: str  # "Action" | "Complete" | "BindingFailure"
+    concrete_action: str | None
+    frame: ExecutionFrame
+    program_attributed: bool
+
+
 @dataclass(frozen=True)
 class PublicTransition:
-    """Supervised physical transition (h_t, a_t, x_{t+1}) in a measurement cluster."""
+    """Fork-tree transition node (h_t, a_t, x_{t+1}) with explicit parent_transition_id and ResourceState."""
 
     transition_id: str
     task_id: str
@@ -335,15 +615,84 @@ class PublicTransition:
     resource_delta: dict[str, float]
     remaining_budget: dict[str, float]
     termination: str  # "live" | "native_terminal" | "task_budget_terminal"
-    native_outcome: bool | None  # None when live or interrupted by global job budget
+    native_outcome: bool | None
+    parent_transition_id: str | None = None
+    resource_before: dict[str, float] = field(default_factory=dict)
+    resource_after: dict[str, float] = field(default_factory=dict)
+    frozen_context_vec: tuple[float, ...] = ()
+    frozen_action_vec: tuple[float, ...] = ()
+    controller_id: str = "dcc"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
+TransitionNode = PublicTransition
+
+
+@dataclass(frozen=True)
+class TailExample:
+    """Supervision example for H_{phi,m}^{pi_0}(Y, C_tail | h, g, beta) generated strictly by frozen pi_0 suffixes."""
+
+    example_id: str
+    cluster_id: str
+    task_id: str
+    benchmark: str
+    step_index: int
+    tail_policy_version: str
+    goal_text: str
+    pre_public_fields: dict[str, str]
+    resource_before: dict[str, float]
+    frozen_context_vec: tuple[float, ...] = ()
+    observed_y: bool | None = None
+    tail_seconds_cost_ratio: float | None = None
+    total_seconds_cost_ratio: float | None = None
+    censored: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """Canonical ordered continuation pair (u, v) fixed before observing branch outcomes (fixes F15)."""
+
+    comparison_key: str
+    goal_category: str
+    u_policy_id: str
+    v_policy_id: str
+    tail_policy_version: str
+    polarity_sign: float = 1.0
+
+    @classmethod
+    def canonicalize(
+        cls,
+        *,
+        goal_category: str,
+        u_policy_id: str,
+        v_policy_id: str,
+        tail_policy_version: str = TAIL_POLICY_VERSION,
+    ) -> "Comparison":
+        u_str = str(u_policy_id).strip()
+        v_str = str(v_policy_id).strip()
+        if u_str <= v_str:
+            c_u, c_v, sign = u_str, v_str, 1.0
+        else:
+            c_u, c_v, sign = v_str, u_str, -1.0
+        key = f"{goal_category}::{c_u}__vs__{c_v}::{tail_policy_version}"
+        return cls(
+            comparison_key=key,
+            goal_category=goal_category,
+            u_policy_id=c_u,
+            v_policy_id=c_v,
+            tail_policy_version=tail_policy_version,
+            polarity_sign=sign,
+        )
+
+
 @dataclass
 class MeasurementRecord:
-    """Paired intervention record separating observed terminal d_real from model estimate d_model."""
+    """Paired intervention record with canonical Comparison key and separated d_real / d_model."""
 
     record_id: str
     benchmark: str
@@ -379,12 +728,35 @@ class MeasurementRecord:
     d_model: float | None = None
     d_source: str = "observed_native_terminal"
     role_bindings: dict[str, str] = field(default_factory=dict)
+    comparison_key: str = ""
+    program_executed_cleanly: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.comparison_key:
+            comp = Comparison.canonicalize(
+                goal_category=self.goal_category,
+                u_policy_id=self.u_policy_id,
+                v_policy_id=self.v_policy_id,
+                tail_policy_version=self.tail_policy_version,
+            )
+            self.comparison_key = comp.comparison_key
+            self.continuation_pair_key = f"{comp.u_policy_id}__vs__{comp.v_policy_id}"
+            if comp.polarity_sign < 0:
+                self.u_policy_id, self.v_policy_id = comp.u_policy_id, comp.v_policy_id
+                self.u_score, self.v_score = self.v_score, self.u_score
+                self.u_cost, self.v_cost = self.v_cost, self.u_cost
+                self.u_done, self.v_done = self.v_done, self.u_done
+                self.u_native_outcome, self.v_native_outcome = self.v_native_outcome, self.u_native_outcome
+                self.action_diff_d = -float(self.action_diff_d)
+                if self.d_real is not None:
+                    self.d_real = -float(self.d_real)
+                if self.d_model is not None:
+                    self.d_model = -float(self.d_model)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-# Explicit contract alias
 Measurement = MeasurementRecord
 
 
@@ -429,18 +801,15 @@ class ProposalRun:
     unique_witness_pairs: int
     cumulative_witness_visits: int
     added_program_ids: tuple[str, ...]
+    permutable_groups: int = 0
+    permutable_records: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 class PublicBenchmarkBinder:
-    """Public field extractor, reversible entity role binder, and program template interpreter.
-
-    Strictly separates:
-      - Public response extraction (supervising K_phi and updating intra-task state)
-      - Official native terminal utility U_B(Y, C) (the sole control and evaluation objective)
-    """
+    """Public field extractor, LOCA nested schema adapter, and stack-based AST interpreter."""
 
     @classmethod
     def starter_programs(cls, benchmark: str) -> list[ExecutableProgram]:
@@ -491,21 +860,155 @@ class PublicBenchmarkBinder:
         messages: Sequence[Mapping[str, Any]],
         fallback: str = "",
     ) -> str:
-        """Extract the actual public task goal g from message history, skipping system prompts."""
+        """Extract the public task instruction g from message history, skipping system prompts."""
         if not messages:
             return fallback
         for msg in messages:
             role = str(msg.get("role", "")).lower()
             content = str(msg.get("content", "")).strip()
             if role == "user" and content:
+                try:
+                    parsed = json.loads(content)
+                    if isinstance(parsed, Mapping) and parsed.get("instruction"):
+                        return str(parsed["instruction"]).strip()
+                except Exception:
+                    pass
                 return content
-        # If only one message exists and is not tagged user, inspect last non-system message
         for msg in reversed(messages):
             if str(msg.get("role", "")).lower() != "system":
                 content = str(msg.get("content", "")).strip()
                 if content:
                     return content
         return fallback or str(messages[0].get("content", ""))
+
+    @classmethod
+    def _extract_loca_tools(cls, action_schema: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """Extract normalized LOCA tool definitions from `native_tools` or `program_context` (fixes F07)."""
+        raw_tools: list[Any] = []
+        if isinstance(action_schema.get("native_tools"), Sequence):
+            raw_tools.extend(action_schema["native_tools"])
+        prog_ctx = action_schema.get("program_context", {})
+        if isinstance(prog_ctx, Mapping) and isinstance(prog_ctx.get("tools"), Sequence):
+            raw_tools.extend(prog_ctx["tools"])
+        if isinstance(action_schema.get("tools"), Sequence):
+            raw_tools.extend(action_schema["tools"])
+
+        open_modes = action_schema.get("open_text_modes", {})
+        mode_by_name: dict[str, str] = {}
+        if isinstance(open_modes, Mapping):
+            for m_key in ("I", "E"):
+                for t_name in open_modes.get(m_key, ()):
+                    mode_by_name[str(t_name)] = m_key
+
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in raw_tools:
+            if isinstance(item, Mapping):
+                fn = item.get("function") if isinstance(item.get("function"), Mapping) else item
+                name = str(fn.get("name", "")).strip()
+                params = fn.get("parameters", {"type": "object"})
+                if not isinstance(params, Mapping):
+                    params = {"type": "object"}
+            else:
+                name = str(item).strip()
+                params = {"type": "object"}
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            mode = mode_by_name.get(name)
+            if mode is None:
+                is_read = any(
+                    k in name.lower()
+                    for k in ("get", "list", "read", "search", "inspect", "find", "query", "status", "view", "check", "show")
+                )
+                mode = "I" if is_read else "E"
+            normalized.append({"name": name, "parameters": dict(params), "mode": mode})
+
+        # Fallback if only `open_text_modes` names were supplied
+        if not normalized and isinstance(open_modes, Mapping):
+            for m_key in ("I", "E"):
+                for t_name in open_modes.get(m_key, ()):
+                    name = str(t_name).strip()
+                    if name and name not in seen:
+                        seen.add(name)
+                        normalized.append({"name": name, "parameters": {"type": "object"}, "mode": m_key})
+        return normalized
+
+    @classmethod
+    def _build_loca_tool_arguments(
+        cls,
+        tool_spec: Mapping[str, Any],
+        bindings: Mapping[str, str],
+        task_instruction: str,
+    ) -> dict[str, Any] | None:
+        """Construct schema-compliant JSON arguments for a LOCA tool using bound values and task literals."""
+        params = tool_spec.get("parameters", {})
+        if not isinstance(params, Mapping):
+            return {}
+        props = params.get("properties", {})
+        if not isinstance(props, Mapping):
+            props = {}
+        required = list(params.get("required", ()))
+
+        args: dict[str, Any] = {}
+        for req_key in required:
+            prop_schema = props.get(req_key, {}) if isinstance(props.get(req_key), Mapping) else {}
+            if "const" in prop_schema:
+                args[req_key] = prop_schema["const"]
+                continue
+            if "enum" in prop_schema and isinstance(prop_schema["enum"], Sequence) and prop_schema["enum"]:
+                args[req_key] = prop_schema["enum"][0]
+                continue
+            if "default" in prop_schema:
+                args[req_key] = prop_schema["default"]
+                continue
+
+            # Check live bindings from previous tool returns or task entities
+            bound_val = (
+                bindings.get(f"bound_{req_key}")
+                or bindings.get(req_key)
+                or (bindings.get("bound_id") if "id" in req_key.lower() else None)
+                or (bindings.get("bound_path") if ("path" in req_key.lower() or "file" in req_key.lower() or "dir" in req_key.lower()) else None)
+                or (bindings.get("bound_query") if ("query" in req_key.lower() or "keyword" in req_key.lower() or "search" in req_key.lower()) else None)
+            )
+            p_type = str(prop_schema.get("type", "string")).lower()
+            if bound_val is not None:
+                if p_type == "integer":
+                    try:
+                        args[req_key] = int(bound_val)
+                    except ValueError:
+                        args[req_key] = 1
+                elif p_type == "number":
+                    try:
+                        args[req_key] = float(bound_val)
+                    except ValueError:
+                        args[req_key] = 1.0
+                elif p_type == "boolean":
+                    args[req_key] = bound_val.lower() in ("true", "1", "yes")
+                else:
+                    args[req_key] = str(bound_val)
+            else:
+                if p_type == "integer":
+                    args[req_key] = 1
+                elif p_type == "number":
+                    args[req_key] = 1.0
+                elif p_type == "boolean":
+                    args[req_key] = True
+                elif p_type == "array":
+                    args[req_key] = []
+                elif p_type == "object":
+                    args[req_key] = {}
+                elif "path" in req_key.lower() or "dir" in req_key.lower():
+                    args[req_key] = "."
+                elif "query" in req_key.lower():
+                    words = [w for w in re.findall(r"[a-zA-Z0-9_-]{3,}", task_instruction)[:3]]
+                    args[req_key] = " ".join(words) if words else "status"
+                else:
+                    # Cannot safely synthesize an unbound opaque required string ID
+                    if "id" in req_key.lower() or "token" in req_key.lower():
+                        return None
+                    args[req_key] = "."
+        return args
 
     @classmethod
     def extract_role_bindings(
@@ -515,7 +1018,7 @@ class PublicBenchmarkBinder:
         events: Sequence[Any],
         action_schema: Mapping[str, Any],
     ) -> dict[str, str]:
-        """Construct a reversible role-binding table mapping symbolic slots to concrete entities."""
+        """Construct a task-local role-binding table mapping symbolic slots to concrete entities."""
         name = benchmark.split(":", 1)[0]
         obs_texts = [str(getattr(ev, "observation", "")) for ev in events]
         joined_obs = "\n".join(obs_texts[-6:]) if obs_texts else ""
@@ -538,7 +1041,7 @@ class PublicBenchmarkBinder:
                 all_actions = [str(a) for a in action_schema.get("available_actions", ())]
 
             receptacles = sorted(set(re.findall(r"\b([a-z]+\s+\d+)\b", joined_obs.lower())))
-            for idx, rec in enumerate(receptacles[:4]):
+            for idx, rec in enumerate(receptacles[:6]):
                 bindings[f"receptacle_{idx + 1}"] = rec
             if "goal_receptacle_type" in bindings:
                 matching_rec = [
@@ -579,32 +1082,38 @@ class PublicBenchmarkBinder:
                     asins.append(m_asin.group(1))
             if asins:
                 bindings["candidate_asin"] = asins[0]
-                for idx, asin in enumerate(asins[:3]):
+                for idx, asin in enumerate(asins[:4]):
                     bindings[f"candidate_asin_{idx + 1}"] = asin
             return bindings
 
-        # LOCA / structured tool environments
-        prog_ctx = action_schema.get("program_context", action_schema)
-        tools = prog_ctx.get("tools", action_schema.get("tools", ()))
-        read_tools: list[str] = []
-        write_tools: list[str] = []
-        for tool in tools if isinstance(tools, Sequence) else ():
-            t_name = str(tool.get("name", "")) if isinstance(tool, Mapping) else str(tool)
-            if not t_name:
-                continue
-            if any(k in t_name.lower() for k in ("get", "list", "read", "search", "inspect", "find", "query", "status")):
-                read_tools.append(t_name)
-            else:
-                write_tools.append(t_name)
+        # LOCA / structured tool environments (fixes F07)
+        loca_tools = cls._extract_loca_tools(action_schema)
+        read_tools = [t["name"] for t in loca_tools if t["mode"] == "I"]
+        write_tools = [t["name"] for t in loca_tools if t["mode"] == "E"]
         if read_tools:
             bindings["primary_read_tool"] = read_tools[0]
             bindings["secondary_read_tool"] = read_tools[min(1, len(read_tools) - 1)]
+        elif loca_tools:
+            bindings["primary_read_tool"] = loca_tools[0]["name"]
+            bindings["secondary_read_tool"] = loca_tools[0]["name"]
         if write_tools:
             bindings["primary_write_tool"] = write_tools[0]
-        for ev in events[-4:]:
+
+        path_matches = re.findall(r"([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]{1,6})", task_instruction)
+        if path_matches:
+            bindings["bound_path"] = path_matches[0]
+        for ev in events[-6:]:
             obs_str = str(getattr(ev, "observation", ""))
-            for key_name, val in re.findall(r'"(id|path|file|token|key|record_id)"\s*:\s*"([^"]{1,64})"', obs_str):
-                bindings[f"bound_{key_name}"] = val
+            for key_name, val in re.findall(
+                r'"([a-zA-Z0-9_]*(?:id|path|file|token|key|name|dir))"\s*:\s*"([^"]{1,64})"',
+                obs_str,
+            ):
+                k_low = key_name.lower()
+                bindings[f"bound_{k_low}"] = val
+                if "id" in k_low and "bound_id" not in bindings:
+                    bindings["bound_id"] = val
+                if ("path" in k_low or "file" in k_low) and "bound_path" not in bindings:
+                    bindings["bound_path"] = val
         return bindings
 
     @classmethod
@@ -615,7 +1124,7 @@ class PublicBenchmarkBinder:
         events: Sequence[Any],
         action_schema: Mapping[str, Any],
     ) -> dict[str, str]:
-        """Extract structured public fields from the observed history without guessing unobserved facts."""
+        """Extract typed public fields from observed history without guessing unobserved facts."""
         name = benchmark.split(":", 1)[0]
         if not events:
             if name == "alfworld":
@@ -662,7 +1171,6 @@ class PublicBenchmarkBinder:
             elif "is closed" in joined_obs.lower():
                 open_state = "closed"
 
-            # Track held object across full episode events accurately
             held_item = "none"
             for ev in events:
                 obs_l = str(getattr(ev, "observation", "")).lower()
@@ -758,16 +1266,89 @@ class PublicBenchmarkBinder:
             "workspace_artifact_state": artifact_state,
         }
 
+    @classmethod
+    def encode_typed_field_slots(cls, public_fields: Mapping[str, str]) -> tuple[int, int, int, int]:
+        """Encode concrete program-read public fields into 4 typed slot indices in {0, 1, 2, 3} (fixes F09).
+
+        Slot 0 (visibility / match):
+          0=unknown, 1=no/low, 2=yes/high, 3=error
+        Slot 1 (entity / inventory / identifier binding):
+          0=unknown, 1=none/count_0, 2=bound_single, 3=bound_multiple
+        Slot 2 (container / page / prerequisite state):
+          0=unknown, 1=closed/search_home/pending, 2=open_empty/search_results/item_subpage, 3=open_with_items/item_detail/ready
+        Slot 3 (treatment / attribute / workspace artifact state):
+          0=unknown, 1=raw/none/unchanged, 2=inspected/selected, 3=clean_hot_cool_examined/verified_write
+        """
+        # Slot 0
+        vis = public_fields.get("target_object_visible", public_fields.get("price_rating_match", "unknown"))
+        if public_fields.get("prerequisite_status") == "error":
+            s0 = 3
+        elif vis in ("yes", "high"):
+            s0 = 2
+        elif vis in ("no", "low"):
+            s0 = 1
+        else:
+            s0 = 0
+
+        # Slot 1
+        inv = public_fields.get("inventory_object", public_fields.get("current_asin", public_fields.get("bound_identifiers", "unknown")))
+        if inv == "unknown":
+            s1 = 0
+        elif inv in ("none", "count_0"):
+            s1 = 1
+        elif inv in ("count_2", "count_3", "count_4") or "," in inv:
+            s1 = 3
+        else:
+            s1 = 2
+
+        # Slot 2
+        st = public_fields.get("open_receptacle_state", public_fields.get("page_type", public_fields.get("prerequisite_status", "unknown")))
+        if st == "unknown":
+            s2 = 0
+        elif st in ("closed", "search_home", "pending", "error"):
+            s2 = 1
+        elif st in ("open_empty", "search_results", "item_subpage"):
+            s2 = 2
+        else:
+            s2 = 3
+
+        # Slot 3
+        tr = public_fields.get(
+            "object_treatment_state",
+            public_fields.get("workspace_artifact_state", public_fields.get("selected_options", "unknown")),
+        )
+        insp = public_fields.get("inspected_attributes", "none")
+        if tr == "unknown":
+            s3 = 0
+        elif tr in ("clean", "hot", "cool", "examined", "verified_write"):
+            s3 = 3
+        elif tr not in ("raw", "none", "unchanged") or insp not in ("none", "unknown"):
+            s3 = 2
+        else:
+            s3 = 1
+
+        return (int(s0), int(s1), int(s2), int(s3))
+
+    @classmethod
+    def condition_slot_and_value(cls, condition_field: str, condition_equals: str) -> tuple[int, int]:
+        """Map a Case(condition_field, condition_equals) predicate to its corresponding (slot_idx, value_idx)."""
+        dummy = {condition_field: condition_equals}
+        slots = cls.encode_typed_field_slots(dummy)
+        if condition_field in ("target_object_visible", "price_rating_match"):
+            return 0, slots[0]
+        if condition_field in ("inventory_object", "current_asin", "bound_identifiers"):
+            return 1, slots[1]
+        if condition_field in ("open_receptacle_state", "page_type", "prerequisite_status"):
+            return 2, slots[2]
+        return 3, slots[3]
+
     @staticmethod
     def native_terminal_utility(
         native_outcome: bool | None,
         cost_used: float,
         cost_budget: float,
     ) -> float | None:
-        """Compute the sole control objective U_B(Y, C) = Y * max(0, 1 - C / B).
-
-        Returns None when native_outcome is unobserved (live or job-budget truncated).
-        """
+        """Compute official native terminal utility U_B(Y, C_seconds) = Y * max(0, 1 - C_seconds / B_seconds)."""
         if native_outcome is None:
             return None
         if not native_outcome:
@@ -790,7 +1371,7 @@ class PublicBenchmarkBinder:
         cost_used: float = 0.0,
         cost_budget: float = 1.0,
     ) -> float:
-        """Return official terminal utility only; mid-episode hand-crafted progress is removed."""
+        """Return official terminal utility only; mid-episode hand-crafted progress is zero."""
         if not within_budget or not terminal_success:
             return 0.0
         val = cls.native_terminal_utility(True, cost_used, max(1e-8, cost_budget))
@@ -806,12 +1387,14 @@ class PublicBenchmarkBinder:
         terminal_done: bool = False,
         terminal_success: bool = False,
     ) -> int:
-        """Unified 8-category response schema shared identically by training, filtering, and rollout."""
+        """Encode 8-bin coarse summary while checking explicit positive binding values (fixes F09 'no' bug)."""
         changed_fields = sum(1 for k, v in post_fields.items() if pre_fields.get(k, "unknown") != v)
         info_bit = 1 if changed_fields > 0 else 0
-        entity_bound = any(
-            post_fields.get(k, "unknown") not in ("unknown", "none", "count_0")
-            for k in ("inventory_object", "current_asin", "bound_identifiers", "target_object_visible")
+        entity_bound = (
+            post_fields.get("inventory_object", "unknown") not in ("unknown", "none")
+            or post_fields.get("current_asin", "unknown") not in ("unknown", "none")
+            or post_fields.get("bound_identifiers", "unknown") not in ("unknown", "none", "count_0")
+            or post_fields.get("target_object_visible") == "yes"
         )
         bind_bit = 1 if (entity_bound or terminal_success) else 0
         valid_bit = 0 if (had_error or (terminal_done and not terminal_success)) else 1
@@ -826,12 +1409,12 @@ class PublicBenchmarkBinder:
         """Rebind concrete entity IDs in an executed action to reversible symbolic role slots."""
         name = benchmark.split(":", 1)[0]
         text = action_text.strip()
-        inv_bindings = {v.lower(): k for k, v in (role_bindings or {}).items() if v}
+        inv_bindings = {v.lower(): k for k, v in (role_bindings or {}).items() if v and len(v) >= 2}
 
         if name == "alfworld":
             lowered = text.lower()
             for entity_val, slot_name in sorted(inv_bindings.items(), key=lambda x: len(x[0]), reverse=True):
-                if entity_val in lowered:
+                if entity_val in lowered and slot_name in ("target_receptacle", "target_object", "source_receptacle"):
                     lowered = lowered.replace(entity_val, f"{{{slot_name}}}")
             lowered = re.sub(r"\b([a-z]+)\s+\d+\b", r"{\1_id}", lowered)
             return lowered[:64]
@@ -862,20 +1445,60 @@ class PublicBenchmarkBinder:
         task_instruction: str = "",
         role_bindings: Mapping[str, str] | None = None,
     ) -> list[str]:
-        """Return the unified full native action support without partitioning or dropping I/E classes."""
+        """Return unbiased admissible actions across both I and E without truncating E behind I (fixes F07, F08)."""
         name = benchmark.split(":", 1)[0]
+        bindings = dict(role_bindings or {})
+        if not bindings:
+            bindings = cls.extract_role_bindings(benchmark, task_instruction, (), action_schema)
+
+        if name == "loca" or action_schema.get("native_tools") or action_schema.get("native_action_schemas_by_mode"):
+            candidates: list[str] = []
+            # 1. Include ready zero-arg probe actions from environment schema
+            for p_act in action_schema.get("probe_actions", ()):
+                s = str(p_act).strip()
+                if s and s not in candidates:
+                    candidates.append(s)
+            # 2. Construct valid JSON calls across both I and E tools from native_tools
+            loca_tools = cls._extract_loca_tools(action_schema)
+            i_tools = [t for t in loca_tools if t["mode"] == "I"]
+            e_tools = [t for t in loca_tools if t["mode"] == "E"]
+            # Interleave I and E tools so neither mode is starved by any downstream budget cap
+            interleaved: list[dict[str, Any]] = []
+            for idx in range(max(len(i_tools), len(e_tools))):
+                if idx < len(i_tools):
+                    interleaved.append(i_tools[idx])
+                if idx < len(e_tools):
+                    interleaved.append(e_tools[idx])
+            for t_spec in interleaved:
+                args_obj = cls._build_loca_tool_arguments(t_spec, bindings, task_instruction)
+                if args_obj is None:
+                    continue
+                call_str = json.dumps(
+                    {"name": t_spec["name"], "arguments": args_obj},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if call_str not in candidates:
+                    candidates.append(call_str)
+            return candidates
+
         mode_actions = action_schema.get("mode_actions", {})
-        candidates: list[str] = []
-        for act in (*mode_actions.get("I", ()), *mode_actions.get("E", ())):
-            s = str(act).strip()
-            if s and s not in candidates:
-                candidates.append(s)
+        i_list = [str(a).strip() for a in mode_actions.get("I", ()) if str(a).strip()]
+        e_list = [str(a).strip() for a in mode_actions.get("E", ()) if str(a).strip()]
+        # Interleave E and I actions so every feasible E action (e.g., take/put/clean/Buy Now) is always represented
+        candidates = []
+        for idx in range(max(len(i_list), len(e_list))):
+            if idx < len(e_list) and e_list[idx] not in candidates:
+                candidates.append(e_list[idx])
+            if idx < len(i_list) and i_list[idx] not in candidates:
+                candidates.append(i_list[idx])
         for act in action_schema.get("available_actions", ()):
             s = str(act).strip()
             if s and s not in candidates:
                 candidates.append(s)
         if name == "webshop" and action_schema.get("search_available"):
-            query = (role_bindings or {}).get("goal_query", "")
+            query = bindings.get("goal_query", "")
             if not query and task_instruction:
                 words = [w for w in re.findall(r"[a-z0-9]+", task_instruction.lower()) if len(w) > 2][:6]
                 query = " ".join(words) or "product"
@@ -893,24 +1516,26 @@ class PublicBenchmarkBinder:
         action_schema: Mapping[str, Any],
         task_instruction: str,
         role_bindings: Mapping[str, str] | None = None,
+        local_env: Mapping[str, Mapping[str, str]] | None = None,
     ) -> str | None:
-        """Bind a symbolic step template to a concrete admissible action.
-
-        Returns None on binding failure; never silently substitutes an unrelated default action.
-        """
+        """Bind a symbolic step template or AST Call node to a concrete admissible action (fixes F07, F23, F24)."""
         name = benchmark.split(":", 1)[0]
         bindings = dict(role_bindings or {})
         if not bindings:
             bindings = cls.extract_role_bindings(benchmark, task_instruction, (), action_schema)
-        all_candidates = cls.enumerate_admissible_actions(benchmark, action_schema, task_instruction, bindings)
+        if local_env:
+            for var_name, field_map in local_env.items():
+                for fk, fv in field_map.items():
+                    bindings[f"{var_name}.{fk}"] = fv
+                    if fk.startswith("bound_"):
+                        bindings.setdefault(fk, fv)
 
-        # Direct match
+        all_candidates = cls.enumerate_admissible_actions(benchmark, action_schema, task_instruction, bindings)
         if template in all_candidates:
             return template
 
-        # Substitute known role bindings into template slots
         resolved = template
-        for slot in re.findall(r"\{([a-zA-Z0-9_]+)\}", template):
+        for slot in re.findall(r"\{([a-zA-Z0-9_.]+)\}", template):
             if slot in bindings and bindings[slot]:
                 resolved = resolved.replace(f"{{{slot}}}", bindings[slot])
         if resolved in all_candidates:
@@ -955,84 +1580,150 @@ class PublicBenchmarkBinder:
                     return cand
             return None
 
-        # LOCA / structured tool environment
-        prog_ctx = action_schema.get("program_context", action_schema)
-        tools = prog_ctx.get("tools", action_schema.get("tools", ()))
-        tool_names = [
-            str(t.get("name", "")) if isinstance(t, Mapping) else str(t)
-            for t in (tools if isinstance(tools, Sequence) else ())
-        ]
+        # LOCA / structured tool environment (fixes F07)
+        loca_tools = cls._extract_loca_tools(action_schema)
+        tool_by_name = {t["name"]: t for t in loca_tools}
         for slot_key in ("primary_read_tool", "secondary_read_tool", "primary_write_tool"):
             if f"{{{slot_key}}}" in resolved and bindings.get(slot_key):
                 resolved = resolved.replace(f"{{{slot_key}}}", bindings[slot_key])
         tool_head = resolved.split(":", 1)[-1].split("(", 1)[0].strip()
-        if tool_head in tool_names:
-            args_payload: dict[str, Any] = {}
-            for k, v in bindings.items():
-                if k.startswith("bound_"):
-                    args_payload[k.replace("bound_", "")] = v
-            return json.dumps({"name": tool_head, "arguments": args_payload}, ensure_ascii=False, sort_keys=True)
+        if tool_head in tool_by_name:
+            args_payload = cls._build_loca_tool_arguments(tool_by_name[tool_head], bindings, task_instruction)
+            if args_payload is None:
+                return None
+            return json.dumps(
+                {"name": tool_head, "arguments": args_payload},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         return None
+
+    @classmethod
+    def step_ast_frame(
+        cls,
+        frame: ExecutionFrame,
+        action_schema: Mapping[str, Any],
+        task_instruction: str,
+        events: Sequence[Any],
+    ) -> InterpreterStepResult:
+        """Consume AST nodes from `frame.node_stack` until the next `Call`, `Stop`, or `BindingFailure`."""
+        next_frame = frame.clone()
+        if next_frame.completed:
+            next_frame.last_status = "Complete"
+            return InterpreterStepResult("Complete", None, next_frame, False)
+        if next_frame.binding_failed:
+            next_frame.last_status = "BindingFailure"
+            return InterpreterStepResult("BindingFailure", None, next_frame, False)
+
+        live_bindings = cls.extract_role_bindings(
+            next_frame.program.benchmark, task_instruction, events, action_schema
+        )
+        # Task-live bindings and frame-bound return variables take precedence; no stale program bindings (F23)
+        next_frame.bound_variables = {**live_bindings, **next_frame.bound_variables}
+        current_fields = cls.extract_public_fields(
+            next_frame.program.benchmark, task_instruction, events, action_schema
+        )
+        next_frame.observed_readouts.update(current_fields)
+        if events and next_frame.pending_return_var:
+            last_obs = str(getattr(events[-1], "observation", ""))
+            next_frame.record_call_return(last_obs, current_fields)
+
+        steps_guard = 0
+        while next_frame.node_stack and steps_guard < 32:
+            steps_guard += 1
+            node = next_frame.node_stack.pop(0)
+            if node.op == "Stop":
+                next_frame.completed = True
+                next_frame.last_status = "Complete"
+                return InterpreterStepResult("Complete", None, next_frame, False)
+            if node.op == "Seq":
+                next_frame.node_stack = list(node.children) + next_frame.node_stack
+                continue
+            if node.op == "Read":
+                if node.variable and node.variable in next_frame.local_env:
+                    val = next_frame.local_env[node.variable].get(node.public_field_path)
+                    if val is not None:
+                        next_frame.observed_readouts[node.public_field_path] = val
+                continue
+            if node.op == "Case":
+                cond_val = next_frame.observed_readouts.get(node.condition_field, "unknown")
+                if cond_val == "unknown":
+                    next_frame.binding_failed = True
+                    next_frame.last_status = "BindingFailure"
+                    return InterpreterStepResult("BindingFailure", None, next_frame, False)
+                take_true = cond_val == node.condition_equals
+                chosen_child = (
+                    node.children[0]
+                    if (take_true and len(node.children) >= 1)
+                    else (node.children[1] if (not take_true and len(node.children) >= 2) else ASTNode(op="Stop"))
+                )
+                # Push ONLY the chosen branch onto the stack; once consumed, execution proceeds to Stop (fixes F06)
+                next_frame.node_stack = [chosen_child] + next_frame.node_stack
+                continue
+            if node.op == "Call":
+                concrete_action = cls.instantiate_template_action(
+                    next_frame.program.benchmark,
+                    node.tool_or_action,
+                    action_schema,
+                    task_instruction,
+                    next_frame.bound_variables,
+                    next_frame.local_env,
+                )
+                if concrete_action is None:
+                    next_frame.binding_failed = True
+                    next_frame.last_status = "BindingFailure"
+                    return InterpreterStepResult("BindingFailure", None, next_frame, False)
+                next_frame.program_counter += 1
+                next_frame.pending_return_var = node.bind_return_to or f"ret_{next_frame.program_counter - 1}"
+                next_frame.executed_actions.append(concrete_action)
+                # Peek if only Read/Stop nodes remain on stack and consume trailing Reads
+                while next_frame.node_stack and next_frame.node_stack[0].op == "Read":
+                    r_node = next_frame.node_stack.pop(0)
+                    if r_node.public_field_path in current_fields:
+                        next_frame.observed_readouts[r_node.public_field_path] = current_fields[r_node.public_field_path]
+                if not next_frame.node_stack or (
+                    len(next_frame.node_stack) == 1 and next_frame.node_stack[0].op == "Stop"
+                ):
+                    next_frame.node_stack = []
+                    next_frame.completed = True
+                next_frame.last_status = "Action"
+                return InterpreterStepResult("Action", concrete_action, next_frame, True)
+
+        next_frame.completed = True
+        next_frame.last_status = "Complete"
+        return InterpreterStepResult("Complete", None, next_frame, False)
 
     @classmethod
     def step_program_interpreter(
         cls,
-        state: ProgramExecutionState,
+        state: ExecutionFrame,
         action_schema: Mapping[str, Any],
         task_instruction: str,
         events: Sequence[Any],
-    ) -> tuple[str | None, ProgramExecutionState]:
-        """Bind and advance one step of `ExecutableProgram`, preserving residual state for replanning."""
-        next_state = state.clone()
-        if next_state.completed or next_state.binding_failed:
-            return None, next_state
-
-        live_bindings = cls.extract_role_bindings(
-            next_state.program.benchmark, task_instruction, events, action_schema
-        )
-        merged_bindings = {**live_bindings, **next_state.program.role_bindings, **next_state.bound_variables}
-        next_state.bound_variables = merged_bindings
-        next_state.observed_readouts = cls.extract_public_fields(
-            next_state.program.benchmark, task_instruction, events, action_schema
-        )
-
-        rem = next_state.remaining_templates()
-        if not rem:
-            next_state.completed = True
-            return None, next_state
-
-        current_template = rem[0]
-        concrete_action = cls.instantiate_template_action(
-            next_state.program.benchmark,
-            current_template,
-            action_schema,
-            task_instruction,
-            merged_bindings,
-        )
-        if concrete_action is None:
-            next_state.binding_failed = True
-            return None, next_state
-
-        next_state.program_counter += 1
-        next_state.executed_actions.append(concrete_action)
-        if next_state.program_counter >= len(next_state.program.step_templates) and not next_state.program.case_condition_field:
-            next_state.completed = True
-        return concrete_action, next_state
+    ) -> tuple[str | None, ExecutionFrame]:
+        """Step the stack-based AST interpreter and return `(concrete_action_or_None, updated_frame)`."""
+        res = cls.step_ast_frame(state, action_schema, task_instruction, events)
+        return res.concrete_action, res.frame
 
 
 class ControlledResponseEnsemble(nn.Module):
-    """Normalized context-conditioned residual response ensemble K_{phi,m}(x | g, h, a, beta).
+    """Normalized context-conditioned residual response ensemble K_{phi,m} and tail head H_{phi,m}^{pi_0}.
 
-    Parameterizes:
-      p_{phi,m}(x_i | c, x_{<i}) = softmax(ell_0(c, x_{<i}) + r_{phi,m}(c, x_{<i}))_{x_i}
-    where ell_0 comes from the frozen backbone prior (when available) and r_{phi,m} is the
-    trainable side network initialized at zero residual so K_{phi_0, m} == p_0.
-
-    Predicts:
-      - Public response category distribution (8 unified categories)
-      - Step resource cost ratio in (0, 1)
-      - Termination distribution over ("live", "native_terminal", "task_budget_terminal")
-      - Conditional native terminal success probability P_m(Y = 1 | g, h, a, beta, pi_0)
+    Fixes F01, F02, F04, F09, F10, F11, F12, F13, F14, F22:
+      - Zero-initialized base and residual logits so K_{phi_0} == p_0 strictly holds.
+      - Consumes real frozen backbone semantic vectors (`frozen_context_vec`, `frozen_action_vec`),
+        zero SHA256 hashes, and zero candidate-origin pseudo-logprobs.
+      - Predicts typed field-slot value distributions `(M, NUM_FIELD_SLOTS, NUM_SLOT_VALUES)`
+        alongside outcome bins so `Case` conditions and downstream bindings have genuine forward lookahead.
+      - Strictly independent ensemble members `m = 0..M-1`: each member maintains its own private
+        state `belief[m, :]`, field distributions, termination probabilities, and elapsed seconds ratio;
+        no `.mean(dim=0)` across members occurs inside transition or tail heads.
+      - Absorbing termination: `alive_prob` multiplies directly by `termination_probs[:, 0]` (`live`).
+      - Dedicated amortized fixed-tail head `H_{phi,m}^{pi_0}(Y, C_tail | Y=1)` predicting both
+        terminal success probability and an 8-bin conditional wall-clock time-cost distribution given Y=1.
+      - Fork-tree marginal NLL: shared prefix transitions are forwarded once, caching differentiable
+        `fork_belief` so both u and v suffixes start from `b_{post-q}`.
     """
 
     def __init__(
@@ -1048,75 +1739,123 @@ class ControlledResponseEnsemble(nn.Module):
         self.outcome_bins = int(outcome_bins)
         self.context_dim = int(context_dim)
 
-        # Context encoder mapping (g, h_t, a_t, beta_t, frozen_backbone_summary) -> context_dim
+        # Shared semantic context encoder
         self.context_encoder = nn.Sequential(
             nn.Linear(self.context_dim, self.context_dim),
             nn.LayerNorm(self.context_dim),
             nn.SiLU(),
             nn.Linear(self.context_dim, self.context_dim),
         )
-        # State-context-transition interaction: (context_dim) -> (M * S * S)
+        # Per-member transition and emission residual projections
         self.transition_residual_proj = nn.Linear(
             self.context_dim, self.ensemble_size * self.state_dim * self.state_dim
         )
-        # Explicit state-context-outcome emission interaction: (context_dim) -> (M * S * O)
-        # Fixes the constant-shift softmax cancellation bug (I11).
         self.emission_residual_proj = nn.Linear(
             self.context_dim, self.ensemble_size * self.state_dim * self.outcome_bins
         )
-        # Per-member base transition and emission parameters
+        # Per-member typed field-slot distribution head: (M, S, NUM_FIELD_SLOTS, NUM_SLOT_VALUES)
+        self.field_slot_proj = nn.Linear(
+            self.context_dim,
+            self.ensemble_size * self.state_dim * NUM_FIELD_SLOTS * NUM_SLOT_VALUES,
+        )
+        # Base transition and emission logits initialized at zero so K_{phi_0} == p_0 (fixes F01)
         self.transition_logits = nn.Parameter(
-            0.02 * torch.randn(self.ensemble_size, self.state_dim, self.state_dim)
+            torch.zeros(self.ensemble_size, self.state_dim, self.state_dim)
         )
         self.emission_logits = nn.Parameter(
-            0.02 * torch.randn(self.ensemble_size, self.state_dim, self.outcome_bins)
-        )
-        # Residual heads for termination (3 classes), cost ratio, and terminal outcome Y under tail pi_0
-        self.termination_head = nn.Linear(
-            self.state_dim + self.context_dim, self.ensemble_size * len(TERMINATION_CATEGORIES)
-        )
-        self.cost_head = nn.Linear(self.state_dim + self.context_dim, self.ensemble_size)
-        self.terminal_outcome_head = nn.Linear(
-            self.state_dim + self.context_dim + self.outcome_bins, self.ensemble_size
+            torch.zeros(self.ensemble_size, self.state_dim, self.outcome_bins)
         )
 
-        # Zero-initialize residual projections so K_{phi_0} preserves the base prior at initialization
+        # Per-member private single-step heads: input is per-member state (S) + context (C), no cross-member mean (fixes F13)
+        member_in_dim = self.state_dim + self.context_dim
+        self.member_termination_weight = nn.Parameter(
+            torch.zeros(self.ensemble_size, member_in_dim, len(TERMINATION_CATEGORIES))
+        )
+        self.member_termination_bias = nn.Parameter(
+            torch.zeros(self.ensemble_size, len(TERMINATION_CATEGORIES))
+        )
+        self.member_step_cost_weight = nn.Parameter(
+            torch.zeros(self.ensemble_size, member_in_dim)
+        )
+        self.member_step_cost_bias = nn.Parameter(torch.zeros(self.ensemble_size))
+        self.member_step_outcome_weight = nn.Parameter(
+            torch.zeros(self.ensemble_size, member_in_dim + self.outcome_bins)
+        )
+        self.member_step_outcome_bias = nn.Parameter(torch.zeros(self.ensemble_size))
+
+        # Dedicated amortized fixed-tail head H_{phi,m}^{pi_0}(Y, C_tail | Y=1, h, g, beta) (fixes F02, F11)
+        self.tail_pi0_success_weight = nn.Parameter(
+            torch.zeros(self.ensemble_size, member_in_dim)
+        )
+        self.tail_pi0_success_bias = nn.Parameter(torch.zeros(self.ensemble_size))
+        self.tail_pi0_cost_bins_weight = nn.Parameter(
+            torch.zeros(self.ensemble_size, member_in_dim, TAIL_COST_BINS)
+        )
+        self.tail_pi0_cost_bins_bias = nn.Parameter(
+            torch.zeros(self.ensemble_size, TAIL_COST_BINS)
+        )
+
         nn.init.zeros_(self.transition_residual_proj.weight)
         nn.init.zeros_(self.transition_residual_proj.bias)
         nn.init.zeros_(self.emission_residual_proj.weight)
         nn.init.zeros_(self.emission_residual_proj.bias)
-        nn.init.zeros_(self.termination_head.weight)
-        nn.init.zeros_(self.termination_head.bias)
-        nn.init.zeros_(self.cost_head.weight)
-        nn.init.zeros_(self.cost_head.bias)
-        nn.init.zeros_(self.terminal_outcome_head.weight)
-        nn.init.zeros_(self.terminal_outcome_head.bias)
+        nn.init.zeros_(self.field_slot_proj.weight)
+        nn.init.zeros_(self.field_slot_proj.bias)
 
-        # Uniform member weights (used for finite-model reference or uniform bootstrap averaging)
         self.register_buffer(
             "mechanism_weights",
             torch.full((self.ensemble_size,), 1.0 / self.ensemble_size, dtype=torch.float32),
         )
-        # Save complete initial state dict for exact phi_0 evaluation and reset (fixes E04)
         self._initial_state_tensors: dict[str, torch.Tensor] = {
             k: v.detach().clone() for k, v in self.state_dict().items()
         }
 
     def snapshot_initial_parameters(self) -> None:
-        """Record the exact initial parameter snapshot phi_0 across all layers."""
         self._initial_state_tensors = {
             k: v.detach().clone() for k, v in self.state_dict().items()
         }
 
+    def initial_state_dict_snapshot(self) -> dict[str, torch.Tensor]:
+        return {k: v.detach().clone() for k, v in self._initial_state_tensors.items()}
+
+    def active_model_view(self, use_initial_params: bool = False) -> "ControlledResponseEnsemble":
+        """Return an immutable phi_0 view when `use_initial_params=True` without mutating or cloning per call."""
+        if not use_initial_params or not self._initial_state_tensors:
+            return self
+        view = getattr(self, "_cached_initial_view", None)
+        if view is None:
+            view = ControlledResponseEnsemble(
+                ensemble_size=self.ensemble_size,
+                state_dim=self.state_dim,
+                outcome_bins=self.outcome_bins,
+                context_dim=self.context_dim,
+            ).to(device=self.transition_logits.device, dtype=self.transition_logits.dtype)
+            restored = {
+                k: v.to(device=self.transition_logits.device, dtype=self.transition_logits.dtype).detach().clone()
+                for k, v in self._initial_state_tensors.items()
+            }
+            view.load_state_dict(restored, strict=True)
+            for p in view.parameters():
+                p.requires_grad_(False)
+            view.eval()
+            object.__setattr__(self, "_cached_initial_view", view)
+        return view
+
+    def load_initial_state_dict_snapshot(self, state_map: Mapping[str, torch.Tensor]) -> None:
+        dev = self.transition_logits.device
+        self._initial_state_tensors = {
+            k: v.to(dev).detach().clone() for k, v in state_map.items() if k in self.state_dict()
+        }
+        if hasattr(self, "_cached_initial_view"):
+            delattr(self, "_cached_initial_view")
+
     def restore_initial_parameters(self) -> None:
-        """Restore all parameters and buffers to their exact phi_0 snapshot."""
         if self._initial_state_tensors:
             dev = self.transition_logits.device
             restored = {k: v.to(dev).clone() for k, v in self._initial_state_tensors.items()}
             self.load_state_dict(restored, strict=True)
 
     def reset_intra_task_belief(self, device: torch.device | None = None) -> torch.Tensor:
-        """Reset intra-task state s_m(h_0) at the beginning of a new task episode."""
         dev = device or self.transition_logits.device
         return torch.full(
             (self.ensemble_size, self.state_dim),
@@ -1126,6 +1865,23 @@ class ControlledResponseEnsemble(nn.Module):
         )
 
     @classmethod
+    def deterministic_semantic_projection(cls, text: str, dim: int) -> tuple[float, ...]:
+        """Fallback continuous bag-of-n-grams projection ONLY when no backbone model is resident."""
+        vec = np.zeros(dim, dtype=np.float32)
+        tokens = re.findall(r"[a-z0-9_]+", text.lower())
+        if not tokens:
+            return tuple(float(x) for x in vec)
+        for tok in tokens:
+            h = int.from_bytes(hashlib.blake2b(tok.encode("utf-8"), digest_size=4).digest(), "big")
+            idx = h % dim
+            sign = 1.0 if ((h >> 16) & 1) == 0 else -1.0
+            vec[idx] += sign
+        norm = float(np.linalg.norm(vec))
+        if norm > 1e-6:
+            vec = vec / norm
+        return tuple(float(x) for x in vec)
+
+    @classmethod
     def encode_context_vector(
         cls,
         *,
@@ -1133,65 +1889,71 @@ class ControlledResponseEnsemble(nn.Module):
         public_fields: Mapping[str, str],
         action_text: str,
         remaining_budget_ratio: float = 1.0,
+        spent_seconds_ratio: float | None = None,
+        remaining_steps_ratio: float = 1.0,
+        frozen_context_vec: Sequence[float] = (),
+        frozen_action_vec: Sequence[float] = (),
         prior_action_logprob: float = 0.0,
         prior_success_logit: float = 0.0,
         program: ExecutableProgram | None = None,
         device: torch.device | None = None,
     ) -> torch.Tensor:
-        """Encode c = (g, h_t, a_t, beta_t, ell_0) into a 64-dim structured semantic context vector."""
+        """Encode c = (frozen_context, frozen_action, public_fields, resource_before) into a 64-dim vector.
+
+        Fixes F01 and F10:
+          - First 32 dims: frozen backbone semantic representation of (goal, history).
+          - Next 16 dims: frozen backbone semantic embedding of `action_text`.
+          - Final 16 dims: pre-action ResourceState and typed public field slot indicators
+            shared identically by NLL training and Q planning (no fake candidate-origin constants).
+        """
         vec = np.zeros(CONTEXT_DIM, dtype=np.float32)
+
+        # 0..31: Frozen history representation
+        hist_seq = (
+            list(frozen_context_vec)[:FROZEN_HISTORY_DIM]
+            if frozen_context_vec
+            else list(cls.deterministic_semantic_projection(f"{goal_text}\n{_canonical_json(dict(public_fields))}", FROZEN_HISTORY_DIM))
+        )
+        vec[: len(hist_seq)] = np.asarray(hist_seq, dtype=np.float32)
+
+        # 32..47: Frozen action representation
+        act_seq = (
+            list(frozen_action_vec)[:FROZEN_ACTION_DIM]
+            if frozen_action_vec
+            else list(cls.deterministic_semantic_projection(action_text, FROZEN_ACTION_DIM))
+        )
+        vec[FROZEN_HISTORY_DIM : FROZEN_HISTORY_DIM + len(act_seq)] = np.asarray(act_seq, dtype=np.float32)
+
+        # 48..63: Pre-action resource state & typed public field slots (identical in training and planning)
+        rem_sec = float(min(1.0, max(0.0, remaining_budget_ratio)))
+        spent_sec = float(1.0 - rem_sec if spent_seconds_ratio is None else min(1.0, max(0.0, spent_seconds_ratio)))
+        rem_steps = float(min(1.0, max(0.0, remaining_steps_ratio)))
         goal_tokens = set(re.findall(r"[a-z0-9]{3,}", goal_text.lower()))
         act_tokens = set(re.findall(r"[a-z0-9]{2,}", action_text.lower()))
         field_vals = " ".join(f"{k}:{v}" for k, v in sorted(public_fields.items())).lower()
         field_tokens = set(re.findall(r"[a-z0-9_]{2,}", field_vals))
 
-        # Goal-action and goal-history lexical alignment features
-        vec[0] = float(min(1.0, max(0.0, remaining_budget_ratio)))
-        vec[1] = float(np.tanh(prior_action_logprob / 5.0))
-        vec[2] = float(np.tanh(prior_success_logit / 4.0))
-        vec[3] = len(goal_tokens & act_tokens) / max(1.0, float(len(goal_tokens)))
-        vec[4] = len(goal_tokens & field_tokens) / max(1.0, float(len(goal_tokens)))
-        vec[5] = len(act_tokens & field_tokens) / max(1.0, float(len(act_tokens)))
+        base_idx = FROZEN_HISTORY_DIM + FROZEN_ACTION_DIM  # 48
+        vec[base_idx + 0] = rem_sec
+        vec[base_idx + 1] = spent_sec
+        vec[base_idx + 2] = rem_steps
+        vec[base_idx + 3] = len(goal_tokens & act_tokens) / max(1.0, float(len(goal_tokens)))
+        vec[base_idx + 4] = len(goal_tokens & field_tokens) / max(1.0, float(len(goal_tokens)))
+        vec[base_idx + 5] = len(act_tokens & field_tokens) / max(1.0, float(len(act_tokens)))
 
-        # Concrete action semantics
         act_l = action_text.strip().lower()
-        vec[6] = 1.0 if act_l.startswith(("look", "inventory", "examine", "search[")) else 0.0
-        vec[7] = 1.0 if act_l.startswith(("go to", "open", "click[")) else 0.0
-        vec[8] = 1.0 if act_l.startswith(("take", "move", "put", "clean", "heat", "cool", "use")) else 0.0
-        vec[9] = 1.0 if ("buy now" in act_l or "claim_done" in act_l or "submit" in act_l) else 0.0
+        vec[base_idx + 6] = 1.0 if act_l.startswith(("look", "inventory", "examine", "search[")) else 0.0
+        vec[base_idx + 7] = 1.0 if act_l.startswith(("go to", "open", "click[")) else 0.0
+        vec[base_idx + 8] = 1.0 if act_l.startswith(("take", "move", "put", "clean", "heat", "cool", "use")) else 0.0
+        vec[base_idx + 9] = 1.0 if ("buy now" in act_l or "claim_done" in act_l or "submit" in act_l) else 0.0
 
-        # Structured public field indicators (never guessing unobserved fields)
-        vec[10] = 1.0 if public_fields.get("target_object_visible") == "yes" else (
-            -1.0 if public_fields.get("target_object_visible") == "no" else 0.0
-        )
-        vec[11] = 1.0 if public_fields.get("inventory_object", "unknown") not in ("unknown", "none") else 0.0
-        vec[12] = 1.0 if public_fields.get("object_treatment_state", "unknown") not in ("unknown", "raw") else 0.0
-        vec[13] = 1.0 if public_fields.get("open_receptacle_state") == "open_with_items" else 0.0
-        vec[14] = 1.0 if public_fields.get("current_asin", "unknown") not in ("unknown", "none") else 0.0
-        vec[15] = 1.0 if public_fields.get("selected_options", "none") not in ("unknown", "none") else 0.0
-        vec[16] = 1.0 if public_fields.get("inspected_attributes", "none") not in ("unknown", "none") else 0.0
-        vec[17] = 1.0 if public_fields.get("price_rating_match") == "high" else 0.0
-        vec[18] = 1.0 if public_fields.get("bound_identifiers", "count_0") not in ("unknown", "count_0") else 0.0
-        vec[19] = 1.0 if public_fields.get("prerequisite_status") == "ready" else (
-            -1.0 if public_fields.get("prerequisite_status") == "error" else 0.0
-        )
-        vec[20] = 1.0 if public_fields.get("workspace_artifact_state") == "verified_write" else 0.0
-
-        if program is not None:
-            vec[21] = min(1.0, len(program.step_templates) / 3.0)
-            vec[22] = min(1.0, len(program.readout_fields) / 4.0)
-            vec[23] = 1.0 if program.case_condition_field else 0.0
-
-        # Deterministic projections of (goal, public_fields, action_text) for fine-grained discrimination
-        for offset, payload in (
-            (24, goal_text),
-            (36, _canonical_json(dict(public_fields))),
-            (48, action_text),
-        ):
-            digest = hashlib.sha256(payload.encode("utf-8")).digest()
-            span = 12 if offset < 48 else 16
-            for idx in range(span):
-                vec[offset + idx] = (digest[idx] / 127.5) - 1.0
+        slot_0, slot_1, slot_2, slot_3 = PublicBenchmarkBinder.encode_typed_field_slots(public_fields)
+        vec[base_idx + 10] = (slot_0 - 1.5) / 1.5
+        vec[base_idx + 11] = (slot_1 - 1.5) / 1.5
+        vec[base_idx + 12] = (slot_2 - 1.5) / 1.5
+        vec[base_idx + 13] = (slot_3 - 1.5) / 1.5
+        vec[base_idx + 14] = 1.0 if public_fields.get("prerequisite_status") == "error" else 0.0
+        vec[base_idx + 15] = 1.0 if public_fields.get("workspace_artifact_state") == "verified_write" else 0.0
 
         return torch.tensor(vec, device=device, dtype=torch.float32)
 
@@ -1205,19 +1967,19 @@ class ControlledResponseEnsemble(nn.Module):
         goal_text: str = "",
         action_text: str = "",
         remaining_budget_ratio: float = 1.0,
+        frozen_context_vec: Sequence[float] = (),
+        frozen_action_vec: Sequence[float] = (),
         prior_action_logprob: float = 0.0,
         prior_success_logit: float = 0.0,
     ) -> torch.Tensor:
-        """Encode program + concrete action + public state into the 64-dim context tensor."""
         act_str = action_text or (program.step_templates[0] if program.step_templates else "")
         return cls.encode_context_vector(
             goal_text=goal_text,
             public_fields=public_fields,
             action_text=act_str,
             remaining_budget_ratio=remaining_budget_ratio,
-            prior_action_logprob=prior_action_logprob,
-            prior_success_logit=prior_success_logit,
-            program=program,
+            frozen_context_vec=frozen_context_vec,
+            frozen_action_vec=frozen_action_vec,
             device=device,
         )
 
@@ -1233,7 +1995,7 @@ class ControlledResponseEnsemble(nn.Module):
         self,
         context_feat: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Compute normalized transition T_m(s'|s,c) and context-dependent emission G_m(o|s',c)."""
+        """Compute normalized transition T_m(s'|s,c) and emission G_m(o|s',c) in a single pass."""
         c_vec = self._coerce_context(context_feat)
         h_ctx = self.context_encoder(c_vec)  # (C,)
         t_res = self.transition_residual_proj(h_ctx).view(
@@ -1242,9 +2004,130 @@ class ControlledResponseEnsemble(nn.Module):
         e_res = self.emission_residual_proj(h_ctx).view(
             self.ensemble_size, self.state_dim, self.outcome_bins
         )
-        T = F.softmax(self.transition_logits + t_res, dim=1)  # sum_{s'} T[m, s', s] == 1
-        G = F.softmax(self.emission_logits + e_res, dim=-1)  # sum_o G[m, s', o] == 1 (varies over o!)
+        T = F.softmax(self.transition_logits + t_res, dim=1)
+        G = F.softmax(self.emission_logits + e_res, dim=-1)
         return T, G, h_ctx
+
+    def step_and_predict(
+        self,
+        belief: torch.Tensor,
+        context_feat: torch.Tensor,
+        observed_outcome_bin: int | None = None,
+        *,
+        prior_outcome_logits: torch.Tensor | None = None,
+        prior_termination_logits: torch.Tensor | None = None,
+        prior_success_logit: float = 0.0,
+        remaining_budget_ratio: float | torch.Tensor = 1.0,
+    ) -> dict[str, torch.Tensor]:
+        """Single-pass per-member operator update, typed field-slot prediction, and transition heads (fixes F13, F22)."""
+        T, G, h_ctx = self.operator_matrices(context_feat)
+        if prior_outcome_logits is not None and prior_outcome_logits.numel() == self.outcome_bins:
+            prior_l = prior_outcome_logits.to(device=G.device, dtype=G.dtype).view(1, 1, self.outcome_bins)
+            G = F.softmax(torch.log(G.clamp(min=1e-8)) + prior_l, dim=-1)
+
+        next_state_prior = torch.einsum("mij,mj->mi", T, belief)  # (M, S)
+        joint_next = next_state_prior[:, :, None] * G  # (M, S, O)
+        outcome_probs = joint_next.sum(dim=1).clamp(min=1e-8)  # (M, O)
+        outcome_probs = outcome_probs / outcome_probs.sum(dim=-1, keepdim=True)
+
+        if observed_outcome_bin is None:
+            post_belief = next_state_prior
+        else:
+            o_idx = int(observed_outcome_bin) % self.outcome_bins
+            unnorm_post = joint_next[:, :, o_idx]
+            post_belief = unnorm_post / unnorm_post.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+
+        # Typed field-slot distributions per member: (M, NUM_FIELD_SLOTS, NUM_SLOT_VALUES)
+        slot_logits_s = self.field_slot_proj(h_ctx).view(
+            self.ensemble_size, self.state_dim, NUM_FIELD_SLOTS, NUM_SLOT_VALUES
+        )
+        slot_probs_s = F.softmax(slot_logits_s, dim=-1)
+        field_slot_probs = torch.einsum("ms,mskv->mkv", next_state_prior, slot_probs_s).clamp(min=1e-8)
+        field_slot_probs = field_slot_probs / field_slot_probs.sum(dim=-1, keepdim=True)
+
+        # Strictly private per-member inputs: (M, S + C), never averaging belief across members (fixes F13)
+        ctx_expanded = h_ctx.unsqueeze(0).expand(self.ensemble_size, -1)  # (M, C)
+        member_in = torch.cat([next_state_prior, ctx_expanded], dim=-1)  # (M, S + C)
+
+        term_res = torch.einsum("md,mdc->mc", member_in, self.member_termination_weight) + self.member_termination_bias
+        if isinstance(remaining_budget_ratio, torch.Tensor):
+            rem_vec = remaining_budget_ratio.to(device=term_res.device, dtype=term_res.dtype).view(self.ensemble_size)
+        else:
+            rem_vec = torch.full(
+                (self.ensemble_size,), float(remaining_budget_ratio), device=term_res.device, dtype=term_res.dtype
+            )
+        if prior_termination_logits is not None and prior_termination_logits.numel() == len(TERMINATION_CATEGORIES):
+            base_term = prior_termination_logits.to(device=term_res.device, dtype=term_res.dtype).view(1, -1).expand(self.ensemble_size, -1)
+        else:
+            budget_low = torch.where(rem_vec <= 0.05, torch.ones_like(rem_vec), torch.full_like(rem_vec, -2.0))
+            base_term = torch.stack(
+                [torch.full_like(rem_vec, 1.5), torch.full_like(rem_vec, -1.0), budget_low],
+                dim=-1,
+            )
+        termination_probs = F.softmax(base_term + term_res, dim=-1)  # (M, 3)
+
+        cost_res = (member_in * self.member_step_cost_weight).sum(dim=-1) + self.member_step_cost_bias  # (M,)
+        cost_ratio = torch.sigmoid(-3.0 + cost_res)  # (M,) wall-clock step cost fraction in (0, 1)
+
+        out_in = torch.cat([member_in, outcome_probs], dim=-1)  # (M, S + C + O)
+        y_res = (out_in * self.member_step_outcome_weight).sum(dim=-1) + self.member_step_outcome_bias  # (M,)
+        y_prob = torch.sigmoid(float(prior_success_logit) + y_res)  # (M,)
+
+        return {
+            "h_ctx": h_ctx,
+            "outcome_probs": outcome_probs,          # (M, O)
+            "field_slot_probs": field_slot_probs,    # (M, 4, 4)
+            "next_state_prior": next_state_prior,    # (M, S)
+            "post_belief": post_belief,              # (M, S)
+            "termination_probs": termination_probs,  # (M, 3)
+            "cost_ratio": cost_ratio,                # (M,)
+            "terminal_success_prob": y_prob,         # (M,)
+        }
+
+    def predict_tail_pi0(
+        self,
+        belief: torch.Tensor,
+        h_ctx: torch.Tensor,
+        spent_seconds_ratio: torch.Tensor,
+        *,
+        prior_success_logit: float = 0.0,
+    ) -> dict[str, torch.Tensor]:
+        """Evaluate fixed-tail response distribution H_{phi,m}^{pi_0}(Y, C_tail | Y=1, h, g, beta) per member.
+
+        Fixes F02, F11, F13:
+          - Predicts per-member P_m^{pi_0}(Y = 1 | h, g, beta) and conditional 8-bin tail time-cost
+            distribution P_m^{pi_0}(C_tail in bin_k | Y = 1, h, g, beta).
+          - Computes exact truncated expected utility:
+            E_m[U_B] = P_m(Y=1) * sum_k P_m(bin_k | Y=1) * max(0, 1 - spent_m - center_k),
+            preserving Cov(Y, C_tail) and respecting the budget ceiling B_seconds.
+        """
+        ctx_expanded = h_ctx.unsqueeze(0).expand(self.ensemble_size, -1)
+        member_in = torch.cat([belief, ctx_expanded], dim=-1)  # (M, S + C)
+
+        y_logit = (member_in * self.tail_pi0_success_weight).sum(dim=-1) + self.tail_pi0_success_bias
+        y_prob = torch.sigmoid(float(prior_success_logit) + y_logit)  # (M,)
+
+        bin_logits = (
+            torch.einsum("md,mdk->mk", member_in, self.tail_pi0_cost_bins_weight)
+            + self.tail_pi0_cost_bins_bias
+        )
+        bin_probs = F.softmax(bin_logits, dim=-1)  # (M, TAIL_COST_BINS)
+
+        centers = torch.tensor(
+            TAIL_COST_BIN_CENTERS, device=belief.device, dtype=belief.dtype
+        ).view(1, TAIL_COST_BINS)  # (1, K)
+        spent = spent_seconds_ratio.view(self.ensemble_size, 1).clamp(min=0.0, max=1.0)
+        rem_after_tail = (1.0 - spent - centers).clamp(min=0.0, max=1.0)  # (M, K)
+        cond_utility_given_y1 = (bin_probs * rem_after_tail).sum(dim=-1)  # (M,)
+        expected_tail_utility = y_prob * cond_utility_given_y1  # (M,)
+        expected_cond_tail_cost = (bin_probs * centers).sum(dim=-1)  # (M,)
+
+        return {
+            "tail_y_prob": y_prob,
+            "tail_cost_bin_probs": bin_probs,
+            "expected_cond_tail_cost": expected_cond_tail_cost,
+            "expected_tail_utility": expected_tail_utility,
+        }
 
     def observable_operator_step(
         self,
@@ -1254,22 +2137,13 @@ class ControlledResponseEnsemble(nn.Module):
         *,
         prior_outcome_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Apply observable operator M_{a,o}^{(m)} to intra-task state s_m(h) and normalize."""
-        T, G, _ = self.operator_matrices(context_feat)
-        if prior_outcome_logits is not None and prior_outcome_logits.numel() == self.outcome_bins:
-            prior_l = prior_outcome_logits.to(device=G.device, dtype=G.dtype).view(1, 1, self.outcome_bins)
-            G = F.softmax(torch.log(G.clamp(min=1e-8)) + prior_l, dim=-1)
-        next_state_prior = torch.einsum("mij,mj->mi", T, belief)  # (M, S)
-        joint_next = next_state_prior[:, :, None] * G  # (M, S, O)
-        outcome_probs = joint_next.sum(dim=1).clamp(min=1e-8)  # (M, O)
-        outcome_probs = outcome_probs / outcome_probs.sum(dim=-1, keepdim=True)
-        if observed_outcome_bin is None:
-            return outcome_probs, next_state_prior
-        o_idx = int(observed_outcome_bin) % self.outcome_bins
-        unnorm_post = joint_next[:, :, o_idx]
-        denom = unnorm_post.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-        next_belief = unnorm_post / denom
-        return outcome_probs, next_belief
+        res = self.step_and_predict(
+            belief,
+            context_feat,
+            observed_outcome_bin=observed_outcome_bin,
+            prior_outcome_logits=prior_outcome_logits,
+        )
+        return res["outcome_probs"], res["post_belief"]
 
     def observe(
         self,
@@ -1280,6 +2154,8 @@ class ControlledResponseEnsemble(nn.Module):
         actual_action: str,
         post_public_fields: Mapping[str, str],
         remaining_budget_ratio: float = 1.0,
+        frozen_context_vec: Sequence[float] = (),
+        frozen_action_vec: Sequence[float] = (),
         had_error: bool = False,
         terminal_done: bool = False,
         terminal_success: bool = False,
@@ -1298,12 +2174,12 @@ class ControlledResponseEnsemble(nn.Module):
             public_fields=pre_public_fields,
             action_text=actual_action,
             remaining_budget_ratio=remaining_budget_ratio,
+            frozen_context_vec=frozen_context_vec,
+            frozen_action_vec=frozen_action_vec,
             device=device,
         )
-        outcome_probs, next_state = self.observable_operator_step(
-            previous_state, ctx, observed_outcome_bin=outcome_bin
-        )
-        return next_state, outcome_bin, outcome_probs
+        res = self.step_and_predict(previous_state, ctx, observed_outcome_bin=outcome_bin)
+        return res["post_belief"], outcome_bin, res["outcome_probs"]
 
     def predict_transition_heads(
         self,
@@ -1315,41 +2191,15 @@ class ControlledResponseEnsemble(nn.Module):
         prior_success_logit: float = 0.0,
         remaining_budget_ratio: float = 1.0,
     ) -> dict[str, torch.Tensor]:
-        """Predict normalized distributions for response category, cost, termination, and terminal Y."""
-        _, _, h_ctx = self.operator_matrices(context_feat)
-        outcome_probs, next_state_prior = self.observable_operator_step(
-            belief, context_feat, observed_outcome_bin=None, prior_outcome_logits=prior_outcome_logits
+        return self.step_and_predict(
+            belief,
+            context_feat,
+            observed_outcome_bin=None,
+            prior_outcome_logits=prior_outcome_logits,
+            prior_termination_logits=prior_termination_logits,
+            prior_success_logit=prior_success_logit,
+            remaining_budget_ratio=remaining_budget_ratio,
         )
-        mean_state = next_state_prior.mean(dim=0)  # (S,)
-        joint_in = torch.cat([mean_state, h_ctx], dim=-1)  # (S + C,)
-
-        term_res = self.termination_head(joint_in).view(self.ensemble_size, len(TERMINATION_CATEGORIES))
-        if prior_termination_logits is not None and prior_termination_logits.numel() == len(TERMINATION_CATEGORIES):
-            base_term = prior_termination_logits.to(device=term_res.device, dtype=term_res.dtype).view(1, -1)
-        else:
-            # Base prior: mostly live unless budget is near zero
-            base_term = torch.tensor(
-                [[1.5, -1.0, -2.0 if remaining_budget_ratio > 0.1 else 1.0]],
-                device=term_res.device,
-                dtype=term_res.dtype,
-            )
-        termination_probs = F.softmax(base_term + term_res, dim=-1)  # (M, 3)
-
-        cost_res = self.cost_head(joint_in)  # (M,)
-        base_cost_logit = -2.5  # ~0.075 fraction of budget per step by default
-        cost_ratio = torch.sigmoid(base_cost_logit + cost_res)  # (M,)
-
-        out_in = torch.cat([mean_state, h_ctx, outcome_probs.mean(dim=0)], dim=-1)
-        y_res = self.terminal_outcome_head(out_in)  # (M,)
-        y_prob = torch.sigmoid(float(prior_success_logit) + y_res)  # (M,)
-
-        return {
-            "outcome_probs": outcome_probs,          # (M, O)
-            "next_state_prior": next_state_prior,    # (M, S)
-            "termination_probs": termination_probs,  # (M, 3)
-            "cost_ratio": cost_ratio,                # (M,)
-            "terminal_success_prob": y_prob,         # (M,)
-        }
 
     @torch.no_grad()
     def evaluate_candidate_q(
@@ -1361,85 +2211,210 @@ class ControlledResponseEnsemble(nn.Module):
         candidate_action: str,
         program: ExecutableProgram | None = None,
         remaining_budget_ratio: float = 1.0,
+        frozen_context_vec: Sequence[float] = (),
+        frozen_action_vec: Sequence[float] = (),
         prior_action_logprob: float = 0.0,
         prior_success_logit: float = 0.0,
         member_index: int | None = None,
         use_initial_params: bool = False,
     ) -> dict[str, Any]:
-        """Compute unified long-horizon value Q_m^rho(g, h, beta) = E_{K_{phi,m}, rho -> pi_0}[U_B(Y, C)].
+        """Compute unified long-horizon value Q_m^rho(g, h, beta) = E_{K_{phi,m}, rho -> pi_0}[U_B(Y, C_seconds)].
 
-        All ensemble members evaluate the same public-history-dependent candidate rho;
-        the deployment score is the ensemble mean 1/M sum_m Q_m^rho.
+        Fixes F02, F05, F09, F11, F12, F13:
+          - Unrolls `program.ast_nodes` (including `Case` true/false branches weighted by each member's
+            predicted field-slot probability `p_m(cond_field == cond_val)`).
+          - Maintains private per-member state, private elapsed seconds ratio, and strictly absorbing
+            `alive_prob` (`alive_prob * termination_probs[:, 0]`, no 0.95 clamp).
+          - Queries the amortized fixed-tail distribution `predict_tail_pi0` at AST leaves.
         """
-        saved_state: dict[str, torch.Tensor] | None = None
         if use_initial_params and self._initial_state_tensors:
-            saved_state = {k: v.detach().clone() for k, v in self.state_dict().items()}
-            self.restore_initial_parameters()
-
-        try:
-            device = self.transition_logits.device
-            cur_belief = belief.clone().to(device)
-            steps_to_roll = (
-                list(program.step_templates)
-                if (program is not None and program.step_templates)
-                else [candidate_action]
+            return self.active_model_view(use_initial_params=True).evaluate_candidate_q(
+                goal_text=goal_text,
+                public_fields=public_fields,
+                belief=belief,
+                candidate_action=candidate_action,
+                program=program,
+                remaining_budget_ratio=remaining_budget_ratio,
+                frozen_context_vec=frozen_context_vec,
+                frozen_action_vec=frozen_action_vec,
+                prior_action_logprob=prior_action_logprob,
+                prior_success_logit=prior_success_logit,
+                member_index=member_index,
+                use_initial_params=False,
             )
-            steps_to_roll[0] = candidate_action
 
-            cum_cost = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
-            alive_prob = torch.ones(self.ensemble_size, device=device, dtype=torch.float32)
-            expected_u = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
+        if True:
+            device = self.transition_logits.device
+            init_belief = belief.clone().to(device)
             rem_ratio = float(max(0.0, min(1.0, remaining_budget_ratio)))
+            init_spent = torch.full(
+                (self.ensemble_size,), 1.0 - rem_ratio, device=device, dtype=torch.float32
+            )
+            init_alive = torch.ones(self.ensemble_size, device=device, dtype=torch.float32)
+            last_h_ctx = self.context_encoder(
+                self.encode_context_vector(
+                    goal_text=goal_text,
+                    public_fields=public_fields,
+                    action_text=candidate_action,
+                    remaining_budget_ratio=rem_ratio,
+                    frozen_context_vec=frozen_context_vec,
+                    frozen_action_vec=frozen_action_vec,
+                    prior_success_logit=prior_success_logit,
+                    device=device,
+                )
+            )
+            last_slot_probs: torch.Tensor | None = None
 
-            for step_idx, act_str in enumerate(steps_to_roll[:DEFAULT_MAX_PROBE_STEPS]):
+            def _eval_call_step(
+                cur_b: torch.Tensor,
+                cur_spent: torch.Tensor,
+                cur_alive: torch.Tensor,
+                act_str: str,
+                is_first: bool,
+            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+                rem_vec = (1.0 - cur_spent).clamp(min=0.0, max=1.0)
                 ctx = self.encode_context_vector(
                     goal_text=goal_text,
                     public_fields=public_fields,
                     action_text=act_str,
-                    remaining_budget_ratio=max(0.0, rem_ratio - float(cum_cost.mean().item())),
-                    prior_action_logprob=prior_action_logprob if step_idx == 0 else 0.0,
+                    remaining_budget_ratio=float(rem_vec.mean().item()),
+                    frozen_context_vec=frozen_context_vec,
+                    frozen_action_vec=frozen_action_vec if is_first else (),
                     prior_success_logit=prior_success_logit,
-                    program=program,
                     device=device,
                 )
-                preds = self.predict_transition_heads(
-                    cur_belief,
+                preds = self.step_and_predict(
+                    cur_b,
                     ctx,
+                    observed_outcome_bin=None,
                     prior_success_logit=prior_success_logit,
-                    remaining_budget_ratio=max(0.0, rem_ratio - float(cum_cost.mean().item())),
+                    remaining_budget_ratio=rem_vec,
                 )
-                step_cost = preds["cost_ratio"] * max(0.02, 1.0 / max(1.0, 15.0))
-                cum_cost = (cum_cost + step_cost).clamp(max=1.0)
-                p_term = preds["termination_probs"][:, 1]  # native_terminal
-                p_budget_term = preds["termination_probs"][:, 2]
+                next_spent = (cur_spent + preds["cost_ratio"]).clamp(min=0.0, max=1.0)
+                p_live = preds["termination_probs"][:, 0]            # Exact absorbing live probability (fixes F12)
+                p_nat_term = preds["termination_probs"][:, 1]        # Official native terminal
                 y_prob = preds["terminal_success_prob"]
-                rem_factor = (rem_ratio - cum_cost).clamp(min=0.0, max=1.0)
+                rem_after = (1.0 - next_spent).clamp(min=0.0, max=1.0)
+                step_u = cur_alive * p_nat_term * y_prob * rem_after
+                next_alive = cur_alive * p_live
+                return (
+                    preds["next_state_prior"],
+                    next_spent,
+                    next_alive,
+                    step_u,
+                    preds["field_slot_probs"],
+                    preds["h_ctx"],
+                )
 
-                expected_u = expected_u + alive_prob * p_term * y_prob * rem_factor
-                alive_prob = alive_prob * (1.0 - (p_term + p_budget_term).clamp(max=0.95))
-                cur_belief = preds["next_state_prior"]
+            def _eval_ast_sequence(
+                nodes: Sequence[ASTNode],
+                cur_b: torch.Tensor,
+                cur_spent: torch.Tensor,
+                cur_alive: torch.Tensor,
+                cur_slot_probs: torch.Tensor | None,
+                cur_h_ctx: torch.Tensor,
+                calls_used: int,
+            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                """Return `(accumulated_u, final_spent, final_tail_y_prob)` across members."""
+                if not nodes or calls_used >= DEFAULT_MAX_PROBE_STEPS:
+                    tail_out = self.predict_tail_pi0(
+                        cur_b, cur_h_ctx, cur_spent, prior_success_logit=prior_success_logit
+                    )
+                    leaf_u = cur_alive * tail_out["expected_tail_utility"]
+                    leaf_cost = (cur_spent + cur_alive * tail_out["expected_cond_tail_cost"]).clamp(max=1.0)
+                    return leaf_u, leaf_cost, tail_out["tail_y_prob"]
 
-            # Tail continuation pi_0 from the end of rho to native/task-budget termination
-            tail_ctx = self.encode_context_vector(
-                goal_text=goal_text,
-                public_fields=public_fields,
-                action_text=f"tail:{TAIL_POLICY_VERSION}:{candidate_action}",
-                remaining_budget_ratio=max(0.0, rem_ratio - float(cum_cost.mean().item())),
-                prior_action_logprob=prior_action_logprob,
-                prior_success_logit=prior_success_logit,
-                program=program,
-                device=device,
+                head = nodes[0]
+                rest = nodes[1:]
+                if head.op == "Stop":
+                    tail_out = self.predict_tail_pi0(
+                        cur_b, cur_h_ctx, cur_spent, prior_success_logit=prior_success_logit
+                    )
+                    leaf_u = cur_alive * tail_out["expected_tail_utility"]
+                    leaf_cost = (cur_spent + cur_alive * tail_out["expected_cond_tail_cost"]).clamp(max=1.0)
+                    return leaf_u, leaf_cost, tail_out["tail_y_prob"]
+
+                if head.op == "Seq":
+                    return _eval_ast_sequence(
+                        tuple(head.children) + tuple(rest),
+                        cur_b,
+                        cur_spent,
+                        cur_alive,
+                        cur_slot_probs,
+                        cur_h_ctx,
+                        calls_used,
+                    )
+
+                if head.op == "Read":
+                    return _eval_ast_sequence(
+                        rest, cur_b, cur_spent, cur_alive, cur_slot_probs, cur_h_ctx, calls_used
+                    )
+
+                if head.op == "Call":
+                    act_str = candidate_action if calls_used == 0 else (head.tool_or_action or candidate_action)
+                    nb, n_spent, n_alive, step_u, n_slots, n_h_ctx = _eval_call_step(
+                        cur_b, cur_spent, cur_alive, act_str, is_first=(calls_used == 0)
+                    )
+                    rem_u, end_cost, tail_y = _eval_ast_sequence(
+                        rest, nb, n_spent, n_alive, n_slots, n_h_ctx, calls_used + 1
+                    )
+                    return step_u + rem_u, end_cost, tail_y
+
+                if head.op == "Case":
+                    slot_idx, val_idx = PublicBenchmarkBinder.condition_slot_and_value(
+                        head.condition_field, head.condition_equals
+                    )
+                    if cur_slot_probs is not None:
+                        p_true = cur_slot_probs[:, slot_idx, val_idx].clamp(min=0.0, max=1.0)  # (M,)
+                    else:
+                        obs_val = public_fields.get(head.condition_field, "unknown")
+                        if obs_val != "unknown":
+                            p_true = torch.full(
+                                (self.ensemble_size,),
+                                1.0 if obs_val == head.condition_equals else 0.0,
+                                device=device,
+                                dtype=torch.float32,
+                            )
+                        else:
+                            p_true = torch.full(
+                                (self.ensemble_size,), 0.5, device=device, dtype=torch.float32
+                            )
+                    p_false = 1.0 - p_true
+                    true_child = (head.children[0],) if len(head.children) >= 1 else (ASTNode(op="Stop"),)
+                    false_child = (head.children[1],) if len(head.children) >= 2 else (ASTNode(op="Stop"),)
+                    u_t, c_t, y_t = _eval_ast_sequence(
+                        true_child + tuple(rest),
+                        cur_b,
+                        cur_spent,
+                        cur_alive * p_true,
+                        cur_slot_probs,
+                        cur_h_ctx,
+                        calls_used,
+                    )
+                    u_f, c_f, y_f = _eval_ast_sequence(
+                        false_child + tuple(rest),
+                        cur_b,
+                        cur_spent,
+                        cur_alive * p_false,
+                        cur_slot_probs,
+                        cur_h_ctx,
+                        calls_used,
+                    )
+                    return u_t + u_f, p_true * c_t + p_false * c_f, p_true * y_t + p_false * y_f
+
+                return _eval_ast_sequence(
+                    rest, cur_b, cur_spent, cur_alive, cur_slot_probs, cur_h_ctx, calls_used
+                )
+
+            ast_seq = (
+                program.ast_nodes
+                if (program is not None and program.ast_nodes)
+                else (ASTNode(op="Call", tool_or_action=candidate_action), ASTNode(op="Stop"))
             )
-            tail_preds = self.predict_transition_heads(
-                cur_belief,
-                tail_ctx,
-                prior_success_logit=prior_success_logit,
-                remaining_budget_ratio=max(0.0, rem_ratio - float(cum_cost.mean().item())),
+            q_members, end_spent, tail_y_members = _eval_ast_sequence(
+                ast_seq, init_belief, init_spent, init_alive, last_slot_probs, last_h_ctx, 0
             )
-            tail_cost = (cum_cost + tail_preds["cost_ratio"] * 0.25).clamp(max=1.0)
-            tail_rem_factor = (rem_ratio - tail_cost).clamp(min=0.0, max=1.0)
-            tail_u = alive_prob * tail_preds["terminal_success_prob"] * tail_rem_factor
-            q_members = (expected_u + tail_u).clamp(min=0.0, max=1.0)
+            q_members = q_members.clamp(min=0.0, max=1.0)
 
             if member_index is not None:
                 m_idx = int(member_index) % self.ensemble_size
@@ -1451,12 +2426,9 @@ class ControlledResponseEnsemble(nn.Module):
                 "q_mean": float(q_members.mean().item()),
                 "q_selected": q_scalar,
                 "q_members": [float(x) for x in q_members.detach().cpu().tolist()],
-                "predicted_terminal_success": float(tail_preds["terminal_success_prob"].mean().item()),
-                "predicted_cost_ratio": float(tail_cost.mean().item()),
+                "predicted_terminal_success": float(tail_y_members.mean().item()),
+                "predicted_cost_ratio": float(end_spent.mean().item()),
             }
-        finally:
-            if saved_state is not None:
-                self.load_state_dict(saved_state, strict=True)
 
     @torch.no_grad()
     def score_program_evsi(
@@ -1468,27 +2440,24 @@ class ControlledResponseEnsemble(nn.Module):
         use_Temporary_Initial_Params: bool = False,
         goal_text: str = "",
     ) -> dict[str, float]:
-        """Exact closed-form EVSI reference without artificial polarity modulation (fixes I13).
-
-        Uses identical utility before and after observing outcome o:
-          Delta(xi) = sum_o max_j sum_m w_m L_m(o; xi) V_{m,j} - max_j sum_m w_m V_{m,j}.
-        When M=1 or L_m(o_0)=1 or V_{m,1} == V_{m,2}, Delta(xi) == 0.0 exactly.
-        Also computes unified terminal value Q^rho for candidate comparison.
-        """
-        saved_state: dict[str, torch.Tensor] | None = None
+        """Exact closed-form EVSI reference without artificial polarity modulation."""
         if use_Temporary_Initial_Params and self._initial_state_tensors:
-            saved_state = {k: v.detach().clone() for k, v in self.state_dict().items()}
-            self.restore_initial_parameters()
+            return self.active_model_view(use_initial_params=True).score_program_evsi(
+                program,
+                public_fields,
+                belief,
+                use_Temporary_Initial_Params=False,
+                goal_text=goal_text,
+            )
 
-        try:
+        if True:
             device = self.transition_logits.device
             feat = self.encode_program_features(
                 program, public_fields, device, goal_text=goal_text
             )
-            L_m, next_prior = self.observable_operator_step(belief, feat, observed_outcome_bin=None)  # (M, O)
+            L_m, next_prior = self.observable_operator_step(belief, feat, observed_outcome_bin=None)
             w = self.mechanism_weights / self.mechanism_weights.sum().clamp(min=1e-8)
 
-            # Evaluate two canonical continuation branches under the SAME utility function (no 1.15/0.85 multiplier)
             u_act = program.case_true_template or (program.step_templates[0] if program.step_templates else "cont_u")
             v_act = program.case_false_template or (program.step_templates[-1] if len(program.step_templates) > 1 else "cont_v")
             q_u = self.evaluate_candidate_q(
@@ -1509,14 +2478,13 @@ class ControlledResponseEnsemble(nn.Module):
                 [[q_u[m], q_v[m]] for m in range(self.ensemble_size)],
                 device=device,
                 dtype=torch.float32,
-            )  # (M, 2) in [0, 1]
+            )
 
-            prior_values = torch.einsum("m,mj->j", w, V_mj)  # (2,)
+            prior_values = torch.einsum("m,mj->j", w, V_mj)
             before_val = float(prior_values.max().item())
 
-            # Posterior value with identical V_mj (zero polarity_mod!)
-            weighted_lv = w[:, None, None] * L_m[:, :, None] * V_mj[:, None, :]  # (M, O, 2)
-            after_per_outcome = weighted_lv.sum(dim=0).max(dim=-1).values  # (O,)
+            weighted_lv = w[:, None, None] * L_m[:, :, None] * V_mj[:, None, :]
+            after_per_outcome = weighted_lv.sum(dim=0).max(dim=-1).values
             after_val = float(after_per_outcome.sum().item())
 
             evsi_delta = max(0.0, after_val - before_val)
@@ -1529,23 +2497,26 @@ class ControlledResponseEnsemble(nn.Module):
                 "expected_cost": cost,
                 "unified_q": float(prior_values.max().item()),
             }
-        finally:
-            if saved_state is not None:
-                self.load_state_dict(saved_state, strict=True)
 
     def transition_negative_log_likelihood(
         self,
         transitions: Sequence[PublicTransition],
         *,
+        tail_examples: Sequence[TailExample] = (),
         bootstrap_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
-        """Cluster-level bootstrap negative log-likelihood over unique physical transitions.
+        """Fork-tree marginal negative log-likelihood + fixed-tail H_{phi,m}^{pi_0} supervision.
 
-        L_m(phi) = -sum_{(h_t, a_t, x_{t+1})} b_{mc} log K_{phi,m}(x_{t+1} | g, h_t, a_t, beta_t).
-        Unobserved native_outcome (live or job-budget truncated) remains masked out.
+        Fixes F02, F04, F09, F11, F13, F22:
+          - Every transition node is evaluated starting from `belief_by_node[tr.parent_transition_id]`
+            so shared prefix nodes are forwarded once, and counterfactual suffix v starts from
+            `fork_belief` (b_{post-q}) rather than u's terminal belief!
+          - Supervises typed field-slot distributions, outcome bins, wall-clock step cost ratio,
+            and termination category.
+          - Supervises `predict_tail_pi0` strictly on genuine `TailExample` records from frozen pi_0 suffixes.
         """
         device = self.transition_logits.device
-        belief = self.reset_intra_task_belief(device=device)
+        root_belief = self.reset_intra_task_belief(device=device)
         if bootstrap_weights is None:
             b_weights = torch.ones(self.ensemble_size, device=device, dtype=torch.float32)
         else:
@@ -1556,14 +2527,31 @@ class ControlledResponseEnsemble(nn.Module):
 
         total_member_nll = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
         observed_outcomes = 0
+        tail_supervised_count = 0
+
+        # Map transition_id -> post-step belief tensor (retaining computation graph for shared prefix gradients!)
+        belief_by_node: dict[str, torch.Tensor] = {}
+        last_belief = root_belief
 
         for tr in transitions:
-            rem_ratio = float(tr.remaining_budget.get("ratio", 1.0))
+            if tr.parent_transition_id and tr.parent_transition_id in belief_by_node:
+                in_belief = belief_by_node[tr.parent_transition_id]
+            elif tr.step_index == 0 or tr.parent_transition_id is None:
+                in_belief = root_belief
+            else:
+                in_belief = last_belief
+
+            res_before = ResourceState.from_dict(tr.resource_before or tr.remaining_budget)
+            rem_sec_ratio = res_before.remaining_seconds_ratio
             ctx = self.encode_context_vector(
                 goal_text=tr.goal_text,
                 public_fields=tr.pre_public_fields,
                 action_text=tr.action_text,
-                remaining_budget_ratio=rem_ratio,
+                remaining_budget_ratio=rem_sec_ratio,
+                spent_seconds_ratio=res_before.spent_seconds_ratio,
+                remaining_steps_ratio=res_before.remaining_steps_ratio,
+                frozen_context_vec=tr.frozen_context_vec,
+                frozen_action_vec=tr.frozen_action_vec,
                 device=device,
             )
             had_err = tr.typed_response.get("prerequisite_status") == "error"
@@ -1576,15 +2564,23 @@ class ControlledResponseEnsemble(nn.Module):
                 terminal_done=term_done,
                 terminal_success=term_succ,
             )
-            preds = self.predict_transition_heads(
-                belief, ctx, remaining_budget_ratio=rem_ratio
+            preds = self.step_and_predict(
+                in_belief,
+                ctx,
+                observed_outcome_bin=obs_bin,
+                remaining_budget_ratio=rem_sec_ratio,
             )
-            _, belief = self.observable_operator_step(
-                belief, ctx, observed_outcome_bin=obs_bin
-            )
+            belief_by_node[tr.transition_id] = preds["post_belief"]
+            last_belief = preds["post_belief"]
 
-            # 1. Public response category NLL
+            # 1. Outcome bin NLL + typed field-slot NLL (fixes F09)
             resp_nll = -torch.log(preds["outcome_probs"][:, obs_bin].clamp(min=1e-8))
+            target_slots = PublicBenchmarkBinder.encode_typed_field_slots(tr.typed_response)
+            slot_nll = torch.zeros_like(resp_nll)
+            for s_idx, v_idx in enumerate(target_slots):
+                slot_nll = slot_nll - 0.25 * torch.log(
+                    preds["field_slot_probs"][:, s_idx, v_idx].clamp(min=1e-8)
+                )
 
             # 2. Termination category NLL
             term_idx = (
@@ -1594,12 +2590,14 @@ class ControlledResponseEnsemble(nn.Module):
             )
             term_nll = -torch.log(preds["termination_probs"][:, term_idx].clamp(min=1e-8))
 
-            # 3. Cost ratio NLL (smooth L1 / Gaussian log-lik on normalized step cost)
-            target_cost = float(min(1.0, max(0.0, tr.resource_delta.get("cost_ratio", 0.05))))
+            # 3. Wall-clock step cost ratio loss (aligned with seconds/budget_seconds, fixes F11)
+            target_cost = float(
+                min(1.0, max(0.0, tr.resource_delta.get("seconds_ratio", tr.resource_delta.get("cost_ratio", 0.01))))
+            )
             cost_nll = 0.5 * (preds["cost_ratio"] - target_cost).square()
 
-            # 4. Official native terminal outcome NLL (ONLY when observed; masked when None)
-            if tr.native_outcome is not None:
+            # 4. Terminal outcome NLL on terminal transitions (masked when None)
+            if tr.native_outcome is not None and term_done:
                 observed_outcomes += 1
                 y_val = 1.0 if tr.native_outcome else 0.0
                 p_y = preds["terminal_success_prob"].clamp(min=1e-6, max=1.0 - 1e-6)
@@ -1607,14 +2605,55 @@ class ControlledResponseEnsemble(nn.Module):
             else:
                 y_nll = torch.zeros_like(resp_nll)
 
-            total_member_nll = total_member_nll + (resp_nll + 0.5 * term_nll + cost_nll + y_nll)
+            total_member_nll = total_member_nll + (resp_nll + slot_nll + 0.5 * term_nll + cost_nll + y_nll)
+
+        # 5. Supervise fixed-tail head H_{phi,m}^{pi_0}(Y, C_tail | Y=1) on genuine pi_0 TailExamples (fixes F02, F11)
+        belief_by_step: dict[int, torch.Tensor] = {0: root_belief}
+        for tr in transitions:
+            belief_by_step[int(tr.step_index) + 1] = belief_by_node.get(tr.transition_id, last_belief)
+
+        tail_member_nll = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
+        for tex in tail_examples:
+            if tex.censored or tex.observed_y is None:
+                continue
+            tail_supervised_count += 1
+            res_b = ResourceState.from_dict(tex.resource_before)
+            t_ctx = self.encode_context_vector(
+                goal_text=tex.goal_text,
+                public_fields=tex.pre_public_fields,
+                action_text=tex.tail_policy_version,
+                remaining_budget_ratio=res_b.remaining_seconds_ratio,
+                spent_seconds_ratio=res_b.spent_seconds_ratio,
+                remaining_steps_ratio=res_b.remaining_steps_ratio,
+                frozen_context_vec=tex.frozen_context_vec,
+                device=device,
+            )
+            _, _, h_ctx_t = self.operator_matrices(t_ctx)
+            spent_vec = torch.full(
+                (self.ensemble_size,), res_b.spent_seconds_ratio, device=device, dtype=torch.float32
+            )
+            tex_belief = belief_by_step.get(int(tex.step_index), last_belief)
+            tail_preds = self.predict_tail_pi0(tex_belief, h_ctx_t, spent_vec)
+            p_y = tail_preds["tail_y_prob"].clamp(min=1e-6, max=1.0 - 1e-6)
+            y_target = 1.0 if tex.observed_y else 0.0
+            t_loss = -(y_target * torch.log(p_y) + (1.0 - y_target) * torch.log(1.0 - p_y))
+            if tex.observed_y and tex.tail_seconds_cost_ratio is not None:
+                c_ratio = float(min(0.999, max(0.0, tex.tail_seconds_cost_ratio)))
+                bin_idx = min(TAIL_COST_BINS - 1, int(c_ratio * TAIL_COST_BINS))
+                p_bin = tail_preds["tail_cost_bin_probs"][:, bin_idx].clamp(min=1e-8)
+                t_loss = t_loss - torch.log(p_bin)
+            tail_member_nll = tail_member_nll + t_loss
 
         n_steps = max(1, len(transitions))
-        weighted_loss = (b_weights * total_member_nll).mean() / float(n_steps)
-        return weighted_loss, belief.detach(), {
+        combined_member_loss = (total_member_nll / float(n_steps)) + (
+            tail_member_nll / float(max(1, tail_supervised_count)) if tail_supervised_count > 0 else 0.0
+        )
+        weighted_loss = (b_weights * combined_member_loss).mean()
+        return weighted_loss, last_belief.detach(), {
             "num_transitions": float(len(transitions)),
             "observed_terminal_outcomes": float(observed_outcomes),
-            "mean_member_nll": float((total_member_nll.mean() / float(n_steps)).detach().item()),
+            "tail_examples_supervised": float(tail_supervised_count),
+            "mean_member_nll": float(combined_member_loss.mean().detach().item()),
         }
 
     def block_negative_log_likelihood(
@@ -1632,20 +2671,15 @@ class ControlledResponseEnsemble(nn.Module):
         v_native_outcome: bool | None = None,
         bootstrap_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Normalized response & terminal outcome NLL without unnormalized coupling energy (fixes I05, I14)."""
         device = self.transition_logits.device
         act_str = action_text or (program.step_templates[0] if program.step_templates else "step")
         ctx = self.encode_program_features(
             program, public_fields, device, goal_text=goal_text, action_text=act_str
         )
-        preds = self.predict_transition_heads(belief, ctx)
-        outcome_probs, next_belief = self.observable_operator_step(
-            belief, ctx, observed_outcome_bin=outcome_bin
-        )
+        preds = self.step_and_predict(belief, ctx, observed_outcome_bin=outcome_bin)
         o_idx = int(outcome_bin) % self.outcome_bins
-        resp_nll = -torch.log(outcome_probs[:, o_idx].clamp(min=1e-8))
+        resp_nll = -torch.log(preds["outcome_probs"][:, o_idx].clamp(min=1e-8))
 
-        # Supervise terminal outcome head ONLY with observed official outcomes (not unnormalized coupling)
         y_nll = torch.zeros_like(resp_nll)
         for nat_out, util_val in ((u_native_outcome, u_score), (v_native_outcome, v_score)):
             if nat_out is not None:
@@ -1660,11 +2694,11 @@ class ControlledResponseEnsemble(nn.Module):
             b_w = b_w / b_w.mean().clamp(min=1e-8)
 
         loss = (b_w * (resp_nll + 0.5 * y_nll)).mean()
-        return loss, next_belief.detach()
+        return loss, preds["post_belief"].detach()
 
 
 class ProgramLibrary:
-    """Persistable library Xi of typed executable programs."""
+    """Persistable library Xi of pure symbolic typed executable programs."""
 
     def __init__(self, benchmark: str, max_programs: int = 32) -> None:
         self.benchmark = benchmark.split(":", 1)[0]
@@ -1709,8 +2743,8 @@ class ProgramLibrary:
 
 
 class ActionContrastProposer:
-    """Witness-guided executable program proposer with def-use Delete, scope-unified Concat,
-    strict single-label-view isolation, and full candidate construction/check budget accounting.
+    """Witness-guided executable program proposer with canonical Comparison matching,
+    AST consumer-graph Delete, alpha-renaming Concat, and strict non-expanding Label-Shuffled control.
     """
 
     def __init__(
@@ -1745,7 +2779,6 @@ class ActionContrastProposer:
 
     @property
     def witness_pairs_found(self) -> int:
-        """Unique witness pairs discovered (kept distinct from cumulative_witness_visits, fixes E02)."""
         return len(self.unique_witness_pair_ids)
 
     def record_measurement(self, record: MeasurementRecord) -> None:
@@ -1753,34 +2786,43 @@ class ActionContrastProposer:
 
     @staticmethod
     def _def_use_delete(program: ExecutableProgram, target_field: str) -> ExecutableProgram | None:
-        """Remove `target_field` and ONLY the call step dedicated exclusively to it (fixes I09)."""
+        """Remove `target_field` and ONLY producer Call steps with zero remaining AST consumers (fixes F05)."""
         if len(program.readout_fields) <= 1 or target_field not in program.readout_fields:
             return None
         remaining_fields = tuple(f for f in program.readout_fields if f != target_field)
         producer_for_target = {
-            e.producer_step for e in program.def_use_edges if e.field_path == target_field
+            e.producer_step
+            for e in program.def_use_edges
+            if e.field_path == target_field and e.consumer_step is None
         }
-        producers_for_remaining = {
-            e.producer_step for e in program.def_use_edges if e.field_path in remaining_fields
+        # Protect any producer step that is consumed by another Call/Case step or by remaining readouts
+        protected_producers = {
+            e.producer_step
+            for e in program.def_use_edges
+            if e.consumer_step is not None or e.field_path in remaining_fields
         }
-        removable_steps = producer_for_target - producers_for_remaining
+        removable_steps = producer_for_target - protected_producers
         if removable_steps and len(program.step_templates) > 1:
             kept_steps = tuple(
                 s for idx, s in enumerate(program.step_templates) if idx not in removable_steps
             )
             if not kept_steps:
-                kept_steps = program.step_templates[:-1]
+                kept_steps = program.step_templates
         else:
             kept_steps = program.step_templates
+
         return ExecutableProgram(
-            program_id=_short_hash((program.benchmark, kept_steps, remaining_fields, "delete")),
+            program_id=_short_hash((program.benchmark, kept_steps, remaining_fields, "delete", program.case_condition_field)),
             benchmark=program.benchmark,
             step_templates=kept_steps,
             readout_fields=remaining_fields,
             origin="witness_delete",
             parent_ids=(program.program_id,),
             expected_cost=float(len(kept_steps)),
-            role_bindings=dict(program.role_bindings),
+            case_condition_field=program.case_condition_field,
+            case_condition_value=program.case_condition_value,
+            case_true_template=program.case_true_template,
+            case_false_template=program.case_false_template,
         )
 
     @staticmethod
@@ -1789,39 +2831,85 @@ class ActionContrastProposer:
         p2: ExecutableProgram,
         differing_fields: Sequence[str],
         max_steps: int,
+        *,
+        case_condition_value: str = "",
+        case_true_template: str = "",
+        case_false_template: str = "",
     ) -> ExecutableProgram | None:
-        """Unify role bindings and variable scope across p1 and p2 before concatenating."""
-        merged_bindings = {**p2.role_bindings, **p1.role_bindings}
+        """Concatenate two programs with local-variable alpha-renaming on p2's AST (fixes F05, F23).
+
+        Preserves repeated read steps when separated by an intervening operation; only collapses
+        immediately adjacent identical idempotent calls.
+        """
         combined_steps: list[str] = []
         for step in (*p1.step_templates, *p2.step_templates):
-            if step not in combined_steps and len(combined_steps) < max_steps:
-                combined_steps.append(step)
+            if len(combined_steps) >= max_steps:
+                break
+            if combined_steps and combined_steps[-1] == step:
+                continue
+            combined_steps.append(step)
+
         combined_fields: list[str] = []
         for fld in (*differing_fields, *p1.readout_fields, *p2.readout_fields):
             if fld not in combined_fields and len(combined_fields) < 4:
                 combined_fields.append(fld)
         if not combined_steps or not combined_fields:
             return None
-        cond_field = differing_fields[0] if differing_fields else ""
+
+        p1_body = [n for n in p1.ast_nodes if n.op not in ("Stop", "Case")]
+        p2_body = list(_alpha_rename_ast_nodes([n for n in p2.ast_nodes if n.op not in ("Stop", "Case")], "p2"))
+        merged_ast: list[ASTNode] = []
+        calls_count = 0
+        for node in (*p1_body, *p2_body):
+            if node.op == "Call":
+                if calls_count >= max_steps:
+                    continue
+                calls_count += 1
+            merged_ast.append(node)
+
+        cond_field = differing_fields[0] if differing_fields else p1.case_condition_field
+        t_tmpl = case_true_template or p1.case_true_template
+        f_tmpl = case_false_template or p1.case_false_template
+        if cond_field and (t_tmpl or f_tmpl):
+            merged_ast.append(
+                ASTNode(
+                    op="Case",
+                    condition_field=cond_field,
+                    condition_equals=case_condition_value or p1.case_condition_value,
+                    children=(
+                        ASTNode(op="Call", tool_or_action=t_tmpl, bind_return_to="ret_case_true")
+                        if t_tmpl else ASTNode(op="Stop"),
+                        ASTNode(op="Call", tool_or_action=f_tmpl, bind_return_to="ret_case_false")
+                        if f_tmpl else ASTNode(op="Stop"),
+                    ),
+                )
+            )
+        merged_ast.append(ASTNode(op="Stop"))
+
         return ExecutableProgram(
-            program_id=_short_hash((p1.benchmark, tuple(combined_steps), tuple(combined_fields), cond_field)),
+            program_id=_short_hash(
+                (p1.benchmark, tuple(combined_steps), tuple(combined_fields), cond_field, t_tmpl, f_tmpl)
+            ),
             benchmark=p1.benchmark,
             step_templates=tuple(combined_steps),
             readout_fields=tuple(combined_fields),
             origin="witness_concat",
             parent_ids=(p1.program_id, p2.program_id),
             expected_cost=float(len(combined_steps)),
-            role_bindings=merged_bindings,
+            ast_nodes=tuple(merged_ast),
             case_condition_field=cond_field,
+            case_condition_value=case_condition_value or p1.case_condition_value,
+            case_true_template=t_tmpl,
+            case_false_template=f_tmpl,
         )
 
-    def _build_label_view(self) -> dict[str, float]:
-        """Construct a single isolated action-difference label view (fixes E03).
+    def _build_label_view(self) -> tuple[dict[str, float], int, int]:
+        """Construct a single isolated action-difference label view grouped strictly by `comparison_key`.
 
-        When `shuffle_witness_labels=True`, permutes labels within comparable
-        (goal_category, continuation_pair_key, tail_policy_version) groups and returns
-        the permuted dictionary. All downstream grouping, magnitude calculation, and
-        candidate ranking read ONLY from this dictionary.
+        Fixes F15:
+          - Permutes ONLY within matching `comparison_key` groups (`(goal_category, canonical_u_v, tail_policy_version)`).
+          - Singleton groups remain unchanged (never expanded to `goal_category` or `all`!).
+          - Returns `(label_map, permutable_groups_count, permutable_records_count)`.
         """
         raw_map: dict[str, float] = {}
         for rec in self.records:
@@ -1832,39 +2920,27 @@ class ActionContrastProposer:
             elif rec.u_native_outcome is not None and rec.v_native_outcome is not None:
                 val = float(rec.action_diff_d)
             else:
-                # Before first terminal contrast or when unobserved, real terminal difference is 0.0
-                val = float(rec.action_diff_d) if (rec.u_done or rec.v_done) else 0.0
+                val = 0.0
             raw_map[rec.record_id] = val
 
-        if not self.shuffle_witness_labels:
-            return raw_map
-
-        grouped: dict[tuple[str, str, str], list[str]] = {}
+        grouped: dict[str, list[str]] = {}
         for rec in self.records:
-            key = (rec.goal_category, rec.continuation_pair_key, rec.tail_policy_version)
-            grouped.setdefault(key, []).append(rec.record_id)
+            grouped.setdefault(rec.comparison_key, []).append(rec.record_id)
+
+        permutable_groups = sum(1 for ids in grouped.values() if len(ids) >= 2)
+        permutable_records = sum(len(ids) for ids in grouped.values() if len(ids) >= 2)
+
+        if not self.shuffle_witness_labels:
+            return raw_map, permutable_groups, permutable_records
 
         shuffled_map: dict[str, float] = {}
-        # If all groups are singletons, permute within goal_category so permutation is non-trivial
-        if all(len(ids) <= 1 for ids in grouped.values()) and len(self.records) >= 2:
-            cat_groups: dict[str, list[str]] = {}
-            for rec in self.records:
-                cat_groups.setdefault(rec.goal_category, []).append(rec.record_id)
-            if all(len(ids) <= 1 for ids in cat_groups.values()):
-                cat_groups = {"all": [rec.record_id for rec in self.records]}
-            for _, r_ids in sorted(cat_groups.items()):
-                vals = [raw_map[rid] for rid in r_ids]
-                self.rng.shuffle(vals)
-                for rid, v in zip(r_ids, vals):
-                    shuffled_map[rid] = v
-            return shuffled_map
-
         for _, r_ids in sorted(grouped.items()):
             vals = [raw_map[rid] for rid in r_ids]
-            self.rng.shuffle(vals)
+            if len(vals) >= 2:
+                self.rng.shuffle(vals)
             for rid, v in zip(r_ids, vals):
                 shuffled_map[rid] = v
-        return shuffled_map
+        return shuffled_map, permutable_groups, permutable_records
 
     def grow_library(
         self,
@@ -1877,34 +2953,41 @@ class ActionContrastProposer:
         if len(self.records) < 2:
             return []
 
-        label_view = self._build_label_view()
-        pos_records = [rec for rec in self.records if label_view.get(rec.record_id, 0.0) > 0.01]
-        neg_records = [rec for rec in self.records if label_view.get(rec.record_id, 0.0) < -0.01]
+        label_view, permutable_groups, permutable_records = self._build_label_view()
+
+        # Group records strictly by canonical `comparison_key` so witnesses only pair identical ordered (u, v) (fixes F15)
+        by_comparison: dict[str, list[MeasurementRecord]] = {}
+        for rec in self.records:
+            if rec.program_executed_cleanly:
+                by_comparison.setdefault(rec.comparison_key, []).append(rec)
 
         candidates_constructed = 0
         candidates_checked = 0
         candidates_scored = 0
         candidates: list[tuple[float, ExecutableProgram]] = []
 
-        if pos_records and neg_records:
+        for _, comp_records in sorted(by_comparison.items()):
+            if candidates_checked >= self.max_candidate_checks:
+                break
+            pos_records = [rec for rec in comp_records if label_view.get(rec.record_id, 0.0) > 0.01]
+            neg_records = [rec for rec in comp_records if label_view.get(rec.record_id, 0.0) < -0.01]
+            if not pos_records or not neg_records:
+                continue
+
             for r1 in pos_records[-6:]:
                 if candidates_checked >= self.max_candidate_checks:
                     break
                 for r2 in neg_records[-6:]:
                     if candidates_checked >= self.max_candidate_checks:
                         break
-                    if r1.goal_category != r2.goal_category and len(self.records) > 6:
-                        continue
                     self.cumulative_witness_visits += 1
                     pair_key = tuple(sorted((r1.record_id, r2.record_id)))
                     self.unique_witness_pair_ids.add((pair_key[0], pair_key[1]))
 
-                    # Strictly read from `label_view` (never `r1.action_diff_d`), preventing label leakage
                     d1_view = float(label_view[r1.record_id])
                     d2_view = float(label_view[r2.record_id])
                     contrast_mag = abs(d1_view - d2_view)
 
-                    # Only inspect fields actually observed (not "unknown") in both anchor traces
                     differing_fields = [
                         k for k in r1.public_readout_z
                         if r1.public_readout_z.get(k, "unknown") != "unknown"
@@ -1916,20 +2999,28 @@ class ActionContrastProposer:
                         + [k for k in r1.readout_fields if k not in differing_fields]
                     )[:4] or r1.readout_fields
 
-                    # 1. Full original trace program candidate
+                    cond_f = differing_fields[0] if differing_fields else ""
+                    cond_v = r1.public_readout_z.get(cond_f, "") if cond_f else ""
+                    true_branch_tmpl = r1.u_policy_id if d1_view > 0 else r1.v_policy_id
+                    false_branch_tmpl = r1.v_policy_id if d1_view > 0 else r1.u_policy_id
+
+                    # 1. Full original trace program candidate with populated Case(z: u, v) branches (fixes F05, F06)
                     full_steps = r1.rebound_trace_templates[: self.max_probe_steps] or r1.step_templates
                     full_fields = r1.rebound_trace_fields[:4] or ordered_fields
                     full_prog = ExecutableProgram(
-                        program_id=_short_hash((self.benchmark, full_steps, full_fields)),
+                        program_id=_short_hash(
+                            (self.benchmark, full_steps, full_fields, cond_f, cond_v, true_branch_tmpl, false_branch_tmpl)
+                        ),
                         benchmark=self.benchmark,
                         step_templates=full_steps,
                         readout_fields=full_fields,
                         origin="witness_full",
                         parent_ids=(r1.program_id, r2.program_id),
                         expected_cost=float(len(full_steps)),
-                        role_bindings=dict(r1.role_bindings),
-                        case_condition_field=differing_fields[0] if differing_fields else "",
-                        case_condition_value=r1.public_readout_z.get(differing_fields[0], "") if differing_fields else "",
+                        case_condition_field=cond_f,
+                        case_condition_value=cond_v,
+                        case_true_template=true_branch_tmpl if cond_f else "",
+                        case_false_template=false_branch_tmpl if cond_f else "",
                     )
                     candidates_constructed += 1
                     candidates_checked += 1
@@ -1938,9 +3029,9 @@ class ActionContrastProposer:
                     if candidates_checked >= self.max_candidate_checks:
                         break
 
-                    # 2. Def-use Delete transformation
+                    # 2. AST consumer-graph Delete transformation
                     target_del_field = full_fields[-1] if len(full_fields) > 1 else ""
-                    if target_del_field:
+                    if target_del_field and target_del_field != cond_f:
                         del_prog = self._def_use_delete(full_prog, target_del_field)
                         candidates_constructed += 1
                         candidates_checked += 1
@@ -1950,16 +3041,21 @@ class ActionContrastProposer:
                     if candidates_checked >= self.max_candidate_checks:
                         break
 
-                    # 3. Scope-unified Concat transformation
+                    # 3. Alpha-renaming Concat transformation
                     p2_prog = ExecutableProgram(
                         program_id=r2.program_id,
                         benchmark=self.benchmark,
                         step_templates=r2.rebound_trace_templates[: self.max_probe_steps] or r2.step_templates,
                         readout_fields=r2.rebound_trace_fields[:4] or r2.readout_fields,
-                        role_bindings=dict(r2.role_bindings),
                     )
                     concat_prog = self._scope_unified_concat(
-                        full_prog, p2_prog, differing_fields, self.max_probe_steps
+                        full_prog,
+                        p2_prog,
+                        differing_fields,
+                        self.max_probe_steps,
+                        case_condition_value=cond_v,
+                        case_true_template=true_branch_tmpl if cond_f else "",
+                        case_false_template=false_branch_tmpl if cond_f else "",
                     )
                     candidates_constructed += 1
                     candidates_checked += 1
@@ -1995,6 +3091,8 @@ class ActionContrastProposer:
                 unique_witness_pairs=len(self.unique_witness_pair_ids),
                 cumulative_witness_visits=self.cumulative_witness_visits,
                 added_program_ids=tuple(p.program_id for p in added),
+                permutable_groups=permutable_groups,
+                permutable_records=permutable_records,
             )
         )
         return added
