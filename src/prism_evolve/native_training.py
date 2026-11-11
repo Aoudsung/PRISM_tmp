@@ -578,12 +578,14 @@ def program_execution_summary(events: Sequence[NativeEvent]) -> dict[str, Any]:
 
 def _decision_messages(
     messages: Sequence[Mapping[str, str]], trajectory: NativeTrajectory, limits: BudgetLimits,
-    meter: BudgetMeter,
+    meter: BudgetMeter, *, quantize_wall_seconds: bool = False,
 ) -> list[dict[str, str]]:
     result = [dict(message) for message in messages]
+    rem_wall_raw = max(0.0, trajectory.budget_seconds - trajectory.elapsed_seconds)
+    rem_wall_val: int | float = int(round(rem_wall_raw)) if quantize_wall_seconds else rem_wall_raw
     result.append({"role": "user", "content": json.dumps({
         "remaining_environment_steps": max(0, limits.max_env_steps - len(trajectory.events)),
-        "remaining_wall_seconds": max(0.0, trajectory.budget_seconds - trajectory.elapsed_seconds),
+        "remaining_wall_seconds": rem_wall_val,
         "remaining_model_tokens": max(0, limits.max_model_tokens - meter.total_model_tokens),
     }, sort_keys=True, separators=(",", ":"))})
     return result
@@ -657,8 +659,10 @@ def rollout(
         raise ValueError("Progress supervision belongs only to registered training rollouts.")
     limits = _limits(config)
     benchmark_name = str(config.get("benchmark", getattr(env, "benchmark", "alfworld"))).split(":", 1)[0]
+    quantize_prompt_sec = bool(config.get("dcc_quantize_prompt_wall_seconds", False))
     if hasattr(policy, "dcc_mode_enabled"):
         policy.dcc_mode_enabled = method in DCC_METHODS
+        policy.dcc_controller_mode = str(config.get("dcc_controller_mode", "expected_utility"))
         policy.dcc_eval_variant = (
             "no_program_growth" if method == "dcc_no_program_growth"
             else "reset_parameters" if method == "dcc_reset_parameters"
@@ -714,7 +718,9 @@ def rollout(
                 if first_action and first_decision_messages is not None:
                     before = [dict(item) for item in first_decision_messages]
                 else:
-                    before = _decision_messages(messages, trajectory, limits, meter)
+                    before = _decision_messages(
+                        messages, trajectory, limits, meter, quantize_wall_seconds=quantize_prompt_sec
+                    )
                 # Derive the live grammar from the complete public history. The
                 # policy may compact its model prompt after extracting this state.
                 schema = env.schema_for_history(before) if gated_actor else env.action_schema
@@ -804,6 +810,9 @@ def rollout(
                         else float(prefix_seconds)
                     )
                     rem_sec_before = max(0.0, 1.0 - (prev_elapsed / max(1e-8, trajectory.budget_seconds)))
+                    rem_steps_before = max(
+                        0.0, 1.0 - ((len(trajectory.events) - 1) / max(1, limits.max_env_steps))
+                    )
                     obs_update = policy.observe_dcc_transition(
                         benchmark_name,
                         task_instruction,
@@ -811,6 +820,8 @@ def rollout(
                         schema,
                         actual_action=generation.text.strip(),
                         remaining_budget_ratio=rem_sec_before,
+                        spent_seconds_ratio=1.0 - rem_sec_before,
+                        remaining_steps_ratio=rem_steps_before,
                         had_error=bool(facts.get("hard_bad") or event.metadata.get("public_error")),
                         terminal_done=bool(step.done),
                         terminal_success=bool(step.done and step.success),
@@ -840,11 +851,16 @@ def rollout(
                     pre_f = PublicBenchmarkBinder.extract_public_fields(
                         benchmark_name, task_instruction, pre_ev, schema
                     )
+                    pre_b = PublicBenchmarkBinder.extract_role_bindings(
+                        benchmark_name, task_instruction, pre_ev, schema
+                    )
                     post_f = PublicBenchmarkBinder.extract_public_fields(
                         benchmark_name, task_instruction, trajectory.events, schema
                     )
                     f_ctx = policy.extract_frozen_semantic_context(task_instruction, pre_f)
-                    f_act = policy.extract_frozen_action_embeddings([generation.text.strip()])[0]
+                    f_act = policy.extract_frozen_action_embeddings(
+                        [generation.text.strip()], role_bindings=pre_b
+                    )[0]
                     event.metadata["dcc_pre_public_fields"] = pre_f
                     event.metadata["dcc_public_fields"] = post_f
                     event.metadata["dcc_frozen_context_vec"] = list(f_ctx)
@@ -1046,6 +1062,22 @@ def _extract_public_transitions(
             nat_out = terminal_outcome if (is_last and terminal_outcome is not None and not global_budget_limited) else None
 
         node_id = _short_hash((cluster_id, episode_id, idx, act_text))
+        gen_meta = ev.generation.metadata if isinstance(ev.generation.metadata, Mapping) else {}
+        dcc_dec_meta = gen_meta.get("dcc_decision") if isinstance(gen_meta.get("dcc_decision"), Mapping) else {}
+        if "dcc_prior_action_logprob" in ev.metadata:
+            step_prior_lp = float(ev.metadata["dcc_prior_action_logprob"])
+        elif "selected_prior_logprob" in dcc_dec_meta:
+            step_prior_lp = float(dcc_dec_meta["selected_prior_logprob"])
+        else:
+            raw_slp = gen_meta.get("sampling_log_probs") or ()
+            # Exclude trailing EOS token when averaging actual sampled frozen_base action tokens
+            content_slp = list(raw_slp[:-1]) if len(raw_slp) > 1 else list(raw_slp)
+            non_zero_slp = [float(x) for x in content_slp if math.isfinite(float(x))]
+            step_prior_lp = (
+                sum(non_zero_slp) / float(len(non_zero_slp))
+                if (non_zero_slp and any(x != 0.0 for x in non_zero_slp))
+                else 0.0
+            )
         transitions.append(
             PublicTransition(
                 transition_id=node_id,
@@ -1078,6 +1110,7 @@ def _extract_public_transitions(
                 resource_after=res_after.to_dict(),
                 frozen_context_vec=tuple(float(x) for x in ev.metadata.get("dcc_frozen_context_vec", ())),
                 frozen_action_vec=tuple(float(x) for x in ev.metadata.get("dcc_frozen_action_vec", ())),
+                prior_action_logprob=step_prior_lp,
                 controller_id=controller_id,
             )
         )
@@ -1100,9 +1133,10 @@ def _extract_pi0_tail_examples(
     total_elapsed_seconds: float,
     tail_start_index: int,
     branch_transitions: Sequence[Any] = (),
+    frozen_tail_action_vec: Sequence[float] = (),
 ) -> list[Any]:
     """Generate TailExample supervision records strictly from genuine frozen pi_0 suffix intervals,
-    preserving exact fork-tree `prefix_node_id` and branch-unique `example_id` (fixes C).
+    preserving exact fork-tree `prefix_node_id`, branch-unique `example_id`, and shared `frozen_tail_action_vec`.
     """
     from .native_dcc import PublicBenchmarkBinder, ResourceState, TailExample, TAIL_POLICY_VERSION, _short_hash
 
@@ -1110,6 +1144,8 @@ def _extract_pi0_tail_examples(
     b_sec = float(max(1e-8, budget_seconds))
     total_sec = float(max(0.0, total_elapsed_seconds))
     total_events = len(events)
+    step_frac = 1.0 / float(max(1, max_env_steps))
+    tail_vec = tuple(float(x) for x in frozen_tail_action_vec)
     parent_by_step = {
         int(tr.step_index): tr.parent_transition_id
         for tr in branch_transitions
@@ -1154,6 +1190,8 @@ def _extract_pi0_tail_examples(
                 pre_public_fields=pre_fields,
                 resource_before=res_before.to_dict(),
                 frozen_context_vec=tuple(float(x) for x in ev.metadata.get("dcc_frozen_context_vec", ())),
+                frozen_tail_action_vec=tail_vec,
+                step_budget_fraction=step_frac,
                 observed_y=None if global_budget_limited else bool(terminal_outcome),
                 tail_seconds_cost_ratio=tail_sec_ratio,
                 total_seconds_cost_ratio=tot_sec_ratio,
@@ -1239,6 +1277,7 @@ def _run_branch_with_frozen_tail_pi0(
                 append_interaction(head_messages, gen, step)
                 if hasattr(policy, "observe_dcc_transition"):
                     rem_sec_before = max(0.0, 1.0 - (float(prefix_seconds) / max(1e-8, limits.max_wall_seconds)))
+                    rem_steps_before = max(0.0, 1.0 - (split_step / max(1, limits.max_env_steps)))
                     obs_u = policy.observe_dcc_transition(
                         benchmark_name,
                         task_instruction,
@@ -1246,6 +1285,8 @@ def _run_branch_with_frozen_tail_pi0(
                         schema,
                         actual_action=first_action_text,
                         remaining_budget_ratio=rem_sec_before,
+                        spent_seconds_ratio=1.0 - rem_sec_before,
+                        remaining_steps_ratio=rem_steps_before,
                         had_error=bool(ev.metadata.get("public_error")),
                         terminal_done=bool(step.done),
                         terminal_success=bool(step.done and step.success),
@@ -1255,6 +1296,11 @@ def _run_branch_with_frozen_tail_pi0(
                     ev.metadata["dcc_outcome_bin"] = obs_u["outcome_bin"]
                     ev.metadata["dcc_frozen_context_vec"] = list(obs_u.get("frozen_context_vec", ()))
                     ev.metadata["dcc_frozen_action_vec"] = list(obs_u.get("frozen_action_vec", ()))
+                if hasattr(policy, "score_frozen_action_logprobs"):
+                    lp_head = policy.score_frozen_action_logprobs(
+                        root_messages, schema, [first_action_text], prefill_already_charged=False
+                    )
+                    ev.metadata["dcc_prior_action_logprob"] = float(lp_head.get(first_action_text, 0.0))
                 head_done = bool(step.done)
                 head_succ = bool(step.done and step.success)
         except BudgetExhausted as error:
@@ -1344,26 +1390,23 @@ def collect_branch_pair(
     meter: BudgetMeter, *, seed: int, stratified: bool,
     progress_supervisor: Any | None = None,
     method: str = "prism_evolve",
+    existing_records: Sequence[Any] = (),
 ) -> BranchPair:
     """DCC v2 unified measurement block xi = (h, q, z, u -> pi_0, v -> pi_0).
 
-    Fixes F03, F04, F11, F15, F16, F24:
-      1. Single episode initialization owner in `collect_branch_pair`; reaches deep anchor h at a
-         deterministic depth sampled over `[1, max_anchor_depth]` along the main trajectory.
-      2. Selects executable program q in Xi using m_ep's unified long-horizon value Q_{m_ep}^q
-         and steps q's AST frame via `step_ast_frame`, tracking whether q executed cleanly without
-         `BindingFailure`.
-      3. Saves the complete post-q checkpoint and selects a canonical repeatable continuation pair
-         `(u_act, v_act)` before observing outcomes.
-      4. Runs factual branch `u -> pi_0` and counterfactual branch `v -> pi_0` using the explicit
-         frozen tail controller `_run_branch_with_frozen_tail_pi0` (`method="frozen_base"`).
-      5. Builds a fork-tree of `PublicTransition` nodes where counterfactual v's first transition
-         explicitly sets `parent_transition_id = fork_node_id`, and extracts `TailExample` records
-         from the genuine pi_0 suffix intervals.
+    First-principles alignment:
+      1. Single episode initialization owner in `collect_branch_pair` with shared `DecisionContext`
+         across probe q selection, post-q fork acquisition, and d_model evaluation.
+      2. Selects continuation pair `(u_act, v_act)` by ensemble decision-disagreement R_h(u, v)
+         per paired execution cost (or prior + cross-anchor comparison_key + role-diverse tie-break
+         when R_h == 0), never observing current-block outcomes before fixing `(u, v)`.
+      3. Runs factual `u -> pi_0` and counterfactual `v -> pi_0` under `frozen_base`, recording
+         shared `frozen_tail_action_vec` on all `TailExample`s and exact pre-update `d_model`.
     """
     from .native_dcc import (
         TAIL_POLICY_VERSION,
         Comparison,
+        ControlledResponseEnsemble,
         MeasurementRecord,
         ProgramExecutionState,
         PublicBenchmarkBinder,
@@ -1373,6 +1416,7 @@ def collect_branch_pair(
 
     task_info = _task(task)
     limits = _limits(config)
+    quantize_prompt_sec = bool(config.get("dcc_quantize_prompt_wall_seconds", False))
     benchmark_name = str(config.get("benchmark", getattr(env, "benchmark", "alfworld"))).split(":", 1)[0]
     prefix_meter = BudgetMeter(limits, parent=meter)
     with _meters(policy, env, prefix_meter), _preserve_actor_rng():
@@ -1381,6 +1425,7 @@ def collect_branch_pair(
     task_instruction = str(context.get("instruction", task_info.get("instruction", "")))
     is_dcc = method in DCC_METHODS and hasattr(policy, "dcc_ensemble")
     if is_dcc:
+        policy.dcc_controller_mode = str(config.get("dcc_controller_mode", "expected_utility"))
         ep_member = _deterministic_seed(task_info["task_id"], seed, "ep_member") % int(policy.dcc_ensemble.ensemble_size)
         policy.reset_dcc_episode(
             benchmark_name, task_instruction=task_instruction, member_index=ep_member
@@ -1452,42 +1497,67 @@ def collect_branch_pair(
     if getattr(policy, "dcc_active_belief", None) is None:
         policy.reset_dcc_episode(benchmark_name, task_instruction=task_instruction)
 
-    anchor_fields = PublicBenchmarkBinder.extract_public_fields(
-        benchmark_name, task_instruction, anchor_trajectory.events, env.action_schema
+    anchor_rem_sec = max(0.0, 1.0 - (anchor_trajectory.elapsed_seconds / max(1e-8, limits.max_wall_seconds)))
+    anchor_rem_steps = max(0.0, 1.0 - (len(anchor_trajectory.events) / max(1, limits.max_env_steps)))
+    anchor_msgs_check = _decision_messages(
+        anchor_trajectory.metadata["final_messages"],
+        anchor_trajectory,
+        limits,
+        prefix_meter,
+        quantize_wall_seconds=quantize_prompt_sec,
     )
-    anchor_bindings = PublicBenchmarkBinder.extract_role_bindings(
-        benchmark_name, task_instruction, anchor_trajectory.events, env.action_schema
+    anchor_schema = env.schema_for_history(anchor_msgs_check)
+    anchor_decision_ctx = policy.build_dcc_decision_context(
+        benchmark=benchmark_name,
+        goal_text=task_instruction,
+        events=anchor_trajectory.events,
+        action_schema=anchor_schema,
+        remaining_budget_ratio=anchor_rem_sec,
+        remaining_steps_ratio=anchor_rem_steps,
+        max_env_steps=limits.max_env_steps,
+        member_index=getattr(policy, "dcc_active_member_index", None),
+        controller_mode=str(config.get("dcc_controller_mode", "expected_utility")),
     )
+    anchor_fields = anchor_decision_ctx.public_fields
+    anchor_bindings = anchor_decision_ctx.role_bindings
     candidate_progs = library.active_programs(
         starter_only=(method in ("dcc_no_program_growth", "dcc_k0_planner"))
     )
     use_init_params = method in ("dcc_reset_parameters", "dcc_k0_planner")
     active_view = policy.dcc_ensemble.active_model_view(use_initial_params=use_init_params)
 
-    # Select executable probe program q that binds cleanly in the current anchor state (fixes F24)
+    # Select executable probe program q using the exact shared `anchor_decision_ctx`
     selected_prog = candidate_progs[0]
-    best_q_score = -1e9
+    q_cand_entries: list[tuple[str, str, Any, Any]] = []
     for prog in candidate_progs:
         temp_frame = ProgramExecutionState(program=prog, bound_variables=dict(anchor_bindings))
         step_res = PublicBenchmarkBinder.step_ast_frame(
-            temp_frame, env.action_schema, task_instruction, anchor_trajectory.events
+            temp_frame, anchor_schema, task_instruction, anchor_trajectory.events
         )
-        if step_res.status != "Action" or not step_res.concrete_action:
-            continue
-        rem_sec_ratio = max(0.0, 1.0 - (anchor_trajectory.elapsed_seconds / max(1e-8, limits.max_wall_seconds)))
-        q_info = active_view.evaluate_candidate_q(
-            goal_text=task_instruction,
-            public_fields=anchor_fields,
-            belief=policy.dcc_active_belief,
-            candidate_action=step_res.concrete_action,
-            program=prog,
-            remaining_budget_ratio=rem_sec_ratio,
-            member_index=getattr(policy, "dcc_active_member_index", None),
+        if step_res.status == "Action" and step_res.concrete_action:
+            q_cand_entries.append((prog.program_id, step_res.concrete_action, prog, step_res.frame))
+
+    if q_cand_entries:
+        def _anchor_embed_fn(a_str: str) -> tuple[float, ...]:
+            return policy.extract_frozen_action_embeddings([a_str], role_bindings=anchor_bindings)[0]
+
+        with _meters(policy, env, prefix_meter):
+            anchor_lp_map = (
+                policy.score_frozen_action_logprobs(
+                    anchor_msgs_check, anchor_schema, [c[1] for c in q_cand_entries], prefill_already_charged=False
+                )
+                if hasattr(policy, "score_frozen_action_logprobs") else {}
+            )
+        scored_q = active_view.evaluate_decision_candidates(
+            anchor_decision_ctx,
+            policy.dcc_active_belief,
+            q_cand_entries,
+            action_embedder=_anchor_embed_fn,
+            precomputed_prior_logprobs=anchor_lp_map,
             use_initial_params=False,
         )
-        if q_info["q_selected"] > best_q_score:
-            best_q_score = q_info["q_selected"]
-            selected_prog = prog
+        best_q_entry = max(scored_q, key=lambda item: float(item["q_selected"]))
+        selected_prog = best_q_entry["program"]
 
     # Execute bounded probe program q using authoritative AST max_call_depth() (fixes E)
     max_probe_steps = int(config.get("dcc_max_probe_steps", 3))
@@ -1508,7 +1578,9 @@ def collect_branch_pair(
             if len(probe_events) >= limits.max_env_steps or probe_prog_state.completed or probe_prog_state.binding_failed:
                 break
             try:
-                before_msgs = _decision_messages(probe_messages, anchor_trajectory, limits, prefix_meter)
+                before_msgs = _decision_messages(
+                    probe_messages, anchor_trajectory, limits, prefix_meter, quantize_wall_seconds=quantize_prompt_sec
+                )
                 schema = env.schema_for_history(before_msgs)
                 modes = available_action_modes(schema)
                 if not modes:
@@ -1522,6 +1594,7 @@ def collect_branch_pair(
                 prefix_meter.ensure_env_steps(1)
                 cur_elapsed = float(anchor_trajectory.elapsed_seconds) + (monotonic_seconds() - probe_started)
                 rem_sec_ratio = max(0.0, 1.0 - (cur_elapsed / max(1e-8, limits.max_wall_seconds)))
+                rem_steps_ratio = max(0.0, 1.0 - (len(probe_events) / max(1, limits.max_env_steps)))
                 generation = policy.act(
                     before_msgs,
                     schema,
@@ -1531,6 +1604,8 @@ def collect_branch_pair(
                     events=probe_events,
                     task_instruction=task_instruction,
                     remaining_budget_ratio=rem_sec_ratio,
+                    remaining_steps_ratio=rem_steps_ratio,
+                    max_env_steps=limits.max_env_steps,
                     forced_program=probe_prog_state,
                 )
                 if getattr(policy, "dcc_active_program_state", None) is not None:
@@ -1567,6 +1642,8 @@ def collect_branch_pair(
                     schema,
                     actual_action=generation.text.strip(),
                     remaining_budget_ratio=rem_sec_ratio,
+                    spent_seconds_ratio=1.0 - rem_sec_ratio,
+                    remaining_steps_ratio=rem_steps_ratio,
                     had_error=bool(facts.get("hard_bad") or ev.metadata.get("public_error")),
                     terminal_done=bool(step.done),
                     terminal_success=bool(step.done and step.success),
@@ -1664,21 +1741,131 @@ def collect_branch_pair(
     prefix = list(probe_events)
     split_step = len(prefix)
     messages = [dict(item) for item in probe_messages]
-    root_messages = _decision_messages(messages, probe_trajectory, limits, prefix_meter)
+    root_messages = _decision_messages(
+        messages, probe_trajectory, limits, prefix_meter, quantize_wall_seconds=quantize_prompt_sec
+    )
     post_q_schema = env.schema_for_history(root_messages)
     branch_modes = available_action_modes(post_q_schema)
     forced_first = "I" if (stratified and "I" in branch_modes) else None
     forced_second = "E" if (stratified and "E" in branch_modes) else None
     prefix_usage = probe_trajectory.metadata["resource_usage"]
 
-    # Choose two repeatable continuation actions (u, v) from the post-q schema before observing outcomes (fixes F15)
+    post_q_rem_sec = max(0.0, 1.0 - (probe_trajectory.elapsed_seconds / max(1e-8, limits.max_wall_seconds)))
+    post_q_rem_steps = max(0.0, 1.0 - (split_step / max(1, limits.max_env_steps)))
+    post_q_belief = post_q_controller_state.get("belief", policy.dcc_active_belief)
+    goal_cat = str(task_info.get("category", task_info.get("task_type", benchmark_name)))
+
+    post_q_decision_ctx = None
+    disagreement_r = 0.0
+    fork_selection_mode = "lexicographic"
+    post_q_prior_act = ""
+
+    # Choose two repeatable continuation actions (u, v) from the post-q schema BEFORE observing outcomes
     admissible_post_q = PublicBenchmarkBinder.enumerate_admissible_actions(
         benchmark_name, post_q_schema, task_instruction, post_q_bindings
     )
     u_bound_act: str | None = None
     v_bound_act: str | None = None
-    if len(admissible_post_q) >= 2:
-        # Select canonical top-2 repeatable actions by template order so identical roles repeat across anchors
+
+    if is_dcc and hasattr(policy, "build_dcc_decision_context"):
+        post_q_decision_ctx = policy.build_dcc_decision_context(
+            benchmark=benchmark_name,
+            goal_text=task_instruction,
+            events=prefix,
+            action_schema=post_q_schema,
+            remaining_budget_ratio=post_q_rem_sec,
+            remaining_steps_ratio=post_q_rem_steps,
+            max_env_steps=limits.max_env_steps,
+            member_index=None,
+            controller_mode=str(config.get("dcc_controller_mode", "expected_utility")),
+        )
+        acq_mode = str(config.get("dcc_fork_acquisition", "decision_disagreement"))
+        if acq_mode != "lexicographic" and len(admissible_post_q) >= 2:
+            # Sample one frozen LM prior proposal at post-q to anchor R_h == 0 tie-breaking semantically
+            try:
+                with _meters(policy, env, prefix_meter), _preserve_actor_rng(), policy.frozen_reference():
+                    prior_seed = _deterministic_seed(task_info["task_id"], seed, split_step, "post_q_prior")
+                    torch.manual_seed(prior_seed)
+                    prior_max_new = int(config.get("max_new_tokens", getattr(policy, "max_new_tokens", 256)))
+                    if post_q_schema.get("classic_text"):
+                        p_gen = policy._generate_native_text(
+                            root_messages,
+                            post_q_schema,
+                            mode=None,
+                            greedy=False,
+                            role="actor.action",
+                            max_new_tokens=prior_max_new,
+                        )
+                    else:
+                        p_gen = policy._generate_program(
+                            root_messages,
+                            post_q_schema,
+                            mode=None,
+                            greedy=False,
+                            role="actor.action",
+                            max_new_tokens=prior_max_new,
+                        )
+                    post_q_prior_act = p_gen.text.strip()
+            except BudgetExhausted:
+                post_q_prior_act = ""
+            prefix_usage = prefix_meter.snapshot()
+            probe_trajectory.metadata["resource_usage"] = prefix_usage
+
+            cand_pool: list[tuple[str, str, Any, Any]] = []
+            seen_c_acts: set[str] = set()
+            if post_q_prior_act:
+                cand_pool.append((f"native_prior:{_short_hash(post_q_prior_act)}", post_q_prior_act, None, None))
+                seen_c_acts.add(post_q_prior_act)
+            for adm_a in admissible_post_q:
+                if adm_a not in seen_c_acts:
+                    cand_pool.append((f"native_atomic:{_short_hash(adm_a)}", adm_a, None, None))
+                    seen_c_acts.add(adm_a)
+
+            def _post_q_embed(a_str: str) -> tuple[float, ...]:
+                return policy.extract_frozen_action_embeddings([a_str], role_bindings=post_q_bindings)[0]
+
+            with _meters(policy, env, prefix_meter):
+                post_q_lp_map = (
+                    policy.score_frozen_action_logprobs(
+                        root_messages, post_q_schema, [c[1] for c in cand_pool], prefill_already_charged=bool(post_q_prior_act)
+                    )
+                    if hasattr(policy, "score_frozen_action_logprobs") else {}
+                )
+            prefix_usage = prefix_meter.snapshot()
+            probe_trajectory.metadata["resource_usage"] = prefix_usage
+
+            scored_post_q = active_view.evaluate_decision_candidates(
+                post_q_decision_ctx,
+                post_q_belief,
+                cand_pool,
+                action_embedder=_post_q_embed,
+                precomputed_prior_logprobs=post_q_lp_map,
+                use_initial_params=False,
+            )
+            existing_comp_map: dict[str, set[str]] = {}
+            for prev_rec in existing_records:
+                ckey = getattr(prev_rec, "comparison_key", "")
+                rz = getattr(prev_rec, "public_readout_z", None)
+                if ckey and isinstance(rz, Mapping):
+                    existing_comp_map.setdefault(str(ckey), set()).add(_short_hash(dict(rz)))
+
+            fork_rng = random.Random(_deterministic_seed(task_info["task_id"], seed, split_step, "fork_pair"))
+            sel_pair = ControlledResponseEnsemble.select_fork_continuation_pair(
+                scored_post_q,
+                benchmark=benchmark_name,
+                goal_category=goal_cat,
+                prior_action_text=post_q_prior_act,
+                existing_comparison_keys=existing_comp_map,
+                current_readout_sig=_short_hash(public_readout_z),
+                rng=fork_rng,
+            )
+            if sel_pair is not None:
+                u_bound_act = str(sel_pair["u_entry"]["candidate_action"])
+                v_bound_act = str(sel_pair["v_entry"]["candidate_action"])
+                disagreement_r = float(sel_pair["disagreement_r"])
+                fork_selection_mode = str(sel_pair["selection_mode"])
+
+    if (u_bound_act is None or v_bound_act is None) and len(admissible_post_q) >= 2:
         by_tmpl = sorted(
             admissible_post_q,
             key=lambda a: (
@@ -1688,6 +1875,7 @@ def collect_branch_pair(
         )
         u_bound_act = by_tmpl[0]
         v_bound_act = next((a for a in by_tmpl[1:] if a != u_bound_act), by_tmpl[-1])
+        fork_selection_mode = "lexicographic"
 
     cont_horizon_cfg = config.get("dcc_full_tail_rollout", True)
     continuation_steps = (
@@ -1864,9 +2052,14 @@ def collect_branch_pair(
     first.metadata["dcc_cluster_transitions"] = [t.to_dict() for t in cluster_transitions]
 
     # Extract TailExamples strictly from genuine pi_0 suffix intervals (split_step + 1 .. end)
-    # with exact fork-tree `prefix_node_id` and branch-unique `episode_id` (fixes C)
+    # with exact fork-tree `prefix_node_id`, branch-unique `episode_id`, and shared `frozen_tail_action_vec`.
     tail_examples = []
     if is_dcc:
+        tail_act_vec = (
+            post_q_decision_ctx.frozen_tail_action_vec
+            if post_q_decision_ctx is not None
+            else policy.extract_frozen_action_embeddings([TAIL_POLICY_VERSION])[0]
+        )
         if len(first.events) > split_step + 1:
             tail_examples.extend(
                 _extract_pi0_tail_examples(
@@ -1883,6 +2076,7 @@ def collect_branch_pair(
                     total_elapsed_seconds=first.elapsed_seconds,
                     tail_start_index=split_step + 1,
                     branch_transitions=u_transitions,
+                    frozen_tail_action_vec=tail_act_vec,
                 )
             )
         if len(second.events) > split_step + 1:
@@ -1901,6 +2095,7 @@ def collect_branch_pair(
                     total_elapsed_seconds=second.elapsed_seconds,
                     tail_start_index=split_step + 1,
                     branch_transitions=v_transitions,
+                    frozen_tail_action_vec=tail_act_vec,
                 )
             )
     first.metadata["dcc_tail_examples"] = [tex.to_dict() for tex in tail_examples]
@@ -1929,28 +2124,48 @@ def collect_branch_pair(
     )
     action_diff_d = float(d_real if d_real is not None else 0.0)
 
-    # Separate model-estimated continuation difference d_model
+    # Exact pre-update model continuation difference d_model on post-q state for (u -> pi_0) vs (v -> pi_0)
+    # using the shared deployment `post_q_decision_ctx` (never passing the already-completed probe `selected_prog`!).
     u_first_act = first.events[split_step].generation.text.strip()
     v_first_act = second.events[split_step].generation.text.strip()
-    post_q_belief = post_q_controller_state.get("belief", policy.dcc_active_belief)
-    post_q_rem_sec = max(0.0, 1.0 - (probe_trajectory.elapsed_seconds / max(1e-8, limits.max_wall_seconds)))
-    q_u_est = active_view.evaluate_candidate_q(
-        goal_text=task_instruction,
-        public_fields=public_readout_z,
+    if post_q_decision_ctx is None:
+        post_q_decision_ctx = policy.build_dcc_decision_context(
+            benchmark=benchmark_name,
+            goal_text=task_instruction,
+            events=prefix,
+            action_schema=post_q_schema,
+            remaining_budget_ratio=post_q_rem_sec,
+            remaining_steps_ratio=post_q_rem_steps,
+            max_env_steps=limits.max_env_steps,
+            member_index=None,
+            controller_mode=str(config.get("dcc_controller_mode", "expected_utility")),
+        )
+    u_act_vec, v_act_vec = policy.extract_frozen_action_embeddings(
+        [u_first_act, v_first_act], role_bindings=post_q_bindings
+    )
+    u_prior_lp = float(first.events[split_step].metadata.get("dcc_prior_action_logprob", 0.0))
+    v_prior_lp = float(second.events[split_step].metadata.get("dcc_prior_action_logprob", 0.0))
+    q_u_eval = active_view.evaluate_candidate_q(
         belief=post_q_belief,
         candidate_action=u_first_act,
-        program=selected_prog,
-        remaining_budget_ratio=post_q_rem_sec,
-    )["q_mean"]
-    q_v_est = active_view.evaluate_candidate_q(
-        goal_text=task_instruction,
-        public_fields=public_readout_z,
+        program=None,
+        initial_frame=None,
+        decision_ctx=post_q_decision_ctx,
+        frozen_action_vec=u_act_vec,
+        prior_action_logprob=u_prior_lp,
+        use_initial_params=False,
+    )
+    q_v_eval = active_view.evaluate_candidate_q(
         belief=post_q_belief,
         candidate_action=v_first_act,
-        program=selected_prog,
-        remaining_budget_ratio=post_q_rem_sec,
-    )["q_mean"]
-    d_model = float(q_u_est - q_v_est)
+        program=None,
+        initial_frame=None,
+        decision_ctx=post_q_decision_ctx,
+        frozen_action_vec=v_act_vec,
+        prior_action_logprob=v_prior_lp,
+        use_initial_params=False,
+    )
+    d_model = float(q_u_eval["q_mean"] - q_v_eval["q_mean"])
 
     outcome_bin = PublicBenchmarkBinder.encode_response_outcome_bin(
         anchor_fields,
@@ -1971,7 +2186,6 @@ def collect_branch_pair(
 
     u_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark_name, u_first_act, post_q_bindings)
     v_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark_name, v_first_act, post_q_bindings)
-    goal_cat = str(task_info.get("category", task_info.get("task_type", benchmark_name)))
     comp = Comparison.canonicalize(
         goal_category=goal_cat,
         u_policy_id=u_tmpl,
@@ -2020,6 +2234,47 @@ def collect_branch_pair(
     first.metadata["dcc_selected_program"] = selected_prog.to_dict()
     first.metadata["dcc_anchor_fields"] = dict(anchor_fields)
     first.metadata["dcc_post_q_checkpoint_id"] = post_q_checkpoint_id
+    first.metadata["dcc_post_q_eval_packet"] = {
+        "benchmark": benchmark_name,
+        "goal_text": task_instruction,
+        "public_fields": dict(public_readout_z),
+        "role_bindings": dict(post_q_bindings),
+        "remaining_budget_ratio": float(post_q_rem_sec),
+        "remaining_steps_ratio": float(post_q_rem_steps),
+        "step_budget_fraction": float(post_q_decision_ctx.step_budget_fraction),
+        "frozen_context_vec": list(post_q_decision_ctx.frozen_context_vec),
+        "frozen_tail_action_vec": list(post_q_decision_ctx.frozen_tail_action_vec),
+        "controller_mode": str(post_q_decision_ctx.controller_mode),
+        "post_q_belief": post_q_belief.detach().cpu().tolist() if post_q_belief is not None else None,
+        "u_first_act": u_first_act,
+        "v_first_act": v_first_act,
+        "u_act_vec": list(u_act_vec),
+        "v_act_vec": list(v_act_vec),
+        "u_prior_lp": u_prior_lp,
+        "v_prior_lp": v_prior_lp,
+        "polarity_sign": float(comp.polarity_sign),
+    }
+    first.metadata["dcc_branch_pair_diagnostics"] = {
+        "dcc_record_id": record.record_id,
+        "dcc_cluster_id": cluster_id,
+        "dcc_post_q_checkpoint_id": post_q_checkpoint_id,
+        "dcc_comparison_key": record.comparison_key,
+        "dcc_canonical_u_v": [record.u_policy_id, record.v_policy_id],
+        "dcc_factual_first_second_actions": [u_first_act, v_first_act],
+        "dcc_factual_first_second_templates": [u_tmpl, v_tmpl],
+        "dcc_canonical_swapped_from_factual": bool(comp.polarity_sign < 0),
+        "first_success": u_nat_outcome,
+        "second_success": v_nat_outcome,
+        "dcc_canonical_u_v_outcomes": [record.u_native_outcome, record.v_native_outcome],
+        "dcc_d_real_factual": d_real,
+        "dcc_d_real": record.d_real,
+        "dcc_d_model_preupdate": record.d_model,
+        "dcc_q_first_preupdate": float(q_u_eval["q_mean"]),
+        "dcc_q_second_preupdate": float(q_v_eval["q_mean"]),
+        "dcc_fork_disagreement_r": float(disagreement_r),
+        "dcc_fork_selection_mode": fork_selection_mode,
+        "dcc_post_q_prior_action": post_q_prior_act,
+    }
     return BranchPair(prefix, first, second, split_step, probability, stratified)
 
 
@@ -2097,12 +2352,17 @@ def _update_dcc_block(
     allow_program_growth: bool = True,
     fixed_d_proposer: Any | None = None,
     fixed_d_library: Any | None = None,
+    cluster_replay_buffer: list[dict[str, Any]] | None = None,
     run_seed: int = 42,
 ) -> dict[str, Any]:
-    """Update shared controlled response ensemble K_phi on real fork-tree transitions and grow library Xi."""
+    """Update shared controlled response ensemble K_phi on paid fork-tree clusters (with fixed-bootstrap replay)
+    and grow library Xi.
+    """
     from .native_dcc import (
+        DecisionContext,
         ExecutableProgram,
         MeasurementRecord,
+        PublicBenchmarkBinder,
         PublicTransition,
         TailExample,
         _deterministic_seed,
@@ -2134,6 +2394,7 @@ def _update_dcc_block(
             resource_after={str(k): float(v) for k, v in dict(t.get("resource_after", {})).items()},
             frozen_context_vec=tuple(float(x) for x in t.get("frozen_context_vec", ())),
             frozen_action_vec=tuple(float(x) for x in t.get("frozen_action_vec", ())),
+            prior_action_logprob=float(t.get("prior_action_logprob", 0.0)),
             controller_id=str(t.get("controller_id", "dcc")),
         )
         for t in raw_transitions
@@ -2153,6 +2414,8 @@ def _update_dcc_block(
             pre_public_fields=dict(tex["pre_public_fields"]),
             resource_before={str(k): float(v) for k, v in dict(tex["resource_before"]).items()},
             frozen_context_vec=tuple(float(x) for x in tex.get("frozen_context_vec", ())),
+            frozen_tail_action_vec=tuple(float(x) for x in tex.get("frozen_tail_action_vec", ())),
+            step_budget_fraction=float(tex.get("step_budget_fraction", 0.05)),
             observed_y=tex.get("observed_y"),
             tail_seconds_cost_ratio=tex.get("tail_seconds_cost_ratio"),
             total_seconds_cost_ratio=tex.get("total_seconds_cost_ratio"),
@@ -2174,39 +2437,11 @@ def _update_dcc_block(
             "parameter_delta_l2": 0.0,
         }
 
-    # Charge exact tokenizer token count (or side-network forward unit count) without space-split heuristic (fixes F22)
-    if hasattr(policy, "tokenizer") and policy.tokenizer is not None:
-        forward_tokens_to_charge = max(
-            1,
-            sum(
-                max(
-                    1,
-                    len(policy.tokenizer.encode(tr.action_text, add_special_tokens=False))
-                    + min(128, len(policy.tokenizer.encode(tr.raw_response[:512], add_special_tokens=False))),
-                )
-                for tr in transitions
-            )
-            if transitions
-            else 16,
-        )
-    else:
-        forward_tokens_to_charge = max(1, len(transitions) * 8)
-
-    if meter.remaining_model_tokens < forward_tokens_to_charge:
-        return {
-            "updated": False,
-            "learning_outcome": "insufficient_reserved_update_tokens",
-            "loss": 0.0,
-            "nonzero_gradient": False,
-            "parameters_changed": False,
-            "parameter_delta_l2": 0.0,
-        }
-
-    meter.ensure_forward(forward_tokens_to_charge, role="dcc_response_ensemble_update")
+    # Side-network NLL updates operate strictly on cached frozen vectors (zero 7B backbone calls).
     started = monotonic_seconds()
     optimizer.zero_grad(set_to_none=True)
 
-    # Deterministic cross-process cluster bootstrap seed (fixes F22)
+    # Deterministic cross-process cluster bootstrap seed fixed per (run_seed, cluster_id)
     M = int(policy.dcc_ensemble.ensemble_size)
     cluster_id_str = transitions[0].cluster_id if transitions else "default_cluster"
     cluster_seed = _deterministic_seed(run_seed, cluster_id_str)
@@ -2219,6 +2454,25 @@ def _update_dcc_block(
     rec_dict = sample.first.metadata.get("dcc_measurement_record")
     prog_dict = sample.first.metadata.get("dcc_selected_program")
     anchor_fields = dict(sample.first.metadata.get("dcc_anchor_fields", {}))
+
+    named_params = [(n, p) for n, p in policy.dcc_ensemble.named_parameters() if p.requires_grad]
+    parameters = [p for _, p in named_params]
+    upstream_names = {"transition_logits"}
+    before = [p.detach().clone() for p in parameters]
+    clip = float(config.get("grad_clip_norm", 1.0))
+
+    def _module_grad_norms() -> tuple[float, float]:
+        up_sq = 0.0
+        rd_sq = 0.0
+        for name, p in named_params:
+            if p.grad is None:
+                continue
+            g2 = float(p.grad.detach().float().square().sum().item())
+            if name in upstream_names or name.startswith(("context_encoder.", "transition_residual_proj.")):
+                up_sq += g2
+            else:
+                rd_sq += g2
+        return math.sqrt(rd_sq), math.sqrt(up_sq)
 
     if transitions:
         loss_tensor, next_belief, trans_stats = policy.dcc_ensemble.transition_negative_log_likelihood(
@@ -2251,37 +2505,133 @@ def _update_dcc_block(
 
     policy.dcc_active_belief = next_belief
     loss_val = float(loss_tensor.detach().item())
-
-    parameters = [p for p in policy.dcc_ensemble.parameters() if p.requires_grad]
-    before = [p.detach().clone() for p in parameters]
     loss_tensor.backward()
-    clip = float(config.get("grad_clip_norm", 1.0))
+    grad_readout_s0, grad_upstream_s0 = _module_grad_norms()
     grad_norm = float(
         torch.nn.utils.clip_grad_norm_(
             parameters, clip if clip > 0 else float("inf"), error_if_nonfinite=True
         ).detach().item()
     )
     optimizer.step()
+    meter.record_update(monotonic_seconds() - started)
+    optimizer.zero_grad(set_to_none=True)
+
+    side_updates_done = 1
+    replay_steps_done = 0
+    grad_readout_final, grad_upstream_final = grad_readout_s0, grad_upstream_s0
+    final_replay_loss = loss_val
+
+    if transitions and cluster_replay_buffer is not None:
+        cluster_replay_buffer.append(
+            {
+                "cluster_id": cluster_id_str,
+                "transitions": transitions,
+                "tail_examples": tail_examples,
+                "bootstrap_w": bootstrap_w.detach().clone(),
+            }
+        )
+        target_side_updates = max(1, int(config.get("dcc_cluster_updates_per_block", 4)))
+        replay_rng = random.Random(
+            _deterministic_seed(run_seed, "cluster_replay", cluster_id_str, len(cluster_replay_buffer))
+        )
+        hist_pool = cluster_replay_buffer[:-1] if len(cluster_replay_buffer) > 1 else cluster_replay_buffer
+        for _ in range(target_side_updates - 1):
+            if not hist_pool:
+                break
+            rep_t0 = monotonic_seconds()
+            chosen = replay_rng.choice(hist_pool)
+            rep_loss_t, _, _ = policy.dcc_ensemble.transition_negative_log_likelihood(
+                chosen["transitions"],
+                tail_examples=chosen["tail_examples"],
+                bootstrap_weights=chosen["bootstrap_w"],
+            )
+            final_replay_loss = float(rep_loss_t.detach().item())
+            rep_loss_t.backward()
+            grad_readout_final, grad_upstream_final = _module_grad_norms()
+            torch.nn.utils.clip_grad_norm_(
+                parameters, clip if clip > 0 else float("inf"), error_if_nonfinite=True
+            )
+            optimizer.step()
+            meter.record_update(monotonic_seconds() - rep_t0)
+            optimizer.zero_grad(set_to_none=True)
+            side_updates_done += 1
+            replay_steps_done += 1
+
     with torch.no_grad():
         param_delta = math.sqrt(
             sum(float((p.detach() - prev).float().square().sum().item()) for p, prev in zip(parameters, before))
         )
     del before
-    meter.record_update(monotonic_seconds() - started)
-    optimizer.zero_grad(set_to_none=True)
+    side_update_seconds = monotonic_seconds() - started
+
+    # Compute exact post-update `dcc_d_model_postupdate` on the cached post-q state (`u -> pi_0` vs `v -> pi_0`)
+    d_model_post: float | None = None
+    q_first_post: float | None = None
+    q_second_post: float | None = None
+    eval_pkt = sample.first.metadata.get("dcc_post_q_eval_packet")
+    if isinstance(eval_pkt, Mapping) and eval_pkt.get("post_q_belief") is not None:
+        with torch.no_grad():
+            pkt_fields = dict(eval_pkt["public_fields"])
+            pkt_ctx = DecisionContext(
+                benchmark=str(eval_pkt["benchmark"]),
+                goal_text=str(eval_pkt["goal_text"]),
+                public_fields=pkt_fields,
+                typed_slots=PublicBenchmarkBinder.encode_typed_field_slots(pkt_fields),
+                role_bindings=dict(eval_pkt.get("role_bindings", {})),
+                action_schema={},
+                remaining_budget_ratio=float(eval_pkt["remaining_budget_ratio"]),
+                spent_seconds_ratio=float(1.0 - float(eval_pkt["remaining_budget_ratio"])),
+                remaining_steps_ratio=float(eval_pkt["remaining_steps_ratio"]),
+                step_budget_fraction=float(eval_pkt["step_budget_fraction"]),
+                frozen_context_vec=tuple(float(x) for x in eval_pkt.get("frozen_context_vec", ())),
+                frozen_tail_action_vec=tuple(float(x) for x in eval_pkt.get("frozen_tail_action_vec", ())),
+                member_index=None,
+                controller_mode=str(eval_pkt.get("controller_mode", "expected_utility")),
+            )
+            pkt_belief = torch.tensor(eval_pkt["post_q_belief"], device=policy.device, dtype=torch.float32)
+            qu_post = policy.dcc_ensemble.evaluate_candidate_q(
+                belief=pkt_belief,
+                candidate_action=str(eval_pkt["u_first_act"]),
+                program=None,
+                initial_frame=None,
+                decision_ctx=pkt_ctx,
+                frozen_action_vec=tuple(float(x) for x in eval_pkt.get("u_act_vec", ())),
+                prior_action_logprob=float(eval_pkt.get("u_prior_lp", 0.0)),
+            )
+            qv_post = policy.dcc_ensemble.evaluate_candidate_q(
+                belief=pkt_belief,
+                candidate_action=str(eval_pkt["v_first_act"]),
+                program=None,
+                initial_frame=None,
+                decision_ctx=pkt_ctx,
+                frozen_action_vec=tuple(float(x) for x in eval_pkt.get("v_act_vec", ())),
+                prior_action_logprob=float(eval_pkt.get("v_prior_lp", 0.0)),
+            )
+            q_first_post = float(qu_post["q_mean"])
+            q_second_post = float(qv_post["q_mean"])
+            pol_sign = float(eval_pkt.get("polarity_sign", 1.0))
+            d_model_post = float(pol_sign * (q_first_post - q_second_post))
 
     if sample.partial_reason is not None or not isinstance(rec_dict, Mapping) or not isinstance(prog_dict, Mapping):
         return {
             "updated": param_delta > 0,
             "learning_outcome": "parameters_updated_partial_trajectory" if param_delta > 0 else "no_parameter_change",
             "loss": loss_val,
+            "final_replay_loss": final_replay_loss,
             "score_terms": len(transitions),
-            "scoring_forward_tokens": forward_tokens_to_charge,
+            "scoring_forward_tokens": 0,
             "gradient_l2_norm_before_clip": grad_norm,
+            "grad_norm_readout_step0": grad_readout_s0,
+            "grad_norm_upstream_step0": grad_upstream_s0,
+            "grad_norm_readout_final": grad_readout_final,
+            "grad_norm_upstream_final": grad_upstream_final,
             "nonzero_gradient": grad_norm > 0,
             "parameters_changed": param_delta > 0,
             "parameter_delta_l2": param_delta,
             "optimizer_step": meter.gradient_steps,
+            "dcc_side_update_steps_this_block": side_updates_done,
+            "dcc_side_replay_steps_this_block": replay_steps_done,
+            "dcc_side_update_seconds": side_update_seconds,
             "dcc_transitions_updated": len(transitions),
             "dcc_tail_examples_supervised": int(trans_stats.get("tail_examples_supervised", 0)),
         }
@@ -2348,15 +2698,27 @@ def _update_dcc_block(
         "updated": param_delta > 0,
         "learning_outcome": "parameters_updated" if param_delta > 0 else "no_parameter_change",
         "loss": loss_val,
+        "final_replay_loss": final_replay_loss,
         "score_terms": max(1, len(transitions)),
-        "scoring_forward_tokens": forward_tokens_to_charge,
+        "scoring_forward_tokens": 0,
         "gradient_l2_norm_before_clip": grad_norm,
+        "grad_norm_readout_step0": grad_readout_s0,
+        "grad_norm_upstream_step0": grad_upstream_s0,
+        "grad_norm_readout_final": grad_readout_final,
+        "grad_norm_upstream_final": grad_upstream_final,
         "nonzero_gradient": grad_norm > 0,
         "parameters_changed": param_delta > 0,
         "parameter_delta_l2": param_delta,
         "optimizer_step": meter.gradient_steps,
+        "dcc_side_update_steps_this_block": side_updates_done,
+        "dcc_side_replay_steps_this_block": replay_steps_done,
+        "dcc_side_update_seconds": side_update_seconds,
         "dcc_d_real": record.d_real,
         "dcc_d_model": record.d_model,
+        "dcc_d_model_preupdate": record.d_model,
+        "dcc_d_model_postupdate": d_model_post,
+        "dcc_q_first_postupdate": q_first_post,
+        "dcc_q_second_postupdate": q_second_post,
         "dcc_action_diff_d": record.action_diff_d,
         "dcc_u_utility": record.u_score,
         "dcc_v_utility": record.v_score,
@@ -3054,15 +3416,19 @@ def run_training(
     dcc_library = None
     fixed_d_shuffled_proposer = None
     fixed_d_shuffled_library = None
+    dcc_cluster_replay_buffer: list[dict[str, Any]] = []
     if is_dcc:
         from .native_dcc import ActionContrastProposer, ProgramLibrary
         policy.configure_dcc_trainable_mode(True)
+        policy.dcc_controller_mode = str(config.get("dcc_controller_mode", "expected_utility"))
         dcc_library = policy.get_dcc_library(benchmark_name)
+        prop_mode = str(config.get("dcc_proposer_mode", "witness_hard"))
         dcc_proposer = ActionContrastProposer(
             benchmark_name,
             max_probe_steps=int(config.get("dcc_max_probe_steps", 3)),
             proposal_budget=int(config.get("dcc_proposal_budget", 3)),
             shuffle_witness_labels=(method in ("dcc_label_shuffled", "dcc_fixed_d_shuffled")),
+            proposer_mode=prop_mode,
             seed=seed,
         )
         # Matched fixed-D shuffled proposer that grows at the exact same call frequency on the exact same record prefix
@@ -3072,6 +3438,7 @@ def run_training(
             max_probe_steps=int(config.get("dcc_max_probe_steps", 3)),
             proposal_budget=int(config.get("dcc_proposal_budget", 3)),
             shuffle_witness_labels=True,
+            proposer_mode=prop_mode,
             seed=seed + 999,
         )
     elif hasattr(policy, "configure_dcc_trainable_mode"):
@@ -3138,7 +3505,7 @@ def run_training(
         work_before = (meter.env_steps, meter.total_model_tokens)
         environment_seed = int(task.get("environment_seed", randomizer.randrange(1, 2**31 - 1)))
         supervisor = progress_supervisors.get(task["task_id"]) if progress_supervisors is not None else None
-        entry: dict[str, Any] = {"group": group, "task_id": task["task_id"], "method": method,
+        entry: dict[str, Any] = {"group": group, "group_index": group, "task_id": task["task_id"], "method": method,
                                  "environment_seed": environment_seed,
                                  "branch_anchor": "first_public_feasible_frontier"}
         sample = None
@@ -3152,8 +3519,14 @@ def run_training(
                     sample = collect_branch_pair(policy, env, task, config, meter, seed=environment_seed,
                                                  stratified=method != "unstratified_2branch",
                                                  progress_supervisor=supervisor,
-                                                 method=method)
+                                                 method=method,
+                                                 existing_records=(
+                                                     dcc_proposer.records if dcc_proposer is not None else ()
+                                                 ))
                     group_trajectories = [sample.first] + ([sample.second] if sample.second is not None else [])
+                    diag_meta = sample.first.metadata.get("dcc_branch_pair_diagnostics")
+                    if isinstance(diag_meta, Mapping):
+                        entry.update(diag_meta)
                     # Record first terminal success immediately when observed, even if second branch is partial (fixes F17)
                     if is_dcc and any(bool(t.success) for t in group_trajectories):
                         first_terminal_success_seen = True
@@ -3179,6 +3552,7 @@ def run_training(
                                 ),
                                 fixed_d_proposer=fixed_d_shuffled_proposer,
                                 fixed_d_library=fixed_d_shuffled_library,
+                                cluster_replay_buffer=dcc_cluster_replay_buffer,
                                 run_seed=seed,
                             ))
                             if not first_terminal_success_seen:
@@ -3499,6 +3873,7 @@ def run_training(
         }
         _write_json(output / "dcc_program_library.json", dcc_library.to_dict())
         _write_json(output / "dcc_fixed_d_shuffled_library.json", fixed_d_shuffled_library.to_dict())
+        _write_json(output / "dcc_measurement_records.json", [r.to_dict() for r in dcc_proposer.records])
         _write_json(
             output / "dcc_proposal_runs.json",
             {

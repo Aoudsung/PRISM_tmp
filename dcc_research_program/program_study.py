@@ -318,9 +318,20 @@ def _propose_programs(
         }
 
     pair_To_idx = {pair: idx for idx, pair in enumerate(pairs)}
+    remaining_set = set(remaining)
     candidate_scores: dict[int, float] = {}
+    pair_combinations_visited = 0
     candidates_constructed = 0
     candidates_checked = 0
+
+    def _stream_shared_pairs(obs_a: dict, obs_b: dict):
+        shared = sorted(set(obs_a.keys()) & set(obs_b.keys()))
+        if len(shared) < 2:
+            return
+        order = list(shared)
+        rng.shuffle(order)
+        for a_f, b_f in itertools.combinations(order, 2):
+            yield (a_f, b_f) if a_f < b_f else (b_f, a_f)
 
     if proposer in ("action_diff_growth", "label_shuffled_growth"):
         d_values = [rec["d"] for rec in records]
@@ -339,18 +350,13 @@ def _propose_programs(
                     if candidates_checked >= max_candidate_checks:
                         break
                     obs2 = r2["observed_bits"]
-                    # Delete / Concat can only form pairs from fields actually observed in the paid traces
-                    shared_observed_fields = sorted(set(obs1.keys()) & set(obs2.keys()))
-                    joint_pairs = [
-                        (i, j)
-                        for i, j in itertools.combinations(shared_observed_fields, 2)
-                        if pair_To_idx.get((i, j)) in remaining
-                    ]
-                    rng.shuffle(joint_pairs)
-                    for i, j in joint_pairs:
+                    for i, j in _stream_shared_pairs(obs1, obs2):
                         if candidates_checked >= max_candidate_checks:
                             break
-                        q_idx = pair_To_idx[(i, j)]
+                        pair_combinations_visited += 1
+                        q_idx = pair_To_idx.get((i, j))
+                        if q_idx is None or q_idx not in remaining_set:
+                            continue
                         candidates_constructed += 1
                         candidates_checked += 1
                         xor_1 = obs1[i] ^ obs1[j]
@@ -370,18 +376,14 @@ def _propose_programs(
                     break
                 r1, r2 = sorted_recs[idx_a], sorted_recs[idx_b]
                 obs1, obs2 = r1["observed_bits"], r2["observed_bits"]
-                shared_observed_fields = sorted(set(obs1.keys()) & set(obs2.keys()))
-                joint_pairs = [
-                    (i, j)
-                    for i, j in itertools.combinations(shared_observed_fields, 2)
-                    if pair_To_idx.get((i, j)) in remaining
-                ]
-                rng.shuffle(joint_pairs)
                 weight_surprise = 0.5 * (r1["surprise"] + r2["surprise"])
-                for i, j in joint_pairs:
+                for i, j in _stream_shared_pairs(obs1, obs2):
                     if candidates_checked >= max_candidate_checks:
                         break
-                    q_idx = pair_To_idx[(i, j)]
+                    pair_combinations_visited += 1
+                    q_idx = pair_To_idx.get((i, j))
+                    if q_idx is None or q_idx not in remaining_set:
+                        continue
                     candidates_constructed += 1
                     candidates_checked += 1
                     if (obs1[i], obs1[j]) != (obs2[i], obs2[j]):
@@ -396,12 +398,14 @@ def _propose_programs(
         if extra_n > 0:
             extra_picks = rng.choice(unscored, size=extra_n, replace=False)
             for q in extra_picks:
+                pair_combinations_visited += 1
                 candidates_constructed += 1
                 candidates_checked += 1
                 candidate_scores[int(q)] = -1e-4
 
     if not candidate_scores:
         return [], {
+            "pair_combinations_visited": pair_combinations_visited,
             "candidates_constructed": candidates_constructed,
             "candidates_checked": candidates_checked,
         }
@@ -412,9 +416,48 @@ def _propose_programs(
         reverse=True,
     )
     return [int(x) for x in ranked[:budget]], {
+        "pair_combinations_visited": pair_combinations_visited,
         "candidates_constructed": candidates_constructed,
         "candidates_checked": candidates_checked,
     }
+
+
+def _compute_paired_seed_differences(
+    raw_by_method: dict[str, dict[str, list[float]]],
+    checkpoints: list[int],
+    reference_method: str = "action_diff_growth",
+) -> list[dict]:
+    """Compute exact same-seed paired differences Delta_s = V_s(reference) - V_s(comparator) and 95% CIs."""
+    if reference_method not in raw_by_method:
+        return []
+    paired_rows: list[dict] = []
+    ref_map = raw_by_method[reference_method]
+    for comp_method, comp_map in raw_by_method.items():
+        if comp_method == reference_method:
+            continue
+        for n in checkpoints:
+            k = str(n)
+            if k not in ref_map or k not in comp_map:
+                continue
+            a = np.asarray(ref_map[k], dtype=np.float64)
+            b = np.asarray(comp_map[k], dtype=np.float64)
+            if a.shape != b.shape or a.size == 0:
+                continue
+            diffs = a - b
+            mean_d = float(diffs.mean())
+            se_d = float(diffs.std(ddof=1) / math.sqrt(diffs.size)) if diffs.size > 1 else 0.0
+            paired_rows.append({
+                "blocks": int(n),
+                "reference_method": reference_method,
+                "comparator_method": comp_method,
+                "num_paired_seeds": int(diffs.size),
+                "mean_paired_diff": mean_d,
+                "paired_se": se_d,
+                "paired_95_ci": [mean_d - 1.96 * se_d, mean_d + 1.96 * se_d],
+                "positive_diff_fraction": float((diffs > 0).mean()),
+                "nonzero_diff_fraction": float((np.abs(diffs) > 1e-12).mean()),
+            })
+    return paired_rows
 
 
 def check_exhaustive_proposer_equivalence():
@@ -690,7 +733,9 @@ def growth_study(
         "policy_support_policy": "unified_active_pool_for_both_acquisition_and_deployment",
         "response_ceiling_with_known_model": 0.8,
         "untrained_value": 0.5,
+        "structural_scope": "unknown_binary_field_pair_under_known_parity_table",
         "summary": summary,
+        "paired_seed_differences": _compute_paired_seed_differences(raw, checkpoints),
         "raw_seed_values": raw,
         "raw_hit_rates": hit_rates_raw,
     }
@@ -726,6 +771,8 @@ def unknown_k_delayed_goal_study(
     checkpoints = [n for n in (0, 2, 4, 8, 16, 32) if n <= max_blocks]
     checkpoints = sorted(set(checkpoints + [max_blocks]))
     summary = []
+    raw_uk: dict[str, dict[str, list[float]]] = {}
+    raw_uk_hits: dict[str, dict[str, list[float]]] = {}
 
     for method in methods:
         terminal_success_rates = {n: [] for n in checkpoints}
@@ -851,6 +898,8 @@ def unknown_k_delayed_goal_study(
                     "trace_fields": paid_fields,
                 })
 
+        raw_uk[method] = {str(k): terminal_success_rates[k] for k in checkpoints}
+        raw_uk_hits[method] = {str(k): hit_rates[k] for k in checkpoints}
         for n in checkpoints:
             arr = np.array(terminal_success_rates[n])
             hits = np.array(hit_rates[n])
@@ -873,10 +922,15 @@ def unknown_k_delayed_goal_study(
         "fields": num_fields,
         "seeds": seeds,
         "max_blocks": max_blocks,
+        "methods_evaluated": list(methods),
+        "structural_scope": "unknown_binary_field_pair_and_unknown_conditional_success_rate_K",
         "prior_scope": "unknown_conditional_success_rate_K_and_program_discovery",
         "ceiling_delayed_terminal_success": 0.85,
         "untrained_delayed_terminal_success": 0.50,
         "summary": summary,
+        "paired_seed_differences": _compute_paired_seed_differences(raw_uk, checkpoints),
+        "raw_seed_values": raw_uk,
+        "raw_hit_rates": raw_uk_hits,
     }
 
 
@@ -916,6 +970,8 @@ def sequential_multistep_delayed_goal_study(
     checkpoints = [n for n in (0, 2, 4, 8, 16, 32) if n <= max_blocks]
     checkpoints = sorted(set(checkpoints + [max_blocks]))
     summary = []
+    raw_seq: dict[str, dict[str, list[float]]] = {}
+    raw_seq_hits: dict[str, dict[str, list[float]]] = {}
 
     for method in methods:
         terminal_utilities = {n: [] for n in checkpoints}
@@ -1072,6 +1128,8 @@ def sequential_multistep_delayed_goal_study(
                     "trace_fields": paid_fields,
                 })
 
+        raw_seq[method] = {str(k): terminal_utilities[k] for k in checkpoints}
+        raw_seq_hits[method] = {str(k): hit_rates[k] for k in checkpoints}
         for n in checkpoints:
             arr = np.array(terminal_utilities[n])
             hits = np.array(hit_rates[n])
@@ -1094,10 +1152,15 @@ def sequential_multistep_delayed_goal_study(
         "fields": num_fields,
         "seeds": seeds,
         "max_blocks": max_blocks,
+        "methods_evaluated": list(methods),
+        "structural_scope": "unknown_binary_field_pair_and_bounded_two_stage_sequential_dependency",
         "prior_scope": "sequential_multistep_hidden_state_with_local_readout_and_tail_pi0_terminal_Y",
         "ceiling_sequential_terminal_success": 0.90 * 0.95 + 0.10 * 0.05,  # 0.86
         "untrained_sequential_terminal_success": 0.50,
         "summary": summary,
+        "paired_seed_differences": _compute_paired_seed_differences(raw_seq, checkpoints),
+        "raw_seed_values": raw_seq,
+        "raw_hit_rates": raw_seq_hits,
     }
 
 
@@ -1145,12 +1208,14 @@ def main():
         }
         growth_payload = {
             "scope": (
-                "Bounded-budget program discovery study with strictly paid field access, candidate check budgets, "
-                "unified active-pool policy support, unknown-K conditional evaluation, and multi-step sequential "
-                "hidden-state delayed-goal evaluation. Note: sequential_multistep_delayed_goal_study evaluates "
-                "explicit two-stage K_ready + H_tail composition rather than invoking native_dcc.py's production AST interpreter."
+                "Bounded-budget program discovery study over unknown binary relevant field pairs and bounded "
+                "two-stage sequential hidden-state dependencies, with strictly paid field access, streaming "
+                "candidate construction/check budgets, per-seed paired differences, and unified active-pool support. "
+                "Note: unknown_k_delayed_goal_study and sequential_multistep_delayed_goal_study evaluate "
+                "(action_diff_growth, label_shuffled_growth, prediction_error_growth, uniform_prior_growth), "
+                "using explicit two-stage K_ready + H_tail composition rather than native_dcc.py's production AST interpreter."
             ),
-            "date": "2026-11-10",
+            "date": "2026-11-11",
             "configured_seeds": int(args.seeds),
             "checks": growth_checks,
             "program_growth_runs": [],

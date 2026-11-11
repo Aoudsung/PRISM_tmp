@@ -119,18 +119,20 @@ H_{\phi,m}^{\pi_0}(Y,C_{\mathrm{tail}}\mid h,g,\beta)
 \Pr_{\phi,m}\!\bigl(Y,C_{\mathrm{tail}}\mid h,g,\beta,\operatorname{do}(\pi_0)\bigr),
 \]
 
-通过联合预测 \(P_m^{\pi_0}(Y=1\mid h,g,\beta)\) 与成功条件下的剩余耗时分布 \(P_m^{\pi_0}(C_{\mathrm{tail}}\mid Y=1,h,g,\beta)\) 计算截断期望效用。候选 \(\rho\in\mathcal E(h)\) 的价值沿真实 AST 展开（`Case` 节点按模型预测的对应公开字段取值概率加权展开 true/false 双子树；终止状态严格吸收，仅以归一化 `live` 概率推进存活质量），并在叶端调用 \(H_{\phi,m}^{\pi_0}\)：
+通过联合预测 \(P_m^{\pi_0}(Y=1\mid h,g,\beta)\) 与成功条件下的剩余耗时分布 \(P_m^{\pi_0}(C_{\mathrm{tail}}\mid Y=1,h,g,\beta)\) 计算截断期望效用，其中零残差初值 \(\phi_0\) 的尾成功与条件耗时对数几率直接由单步基线转移规律在剩余有限步长 \(K\) 上的几何展开解析导出，从第一性原理保证 \(Q_{\phi_0}^{(1)}=Q_{\phi_0}^{(2)}=Q_{\phi_0}^{(3)}\) 的贝尔曼中性与有限步边界单调递推。候选 \(\rho\in\mathcal E(h)\) 的价值通过共享符号化 `ExecutionFrame` 解释器沿真实 AST 展开（完整消费 `Call`、`Read`、带符号化返回句柄 `$ret_k` 的跨步参数绑定与 `Case` 双子树；终止状态严格吸收，仅以归一化 `live` 概率推进存活质量，不附加无变化收缩因子），并在叶端对潜在状态条件下的联合类型化字段分布做精确离散期望（消除将边缘概率均值直接送入非线性尾头的詹森偏差）：
 
 \[
 Q_m^\rho(g,h,\beta)
 =
 \mathbb E_{K_{\phi,m},\,\rho\rightarrow\pi_0}
-\bigl[U_B(Y,C_{\mathrm{spent}}+C_{\mathrm{future}})\bigr].
+\bigl[U_B(Y,C_{\mathrm{spent}}+C_{\mathrm{future}})\bigr]
+=
+\mathbb E_{Z\sim P_{m}}\!\left[H_{\phi,m}^{\pi_0}\bigl(b_m(\cdot\mid Z),\,\operatorname{one\_hot}(Z),\,\beta'\bigr)\right].
 \]
 
-每个集成成员 \(m\) 维护各自独立的私有状态、字段分布与资源轨迹（共享冻结语义编码器，成员间状态不做隐式平均），仅在末端汇总候选均值 \(\widehat Q^\rho=\frac1M\sum_{m=1}^M Q_m^\rho\) 并选取 \(\rho^*=\arg\max_\rho\widehat Q^\rho\)。整个 episode 在新环境重置起点固定不可变模型视图 `ModelView`（\(\phi_0\) 或 \(\phi_T\)，其中 \(\phi_0\) 独立持久化保存）并清空信念、执行帧与历史事件（评测态明确写入 `member_index=None`），使过滤更新、短程序前瞻与尾估值全程使用同一参数身份。
+每个集成成员 \(m\) 维护各自独立的私有状态、字段分布与资源轨迹（共享冻结语义编码器，成员间状态与资源不做隐式平均），仅在末端汇总候选均值 \(\widehat Q^\rho=\frac1M\sum_{m=1}^M Q_m^\rho\) 并选取 \(\rho^*=\arg\max_\rho\widehat Q^\rho\)（不引入悲观标准差扣减、固定安全裕度或粗粒度字段自环剔除）。训练选 \(q\)、分叉后真实模型差 \(d_{\mathrm{model}}\)（准确评估 \(u\rightarrow\pi_0\) 与 \(v\rightarrow\pi_0\) 的更新前／后差值）、在线过滤 `observe`、尾头监督与部署 `act()` 共享同一个只读 `DecisionContext` 及固定尾标识嵌入通道。整个 episode 在新环境重置起点固定不可变模型视图 `ModelView`（\(\phi_0\) 或 \(\phi_T\)，其中 \(\phi_0\) 独立持久化保存并在重加载时同步刷新视图缓存）并清空信念、执行帧与历史事件（评测态明确写入 `member_index=None`）。
 
-冻结底模为训练、过滤与规划（含冻结尾策略 \(\pi_0\) 执行区间）提供统一共享的语言嵌入语义表示 `extract_frozen_semantic_context(g, h)` 与动作嵌入 `extract_frozen_action_embeddings(a)`（区分冻结语言特征支撑与完整自回归响应概率先验，不在规划侧单独附加未经训练监督的成功偏置）。响应模型保留条件程序实际读取的四槽规范化公开字段分布，并在 `Case` 前瞻中按贝叶斯法则计算条件后验信念 \(b_m(s'\mid z)\propto b_m(s')P_m(z\mid s',c)\)；发射与终局读出头零初始化以维持对称初始可观测分布 \(p_0\)，同时潜在转移与初始信念采用非对称初值以打破同一成员内部的潜在状态可交换性。测量簇采用带 `parent_transition_id` 的分叉树表示：公共前缀前向一次并在分叉点保留可微 `fork_belief`，事实后缀 \(u\) 与反事实后缀 \(v\) 各自从 `fork_belief` 独立展开，且每个 `TailExample` 通过真实 `prefix_node_id` 与统一的 `encode_tail_state_context` 绑定其所属分支的前缀信念：
+冻结底模为训练、过滤与规划（含冻结尾策略 \(\pi_0\) 执行区间）提供统一共享的语言嵌入分段池化语义表示 `extract_frozen_semantic_context(g, h)`、规范化动作嵌入 `extract_frozen_action_embeddings(a)`（对运行期不透明返回 ID 与前瞻符号句柄采用同一规范化符号规约）以及共享预填充 KV 缓存下的冻结动作条件对数似然先验 `score_frozen_action_logprobs(g, h, a)`（训练单步与分叉头似然和规划前瞻共同以同一对数几率残差形式 \(\ell_0 + r_{\phi,m}\) 接入耦合三元步终局分布 `(live, native_terminal_success, terminal_failure)` 与尾成功分布，仅对增量候选后缀 token 计费）。响应模型采用单一内部四槽四值枚举表示公开字段，在 `Case` 真分支计算点事件后验 \(b_m(s'\mid Z_j=v_0)\)，在假分支保留三值补集条件分布 \(P_m(Z_j=v\mid s', Z_j\neq v_0)\)；发射与终局读出头零初始化以维持对称初始可观测分布 \(p_0\)，同时潜在转移与初始信念采用非对称初值以打破同一成员内部的潜在状态可交换性。分叉续行对 \((u,v)\) 在观测本块结果前按集成决策分歧度 \(R_h(u,v)=\frac1M\sum_m\max\{Q_m(u),Q_m(v)\}-\max\{\bar Q(u),\bar Q(v)\}\) 与预计成对执行成本比选取（分歧低于噪声门限时锚定共同冻结先验提案并优先复用跨锚点规范化 `comparison_key` 或角色多样化抽样）。测量簇采用带 `parent_transition_id` 的分叉树表示并按簇缓存已付费轨迹与冻结特征，固定每簇每成员确定性 bootstrap 权重与分支级等权尾损失执行同预算多步簇重放更新（不将重复优化计入独立终局样本）：
 
 \[
 \mathcal L_m(\phi)
@@ -327,7 +329,7 @@ O\!\left(r\ell\gamma^{-2}\log\frac r\delta\right).
 
 不从隐藏 simulator 状态注入目标位置，不中途查询隐藏 grader，不把不同商品、不同工件或不同反事实分支的属性拼接成联合成功。程序运行产生的错误、状态变化、终止与成本都进入共同响应模型。
 
-最有价值的控制变量包括无关字段数 N、互补阶数 k、最短区分长度 \(\ell\)、机制数 r 与完整任务长度 H。当前有限实验已经给出 N 和候选规模下的第一组学习曲线。程序发现实验重点改变生成预算；原生实验负责检验这些结构是否解释真实任务中的学习效率。
+最有价值的控制变量包括无关字段数 N、未知二元相关字段对及有限两阶段顺序依赖、最短区分长度 \(\ell\)、机制数 r 与完整任务长度 H。当前有限实验在同种子配对差与逐候选流式构造记账下给出了 N 和候选检查预算下的学习曲线。程序发现实验重点改变生成预算；原生实验负责检验这些结构是否解释真实任务中的学习效率。
 
 ## 方案的研究价值与完成边界
 

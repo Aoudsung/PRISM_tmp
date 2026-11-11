@@ -26,6 +26,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import hashlib
+import itertools
 import json
 import math
 import random
@@ -38,10 +39,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-DCC_CONTRACT_VERSION = "prism-dcc-v2-unified-r3"
+DCC_CONTRACT_VERSION = "prism-dcc-v2-unified-r4"
 TAIL_POLICY_VERSION = "frozen-prior-tail-v2"
-GRAMMAR_VERSION = "typed-ast-v3"
-RESPONSE_SCHEMA_VERSION = "typed-field-slots-v3"
+GRAMMAR_VERSION = "typed-ast-v4"
+RESPONSE_SCHEMA_VERSION = "typed-field-slots-v4"
 DEFAULT_ENSEMBLE_SIZE = 8
 DEFAULT_MAX_PROBE_STEPS = 3
 DEFAULT_CONTINUATION_STEPS = 50
@@ -58,8 +59,32 @@ NUM_SLOT_VALUES = 4
 TAIL_COST_BINS = 8
 TERMINATION_CATEGORIES = ("live", "native_terminal", "task_budget_terminal")
 
-# Canonical midpoints of 8 uniform wall-clock cost ratio bins in [0, 1]
-TAIL_COST_BIN_CENTERS = tuple((i + 0.5) / TAIL_COST_BINS for i in range(TAIL_COST_BINS))
+# Single canonical typed-slot vocabulary shared across raw adapter boundary, AST Case predicates, and K_phi
+SLOT_VALUE_NAMES: tuple[tuple[str, str, str, str], ...] = (
+    ("unknown", "no_or_low", "yes_or_high", "error"),
+    ("unknown", "none", "bound_single", "bound_multiple"),
+    ("unknown", "closed_or_pending", "open_empty_or_subpage", "open_with_items_or_ready"),
+    ("unknown", "raw_or_unchanged", "inspected_or_selected", "treated_or_verified_write"),
+)
+
+# Multi-scale wall-clock cost ratio bins in [0, 1] resolving both fast short-horizon tails (0.005..0.10)
+# and long-horizon tails (0.10..1.0) while preserving exact Bellman neutrality at phi_0.
+TAIL_COST_BIN_EDGES: tuple[float, ...] = (0.0, 0.01, 0.025, 0.05, 0.10, 0.20, 0.40, 0.70, 1.0)
+TAIL_COST_BIN_CENTERS: tuple[float, ...] = tuple(
+    0.5 * (TAIL_COST_BIN_EDGES[i] + TAIL_COST_BIN_EDGES[i + 1]) for i in range(TAIL_COST_BINS)
+)
+
+_JOINT_SLOT_GRID_NP = np.asarray(
+    list(itertools.product(range(NUM_SLOT_VALUES), repeat=NUM_FIELD_SLOTS)), dtype=np.int64
+)  # (256, 4)
+
+
+def _tail_cost_bin_index(cost_ratio: float) -> int:
+    c = float(min(0.999999, max(0.0, cost_ratio)))
+    for idx in range(TAIL_COST_BINS - 1):
+        if c < TAIL_COST_BIN_EDGES[idx + 1]:
+            return idx
+    return TAIL_COST_BINS - 1
 
 
 def _canonical_json(value: Any) -> str:
@@ -585,6 +610,56 @@ class ExecutionFrame:
             self.completed = True
             self.last_status = "Complete"
 
+    def record_symbolic_call_return(
+        self,
+        tool_or_action: str,
+        step_index: int,
+        predicted_slots: tuple[int, int, int, int] | None = None,
+    ) -> None:
+        """Bind typed symbolic return handles during model lookahead and consume ready Read/Stop nodes.
+
+        Preserves exact variable origin, entity role identity, and equality relations (`<sym:ret_k:id>`)
+        without guessing unseen concrete identifiers, matching `normalize_action_for_semantic_encoding`.
+        """
+        var_name = self.pending_return_var or f"ret_{max(0, self.program_counter - 1)}"
+        sym_id = f"<sym:{var_name}:id>"
+        sym_path = f"<sym:{var_name}:path>"
+        sym_fields: dict[str, str] = dict(self.observed_readouts)
+        if predicted_slots is not None:
+            sym_fields = PublicBenchmarkBinder.slots_to_canonical_fields(sym_fields, predicted_slots)
+            self.observed_readouts.update(sym_fields)
+        extracted: dict[str, str] = dict(sym_fields)
+        extracted["bound_id"] = sym_id
+        extracted["bound_path"] = sym_path
+        extracted.setdefault("bound_identifiers", sym_fields.get("bound_identifiers", "bound_single"))
+        self.bound_variables.setdefault("bound_id", sym_id)
+        self.bound_variables.setdefault("bound_path", sym_path)
+        self.local_env[var_name] = extracted
+        self.pending_return_var = ""
+
+        while self.node_stack:
+            top = self.node_stack[0]
+            if top.op == "Seq":
+                self.node_stack.pop(0)
+                self.node_stack = list(top.children) + self.node_stack
+                continue
+            if top.op == "Read":
+                self.node_stack.pop(0)
+                src_env = self.local_env.get(top.variable, {}) if top.variable else {}
+                val = src_env.get(top.public_field_path, sym_fields.get(top.public_field_path))
+                if val is not None:
+                    self.observed_readouts[top.public_field_path] = val
+                continue
+            if top.op == "Stop":
+                self.node_stack.pop(0)
+                self.completed = True
+                self.last_status = "Complete"
+                break
+            break
+        if not self.node_stack:
+            self.completed = True
+            self.last_status = "Complete"
+
     def remaining_call_nodes(self) -> list[ASTNode]:
         if self.completed or self.binding_failed:
             return []
@@ -692,6 +767,7 @@ class PublicTransition:
     resource_after: dict[str, float] = field(default_factory=dict)
     frozen_context_vec: tuple[float, ...] = ()
     frozen_action_vec: tuple[float, ...] = ()
+    prior_action_logprob: float = 0.0
     controller_id: str = "dcc"
 
     def to_dict(self) -> dict[str, Any]:
@@ -715,6 +791,8 @@ class TailExample:
     pre_public_fields: dict[str, str]
     resource_before: dict[str, float]
     frozen_context_vec: tuple[float, ...] = ()
+    frozen_tail_action_vec: tuple[float, ...] = ()
+    step_budget_fraction: float = 0.05
     observed_y: bool | None = None
     tail_seconds_cost_ratio: float | None = None
     total_seconds_cost_ratio: float | None = None
@@ -724,6 +802,26 @@ class TailExample:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class DecisionContext:
+    """Single read-only decision state shared identically across q-selection, post-q d_model, observe, and deployment."""
+
+    benchmark: str
+    goal_text: str
+    public_fields: dict[str, str]
+    typed_slots: tuple[int, int, int, int]
+    role_bindings: dict[str, str]
+    action_schema: Mapping[str, Any]
+    remaining_budget_ratio: float
+    spent_seconds_ratio: float
+    remaining_steps_ratio: float
+    step_budget_fraction: float
+    frozen_context_vec: tuple[float, ...]
+    frozen_tail_action_vec: tuple[float, ...]
+    member_index: int | None = None
+    controller_mode: str = "expected_utility"
 
 
 @dataclass(frozen=True)
@@ -1341,46 +1439,52 @@ class PublicBenchmarkBinder:
 
     @classmethod
     def encode_typed_field_slots(cls, public_fields: Mapping[str, str]) -> tuple[int, int, int, int]:
-        """Encode concrete program-read public fields into 4 typed slot indices in {0, 1, 2, 3} (fixes F09).
+        """Idempotently map raw environment fields OR canonical `SLOT_VALUE_NAMES` into `{0, 1, 2, 3}^4`.
 
         Slot 0 (visibility / match):
-          0=unknown, 1=no/low, 2=yes/high, 3=error
+          0=unknown, 1=no_or_low, 2=yes_or_high, 3=error
         Slot 1 (entity / inventory / identifier binding):
-          0=unknown, 1=none/count_0, 2=bound_single, 3=bound_multiple
+          0=unknown, 1=none, 2=bound_single, 3=bound_multiple
         Slot 2 (container / page / prerequisite state):
-          0=unknown, 1=closed/search_home/pending, 2=open_empty/search_results/item_subpage, 3=open_with_items/item_detail/ready
+          0=unknown, 1=closed_or_pending, 2=open_empty_or_subpage, 3=open_with_items_or_ready
         Slot 3 (treatment / attribute / workspace artifact state):
-          0=unknown, 1=raw/none/unchanged, 2=inspected/selected, 3=clean_hot_cool_examined/verified_write
+          0=unknown, 1=raw_or_unchanged, 2=inspected_or_selected, 3=treated_or_verified_write
         """
         # Slot 0
         vis = public_fields.get("target_object_visible", public_fields.get("price_rating_match", "unknown"))
-        if public_fields.get("prerequisite_status") == "error":
+        if public_fields.get("prerequisite_status") == "error" or vis == "error":
             s0 = 3
-        elif vis in ("yes", "high"):
+        elif vis in ("yes", "high", "yes_or_high"):
             s0 = 2
-        elif vis in ("no", "low"):
+        elif vis in ("no", "low", "no_or_low"):
             s0 = 1
         else:
             s0 = 0
 
         # Slot 1
-        inv = public_fields.get("inventory_object", public_fields.get("current_asin", public_fields.get("bound_identifiers", "unknown")))
+        inv = public_fields.get(
+            "inventory_object",
+            public_fields.get("current_asin", public_fields.get("bound_identifiers", "unknown")),
+        )
         if inv == "unknown":
             s1 = 0
         elif inv in ("none", "count_0"):
             s1 = 1
-        elif inv in ("count_2", "count_3", "count_4") or "," in inv:
+        elif inv in ("bound_multiple", "count_2", "count_3", "count_4") or "," in inv:
             s1 = 3
         else:
             s1 = 2
 
         # Slot 2
-        st = public_fields.get("open_receptacle_state", public_fields.get("page_type", public_fields.get("prerequisite_status", "unknown")))
+        st = public_fields.get(
+            "open_receptacle_state",
+            public_fields.get("page_type", public_fields.get("prerequisite_status", "unknown")),
+        )
         if st == "unknown":
             s2 = 0
-        elif st in ("closed", "search_home", "pending", "error"):
+        elif st in ("closed", "search_home", "pending", "error", "closed_or_pending"):
             s2 = 1
-        elif st in ("open_empty", "search_results", "item_subpage"):
+        elif st in ("open_empty", "search_results", "item_subpage", "open_empty_or_subpage"):
             s2 = 2
         else:
             s2 = 3
@@ -1393,9 +1497,12 @@ class PublicBenchmarkBinder:
         insp = public_fields.get("inspected_attributes", "none")
         if tr == "unknown":
             s3 = 0
-        elif tr in ("clean", "hot", "cool", "examined", "verified_write"):
+        elif tr in ("clean", "hot", "cool", "examined", "verified_write", "treated_or_verified_write"):
             s3 = 3
-        elif tr not in ("raw", "none", "unchanged") or insp not in ("none", "unknown"):
+        elif tr in ("inspected", "selected", "inspected_or_selected") or (
+            tr not in ("raw", "none", "unchanged", "raw_or_unchanged")
+            or insp not in ("none", "unknown", "raw_or_unchanged")
+        ):
             s3 = 2
         else:
             s3 = 1
@@ -1403,28 +1510,53 @@ class PublicBenchmarkBinder:
         return (int(s0), int(s1), int(s2), int(s3))
 
     @classmethod
+    def slots_to_canonical_fields(
+        cls,
+        base_fields: Mapping[str, str],
+        slots: tuple[int, int, int, int],
+    ) -> dict[str, str]:
+        """Project a typed 4-slot assignment `(s0, s1, s2, s3)` onto canonical field keys with strict round-trip identity."""
+        out = dict(base_fields)
+        s0, s1, s2, s3 = (int(slots[0]) % 4, int(slots[1]) % 4, int(slots[2]) % 4, int(slots[3]) % 4)
+        k0 = "price_rating_match" if "price_rating_match" in out else "target_object_visible"
+        k1 = (
+            "current_asin" if "current_asin" in out
+            else "bound_identifiers" if "bound_identifiers" in out
+            else "inventory_object"
+        )
+        k2 = (
+            "page_type" if "page_type" in out
+            else "prerequisite_status" if ("prerequisite_status" in out and "open_receptacle_state" not in out)
+            else "open_receptacle_state"
+        )
+        k3 = (
+            "workspace_artifact_state" if "workspace_artifact_state" in out
+            else "selected_options" if "selected_options" in out
+            else "object_treatment_state"
+        )
+        out[k0] = SLOT_VALUE_NAMES[0][s0]
+        out[k1] = SLOT_VALUE_NAMES[1][s1]
+        out[k2] = SLOT_VALUE_NAMES[2][s2]
+        out[k3] = SLOT_VALUE_NAMES[3][s3]
+        if s0 == 3:
+            out["prerequisite_status"] = "error"
+        elif out.get("prerequisite_status") == "error" and k2 != "prerequisite_status":
+            out["prerequisite_status"] = SLOT_VALUE_NAMES[2][s2]
+        if s3 != 2 and "inspected_attributes" in out:
+            out["inspected_attributes"] = "none"
+        return out
+
+    @classmethod
     def canonical_slot_predicate_value(cls, condition_field: str, raw_value: str) -> str:
         """Normalize a field value into the exact categorical predicate event supported by both AST execution and K_phi."""
         if raw_value == "unknown":
             return "unknown"
         slot_idx, val_idx = cls.condition_slot_and_value(condition_field, raw_value)
-        slot_names = (
-            ("unknown", "no_or_low", "yes_or_high", "error"),
-            ("unknown", "none", "bound_single", "bound_multiple"),
-            ("unknown", "closed_or_pending", "open_empty_or_subpage", "open_with_items_or_ready"),
-            ("unknown", "raw_or_unchanged", "inspected_or_selected", "treated_or_verified_write"),
-        )
-        return slot_names[slot_idx][val_idx]
+        return SLOT_VALUE_NAMES[slot_idx][val_idx]
 
     @classmethod
     def condition_slot_and_value(cls, condition_field: str, condition_equals: str) -> tuple[int, int]:
         """Map a Case(condition_field, condition_equals) predicate to its corresponding (slot_idx, value_idx)."""
-        canonical_map = {
-            (0, "unknown"): 0, (0, "no_or_low"): 1, (0, "yes_or_high"): 2, (0, "error"): 3,
-            (1, "unknown"): 0, (1, "none"): 1, (1, "bound_single"): 2, (1, "bound_multiple"): 3,
-            (2, "unknown"): 0, (2, "closed_or_pending"): 1, (2, "open_empty_or_subpage"): 2, (2, "open_with_items_or_ready"): 3,
-            (3, "unknown"): 0, (3, "raw_or_unchanged"): 1, (3, "inspected_or_selected"): 2, (3, "treated_or_verified_write"): 3,
-        }
         if condition_field in ("target_object_visible", "price_rating_match"):
             s_idx = 0
         elif condition_field in ("inventory_object", "current_asin", "bound_identifiers"):
@@ -1433,11 +1565,40 @@ class PublicBenchmarkBinder:
             s_idx = 2
         else:
             s_idx = 3
-        if (s_idx, condition_equals) in canonical_map:
-            return s_idx, canonical_map[(s_idx, condition_equals)]
+        for v_i, canon_name in enumerate(SLOT_VALUE_NAMES[s_idx]):
+            if condition_equals == canon_name:
+                return s_idx, v_i
         dummy = {condition_field: condition_equals}
         slots = cls.encode_typed_field_slots(dummy)
         return s_idx, slots[s_idx]
+
+    @classmethod
+    def normalize_action_for_semantic_encoding(
+        cls,
+        action_text: str,
+        role_bindings: Mapping[str, str] | None = None,
+    ) -> str:
+        """Canonicalize opaque session/return identifiers so training NLL and symbolic AST lookahead share identical action features."""
+        act = str(action_text or "").strip()
+        if not act or act == TAIL_POLICY_VERSION:
+            return act
+        # Normalize symbolic return handles `<sym:ret_k:id>` / `<sym:ret_k:path>` to role-canonical tokens
+        act = re.sub(r"<sym:[^:>]+:id>", "<sym:bound_id>", act)
+        act = re.sub(r"<sym:[^:>]+:path>", "<sym:bound_path>", act)
+        if role_bindings:
+            # Map concrete bound ASINs to their positional role (`<sym:candidate_asin_k>`) before generic ASIN scrub
+            for rk in sorted(role_bindings.keys()):
+                rv = str(role_bindings.get(rk, "")).strip()
+                if not rv or rv in ("unknown", "none"):
+                    continue
+                if rk.startswith("candidate_asin_") and len(rv) >= 8:
+                    act = re.sub(re.escape(rv), f"<sym:{rk}>", act, flags=re.IGNORECASE)
+                elif rk == "bound_id" and len(rv) >= 4 and not rv.startswith("<sym:"):
+                    act = act.replace(f'"{rv}"', '"<sym:bound_id>"')
+                elif rk == "bound_path" and len(rv) >= 4 and not rv.startswith("<sym:"):
+                    act = act.replace(f'"{rv}"', '"<sym:bound_path>"')
+        act = re.sub(r"\bb0[0-9a-z]{8}\b", "<sym:candidate_asin_1>", act, flags=re.IGNORECASE)
+        return act
 
     @staticmethod
     def native_terminal_utility(
@@ -1652,8 +1813,10 @@ class PublicBenchmarkBinder:
         role_bindings: Mapping[str, str] | None = None,
         local_env: Mapping[str, Mapping[str, str]] | None = None,
         typed_arguments: Mapping[str, str] | None = None,
+        *,
+        allow_symbolic: bool = False,
     ) -> str | None:
-        """Bind a symbolic step template or AST Call node (with `typed_arguments`) to a concrete admissible action."""
+        """Bind a symbolic step template or AST Call node (with `typed_arguments`) to a concrete or symbolic action."""
         name = benchmark.split(":", 1)[0]
         bindings = dict(role_bindings or {})
         if not bindings:
@@ -1676,6 +1839,10 @@ class PublicBenchmarkBinder:
                         resolved_val = local_env[var_part][fld_part]
                 if resolved_val is None and clean_ref in bindings:
                     resolved_val = bindings[clean_ref]
+                if resolved_val is None and allow_symbolic and "." in clean_ref:
+                    var_part, fld_part = clean_ref.split(".", 1)
+                    sym_kind = "path" if ("path" in fld_part or "file" in fld_part) else "id"
+                    resolved_val = f"<sym:{var_part}:{sym_kind}>"
                 if resolved_val is not None and resolved_val != "unknown":
                     bindings[param_slot] = resolved_val
                     bindings[f"bound_{param_slot}"] = resolved_val
@@ -1688,14 +1855,18 @@ class PublicBenchmarkBinder:
         for slot in re.findall(r"\{([a-zA-Z0-9_.]+)\}", template):
             if slot in bindings and bindings[slot]:
                 resolved = resolved.replace(f"{{{slot}}}", bindings[slot])
-            elif re.match(r"^[a-z]+_\d+$", slot):
+            elif re.match(r"^[a-z]+_\d+$", slot) and not slot.startswith("candidate_asin"):
                 literal_entity = slot.replace("_", " ")
                 resolved = resolved.replace(f"{{{slot}}}", literal_entity)
+            elif allow_symbolic:
+                resolved = resolved.replace(f"{{{slot}}}", f"<sym:{slot}>")
         if resolved in all_candidates:
             return resolved
         for cand in all_candidates:
             if cand.lower() == resolved.lower():
                 return cand
+        if allow_symbolic and "<sym:" in resolved and not name == "loca":
+            return resolved
 
         if name == "alfworld":
             verb_prefix = template.split("{", 1)[0].strip().lower()
@@ -1712,10 +1883,12 @@ class PublicBenchmarkBinder:
                     if slot_type and slot_type not in ("receptacle", "object") and slot_type not in cand_l:
                         continue
                 matching.append(cand)
-            return matching[0] if matching else None
+            if matching:
+                return matching[0]
+            return resolved if (allow_symbolic and "{" not in resolved) else None
 
         if name == "webshop":
-            if template.startswith("search[") and action_schema.get("search_available"):
+            if template.startswith("search[") and (action_schema.get("search_available") or allow_symbolic):
                 query = bindings.get("goal_query", "")
                 if not query:
                     words = [w for w in re.findall(r"[a-z0-9]+", task_instruction.lower()) if len(w) > 2][:6]
@@ -1733,11 +1906,16 @@ class PublicBenchmarkBinder:
                     idx_pos = max(0, int(slot_name.rsplit("_", 1)[-1]) - 1)
                     if idx_pos < len(asin_clicks):
                         return asin_clicks[idx_pos]
-                return asin_clicks[0] if asin_clicks else None
+                if asin_clicks:
+                    return asin_clicks[0]
+                if allow_symbolic:
+                    norm_slot = slot_name if slot_name != "candidate_asin" else "candidate_asin_1"
+                    return f"click[<sym:{norm_slot}>]"
+                return None
             for cand in all_candidates:
                 if cand.lower() == template.lower():
                     return cand
-            return None
+            return resolved if (allow_symbolic and "{" not in resolved) else None
 
         # LOCA / structured tool environment (fixes F07 + typed_arguments resolution)
         loca_tools = cls._extract_loca_tools(action_schema)
@@ -2000,6 +2178,8 @@ class ControlledResponseEnsemble(nn.Module):
         self._initial_state_tensors = {
             k: v.detach().clone() for k, v in self.state_dict().items()
         }
+        if hasattr(self, "_cached_initial_view"):
+            delattr(self, "_cached_initial_view")
 
     def initial_state_dict_snapshot(self) -> dict[str, torch.Tensor]:
         return {k: v.detach().clone() for k, v in self._initial_state_tensors.items()}
@@ -2045,6 +2225,66 @@ class ControlledResponseEnsemble(nn.Module):
         dev = device or self.transition_logits.device
         return F.softmax(self.initial_belief_logits.to(device=dev, dtype=torch.float32), dim=-1)
 
+    @staticmethod
+    def base_tail_pi0_logits(
+        remaining_steps_ratio: float,
+        step_budget_fraction: float,
+        device: torch.device,
+        dtype: torch.dtype = torch.float32,
+        prior_offset: float = 0.0,
+    ) -> tuple[float, torch.Tensor]:
+        """Exact finite-horizon Bellman-neutral base logits for H_{phi_0}^{pi_0}(Y, C_tail | Y=1, K).
+
+        Derived analytically by unrolling the K-step geometric Markov chain induced by the single-step
+        phi_0 base law (base_term=[log(0.96), log(0.0048) + prior_offset, log(0.0352)], base_cost_logit=-5.0).
+        Barycentric projection onto `TAIL_COST_BIN_CENTERS` guarantees Q_{phi_0}^{(1)} == Q_{phi_0}^{(2)} == Q_{phi_0}^{(3)}
+        for all K >= 3 and all frozen Qwen prior log-probs `prior_offset`.
+        """
+        sf = max(1e-4, float(step_budget_fraction))
+        k_steps = max(0, int(round(max(0.0, float(remaining_steps_ratio)) / sf)))
+        if k_steps <= 0:
+            return -20.0, torch.zeros(TAIL_COST_BINS, device=device, dtype=dtype)
+
+        clamped_off = float(max(-6.0, min(6.0, prior_offset)))
+        w_live = 0.96
+        w_succ = 0.0048 * math.exp(clamped_off)
+        w_fail = 0.0352
+        z_den = w_live + w_succ + w_fail
+        p_live_0 = w_live / z_den
+        p_succ_0 = w_succ / z_den
+        c_0 = 1.0 / (1.0 + math.exp(5.0))
+
+        centers = TAIL_COST_BIN_CENTERS
+        bin_mass = [0.0] * TAIL_COST_BINS
+        total_y = 0.0
+        surv = 1.0
+        for j in range(1, k_steps + 1):
+            q_j = surv * p_succ_0
+            total_y += q_j
+            tau = min(centers[-1], max(centers[0], j * c_0))
+            # Two-point barycentric projection onto adjacent bin centers
+            placed = False
+            for r in range(TAIL_COST_BINS - 1):
+                if tau <= centers[r + 1] + 1e-12:
+                    span = max(1e-12, centers[r + 1] - centers[r])
+                    lam = min(1.0, max(0.0, (tau - centers[r]) / span))
+                    bin_mass[r] += q_j * (1.0 - lam)
+                    bin_mass[r + 1] += q_j * lam
+                    placed = True
+                    break
+            if not placed:
+                bin_mass[-1] += q_j
+            surv *= p_live_0
+
+        p_y_clamped = min(1.0 - 1e-6, max(1e-6, total_y))
+        base_y_logit = math.log(p_y_clamped / (1.0 - p_y_clamped))
+        norm_bins = [max(1e-8, m / max(1e-12, total_y)) for m in bin_mass]
+        s_bins = sum(norm_bins)
+        base_bin_logits = torch.tensor(
+            [math.log(m / s_bins) for m in norm_bins], device=device, dtype=dtype
+        )
+        return float(base_y_logit), base_bin_logits
+
     def encode_tail_state_context(
         self,
         *,
@@ -2055,9 +2295,10 @@ class ControlledResponseEnsemble(nn.Module):
         remaining_steps_ratio: float = 1.0,
         frozen_context_vec: Sequence[float] = (),
         frozen_tail_action_vec: Sequence[float] = (),
+        typed_slots: tuple[int, int, int, int] | None = None,
         device: torch.device | None = None,
     ) -> torch.Tensor:
-        """Canonical tail-state encoder shared identically by TailExample training and Q leaf evaluation (fixes D)."""
+        """Canonical tail-state encoder shared identically by TailExample training and Q leaf evaluation."""
         dev = device or self.transition_logits.device
         c_vec = self.encode_context_vector(
             goal_text=goal_text,
@@ -2068,6 +2309,7 @@ class ControlledResponseEnsemble(nn.Module):
             remaining_steps_ratio=remaining_steps_ratio,
             frozen_context_vec=frozen_context_vec,
             frozen_action_vec=frozen_tail_action_vec,
+            typed_slots=typed_slots,
             device=dev,
         )
         return self.context_encoder(self._coerce_context(c_vec))
@@ -2101,26 +2343,40 @@ class ControlledResponseEnsemble(nn.Module):
         remaining_steps_ratio: float = 1.0,
         frozen_context_vec: Sequence[float] = (),
         frozen_action_vec: Sequence[float] = (),
+        role_bindings: Mapping[str, str] | None = None,
+        typed_slots: tuple[int, int, int, int] | None = None,
         prior_action_logprob: float = 0.0,
         prior_success_logit: float = 0.0,
         program: ExecutableProgram | None = None,
         device: torch.device | None = None,
     ) -> torch.Tensor:
-        """Encode c = (frozen_context, frozen_action, public_fields, resource_before) into a 64-dim vector.
+        """Encode c = (frozen_context, frozen_action, typed_slots, resource_before) into a 64-dim vector.
 
-        Fixes F01 and F10:
-          - First 32 dims: frozen backbone semantic representation of (goal, history).
-          - Next 16 dims: frozen backbone semantic embedding of `action_text`.
-          - Final 16 dims: pre-action ResourceState and typed public field slot indicators
-            shared identically by NLL training and Q planning (no fake candidate-origin constants).
+        Uses canonicalized action text (`normalize_action_for_semantic_encoding`) and unified integer
+        `typed_slots` so NLL training, online `observe` filtering, and multi-step AST lookahead share
+        bit-identical feature semantics.
         """
         vec = np.zeros(CONTEXT_DIM, dtype=np.float32)
+        norm_act_text = PublicBenchmarkBinder.normalize_action_for_semantic_encoding(action_text, role_bindings)
+        slot_0, slot_1, slot_2, slot_3 = (
+            typed_slots if typed_slots is not None else PublicBenchmarkBinder.encode_typed_field_slots(public_fields)
+        )
+        all_canon_status = {w for row in SLOT_VALUE_NAMES for w in row} | {
+            "yes", "no", "high", "low", "closed", "open_empty", "open_with_items",
+            "search_home", "search_results", "item_subpage", "item_detail", "pending",
+            "ready", "raw", "unchanged", "inspected", "selected", "clean", "hot", "cool",
+            "examined", "verified_write", "count_0", "count_1", "count_2", "count_3", "count_4",
+        }
+        entity_pairs = {
+            k: v for k, v in sorted(public_fields.items())
+            if str(v).lower() not in all_canon_status
+        }
 
-        # 0..31: Frozen history representation
+        # 0..31: Frozen history representation (invariant to raw vs canonical status spelling)
         hist_seq = (
             list(frozen_context_vec)[:FROZEN_HISTORY_DIM]
             if frozen_context_vec
-            else list(cls.deterministic_semantic_projection(f"{goal_text}\n{_canonical_json(dict(public_fields))}", FROZEN_HISTORY_DIM))
+            else list(cls.deterministic_semantic_projection(f"{goal_text}\n{_canonical_json(entity_pairs)}", FROZEN_HISTORY_DIM))
         )
         vec[: len(hist_seq)] = np.asarray(hist_seq, dtype=np.float32)
 
@@ -2128,7 +2384,7 @@ class ControlledResponseEnsemble(nn.Module):
         act_seq = (
             list(frozen_action_vec)[:FROZEN_ACTION_DIM]
             if frozen_action_vec
-            else list(cls.deterministic_semantic_projection(action_text, FROZEN_ACTION_DIM))
+            else list(cls.deterministic_semantic_projection(norm_act_text, FROZEN_ACTION_DIM))
         )
         vec[FROZEN_HISTORY_DIM : FROZEN_HISTORY_DIM + len(act_seq)] = np.asarray(act_seq, dtype=np.float32)
 
@@ -2137,9 +2393,11 @@ class ControlledResponseEnsemble(nn.Module):
         spent_sec = float(1.0 - rem_sec if spent_seconds_ratio is None else min(1.0, max(0.0, spent_seconds_ratio)))
         rem_steps = float(min(1.0, max(0.0, remaining_steps_ratio)))
         goal_tokens = set(re.findall(r"[a-z0-9]{3,}", goal_text.lower()))
-        act_tokens = set(re.findall(r"[a-z0-9]{2,}", action_text.lower()))
-        field_vals = " ".join(f"{k}:{v}" for k, v in sorted(public_fields.items())).lower()
-        field_tokens = set(re.findall(r"[a-z0-9_]{2,}", field_vals))
+        act_tokens = set(re.findall(r"[a-z0-9]{2,}", norm_act_text.lower()))
+        entity_vals = " ".join(f"{k}:{v}" for k, v in sorted(entity_pairs.items())).lower()
+        if role_bindings:
+            entity_vals = entity_vals + " " + " ".join(str(v).lower() for v in role_bindings.values())
+        field_tokens = set(re.findall(r"[a-z0-9_]{2,}", entity_vals))
 
         base_idx = FROZEN_HISTORY_DIM + FROZEN_ACTION_DIM  # 48
         vec[base_idx + 0] = rem_sec
@@ -2149,19 +2407,18 @@ class ControlledResponseEnsemble(nn.Module):
         vec[base_idx + 4] = len(goal_tokens & field_tokens) / max(1.0, float(len(goal_tokens)))
         vec[base_idx + 5] = len(act_tokens & field_tokens) / max(1.0, float(len(act_tokens)))
 
-        act_l = action_text.strip().lower()
+        act_l = norm_act_text.strip().lower()
         vec[base_idx + 6] = 1.0 if act_l.startswith(("look", "inventory", "examine", "search[")) else 0.0
         vec[base_idx + 7] = 1.0 if act_l.startswith(("go to", "open", "click[")) else 0.0
         vec[base_idx + 8] = 1.0 if act_l.startswith(("take", "move", "put", "clean", "heat", "cool", "use")) else 0.0
         vec[base_idx + 9] = 1.0 if ("buy now" in act_l or "claim_done" in act_l or "submit" in act_l) else 0.0
 
-        slot_0, slot_1, slot_2, slot_3 = PublicBenchmarkBinder.encode_typed_field_slots(public_fields)
         vec[base_idx + 10] = (slot_0 - 1.5) / 1.5
         vec[base_idx + 11] = (slot_1 - 1.5) / 1.5
         vec[base_idx + 12] = (slot_2 - 1.5) / 1.5
         vec[base_idx + 13] = (slot_3 - 1.5) / 1.5
-        vec[base_idx + 14] = 1.0 if public_fields.get("prerequisite_status") == "error" else 0.0
-        vec[base_idx + 15] = 1.0 if public_fields.get("workspace_artifact_state") == "verified_write" else 0.0
+        vec[base_idx + 14] = 1.0 if slot_0 == 3 else 0.0
+        vec[base_idx + 15] = 1.0 if slot_3 == 3 else 0.0
 
         return torch.tensor(vec, device=device, dtype=torch.float32)
 
@@ -2224,6 +2481,7 @@ class ControlledResponseEnsemble(nn.Module):
         *,
         prior_outcome_logits: torch.Tensor | None = None,
         prior_termination_logits: torch.Tensor | None = None,
+        prior_action_logprob: float = 0.0,
         prior_success_logit: float = 0.0,
         remaining_budget_ratio: float | torch.Tensor = 1.0,
     ) -> dict[str, torch.Tensor]:
@@ -2267,9 +2525,17 @@ class ControlledResponseEnsemble(nn.Module):
         if prior_termination_logits is not None and prior_termination_logits.numel() == len(TERMINATION_CATEGORIES):
             base_term = prior_termination_logits.to(device=term_res.device, dtype=term_res.dtype).view(1, -1).expand(self.ensemble_size, -1)
         else:
-            budget_low = torch.where(rem_vec <= 0.05, torch.ones_like(rem_vec), torch.full_like(rem_vec, -2.0))
+            # Coupled 3-way step outcome law: (0=live, 1=native_terminal_success, 2=native_terminal_or_budget_failure)
+            prior_off = 0.5 * float(max(-6.0, min(0.0, prior_action_logprob))) + float(prior_success_logit)
+            l_live = math.log(0.96)
+            l_succ = math.log(0.0048) + prior_off
+            l_fail = torch.where(
+                rem_vec <= 0.05,
+                torch.full_like(rem_vec, 1.0),
+                torch.full_like(rem_vec, math.log(0.0352)),
+            )
             base_term = torch.stack(
-                [torch.full_like(rem_vec, 1.5), torch.full_like(rem_vec, -1.0), budget_low],
+                [torch.full_like(rem_vec, l_live), torch.full_like(rem_vec, l_succ), l_fail],
                 dim=-1,
             )
         termination_probs = F.softmax(base_term + term_res, dim=-1)  # (M, 3)
@@ -2277,9 +2543,9 @@ class ControlledResponseEnsemble(nn.Module):
         cost_res = (member_in * self.member_step_cost_weight).sum(dim=-1) + self.member_step_cost_bias  # (M,)
         cost_ratio = torch.sigmoid(-5.0 + cost_res)  # (M,) calibrated initial wall-clock step cost fraction (~0.0067)
 
-        out_in = torch.cat([member_in, outcome_probs], dim=-1)  # (M, S + C + O)
-        y_res = (out_in * self.member_step_outcome_weight).sum(dim=-1) + self.member_step_outcome_bias  # (M,)
-        y_prob = torch.sigmoid(-2.0 + float(prior_success_logit) + y_res)  # (M,) conservative base success rate ~0.12
+        # Conditional success given termination = P(term_succ) / (P(term_succ) + P(term_fail))
+        term_mass = (termination_probs[:, 1] + termination_probs[:, 2]).clamp(min=1e-8)
+        y_prob = (termination_probs[:, 1] / term_mass).clamp(min=1e-6, max=1.0 - 1e-6)
 
         return {
             "h_ctx": h_ctx,
@@ -2314,10 +2580,59 @@ class ControlledResponseEnsemble(nn.Module):
         *,
         field_slot_probs: torch.Tensor | None = None,
         public_fields: Mapping[str, str] | None = None,
+        remaining_steps_ratio: float = 1.0,
+        step_budget_fraction: float = 0.05,
+        prior_action_logprob: float = 0.0,
         prior_success_logit: float = 0.0,
     ) -> dict[str, torch.Tensor]:
-        """Evaluate fixed-tail response distribution H_{phi,m}^{pi_0}(Y, C_tail | Y=1, b_m, z_fields, c_tail) per member."""
-        ctx_expanded = h_ctx.unsqueeze(0).expand(self.ensemble_size, -1)
+        """Evaluate fixed-tail response distribution H_{phi,m}^{pi_0}(Y, C_tail | Y=1, b_m, z_one_hot, c_tail).
+
+        Supports both single-assignment inputs `(M, ...)` (training NLL) and batched joint-assignment grids
+        `(M, G, ...)` (exact expectation E_Z[H(b_Z, Z)] during lookahead), using identical Bellman-neutral
+        finite-horizon base logits `(base_y_logit, base_bin_logits)`.
+        """
+        prior_off = 0.5 * float(max(-6.0, min(0.0, prior_action_logprob))) + float(prior_success_logit)
+        base_y_logit, base_bin_logits = self.base_tail_pi0_logits(
+            remaining_steps_ratio=remaining_steps_ratio,
+            step_budget_fraction=step_budget_fraction,
+            device=belief.device,
+            dtype=belief.dtype,
+            prior_offset=prior_off,
+        )
+        centers = torch.tensor(TAIL_COST_BIN_CENTERS, device=belief.device, dtype=belief.dtype)
+
+        if belief.dim() == 3:
+            # Batched joint-assignment evaluation: belief=(M, G, S), h_ctx=(M, G, C), field_slot_probs=(M, G, 16)
+            m_sz, g_sz, _ = belief.shape
+            if field_slot_probs is None:
+                raise ValueError("Batched predict_tail_pi0 requires explicit one-hot field_slot_probs (M, G, 16).")
+            slot_feat = field_slot_probs.to(device=belief.device, dtype=belief.dtype).reshape(
+                m_sz, g_sz, NUM_FIELD_SLOTS * NUM_SLOT_VALUES
+            )
+            member_in = torch.cat([belief, h_ctx, slot_feat], dim=-1)  # (M, G, S + C + 16)
+            y_res = (
+                (member_in * self.tail_pi0_success_weight.unsqueeze(1)).sum(dim=-1)
+                + self.tail_pi0_success_bias.unsqueeze(1)
+            )
+            y_prob = torch.sigmoid(base_y_logit + y_res)  # (M, G)
+            bin_res = (
+                torch.einsum("mgd,mdk->mgk", member_in, self.tail_pi0_cost_bins_weight)
+                + self.tail_pi0_cost_bins_bias.unsqueeze(1)
+            )
+            bin_probs = F.softmax(base_bin_logits.view(1, 1, TAIL_COST_BINS) + bin_res, dim=-1)  # (M, G, K)
+            spent = spent_seconds_ratio.view(m_sz, 1, 1).clamp(min=0.0, max=1.0)
+            rem_after_tail = (1.0 - spent - centers.view(1, 1, TAIL_COST_BINS)).clamp(min=0.0, max=1.0)
+            cond_utility_given_y1 = (bin_probs * rem_after_tail).sum(dim=-1)  # (M, G)
+            expected_tail_utility = y_prob * cond_utility_given_y1  # (M, G)
+            expected_cond_tail_cost = (bin_probs * centers.view(1, 1, TAIL_COST_BINS)).sum(dim=-1)  # (M, G)
+            return {
+                "tail_y_prob": y_prob,
+                "tail_cost_bin_probs": bin_probs,
+                "expected_cond_tail_cost": expected_cond_tail_cost,
+                "expected_tail_utility": expected_tail_utility,
+            }
+
+        ctx_expanded = h_ctx.unsqueeze(0).expand(self.ensemble_size, -1) if h_ctx.dim() == 1 else h_ctx
         if field_slot_probs is None:
             slot_feat = self._one_hot_field_slots(
                 public_fields or {}, self.ensemble_size, belief.device, belief.dtype
@@ -2329,22 +2644,20 @@ class ControlledResponseEnsemble(nn.Module):
         member_in = torch.cat([belief, ctx_expanded, slot_feat], dim=-1)  # (M, S + C + 16)
 
         y_logit = (member_in * self.tail_pi0_success_weight).sum(dim=-1) + self.tail_pi0_success_bias
-        y_prob = torch.sigmoid(-2.0 + float(prior_success_logit) + y_logit)  # (M,) conservative base tail success rate ~0.12
+        y_prob = torch.sigmoid(base_y_logit + y_logit)  # (M,)
 
         bin_logits = (
-            torch.einsum("md,mdk->mk", member_in, self.tail_pi0_cost_bins_weight)
+            base_bin_logits.view(1, TAIL_COST_BINS)
+            + torch.einsum("md,mdk->mk", member_in, self.tail_pi0_cost_bins_weight)
             + self.tail_pi0_cost_bins_bias
         )
         bin_probs = F.softmax(bin_logits, dim=-1)  # (M, TAIL_COST_BINS)
 
-        centers = torch.tensor(
-            TAIL_COST_BIN_CENTERS, device=belief.device, dtype=belief.dtype
-        ).view(1, TAIL_COST_BINS)  # (1, K)
         spent = spent_seconds_ratio.view(self.ensemble_size, 1).clamp(min=0.0, max=1.0)
-        rem_after_tail = (1.0 - spent - centers).clamp(min=0.0, max=1.0)  # (M, K)
+        rem_after_tail = (1.0 - spent - centers.view(1, TAIL_COST_BINS)).clamp(min=0.0, max=1.0)  # (M, K)
         cond_utility_given_y1 = (bin_probs * rem_after_tail).sum(dim=-1)  # (M,)
         expected_tail_utility = y_prob * cond_utility_given_y1  # (M,)
-        expected_cond_tail_cost = (bin_probs * centers).sum(dim=-1)  # (M,)
+        expected_cond_tail_cost = (bin_probs * centers.view(1, TAIL_COST_BINS)).sum(dim=-1)  # (M,)
 
         return {
             "tail_y_prob": y_prob,
@@ -2378,14 +2691,26 @@ class ControlledResponseEnsemble(nn.Module):
         actual_action: str,
         post_public_fields: Mapping[str, str],
         remaining_budget_ratio: float = 1.0,
+        spent_seconds_ratio: float | None = None,
+        remaining_steps_ratio: float = 1.0,
+        role_bindings: Mapping[str, str] | None = None,
         frozen_context_vec: Sequence[float] = (),
         frozen_action_vec: Sequence[float] = (),
         had_error: bool = False,
         terminal_done: bool = False,
         terminal_success: bool = False,
+        decision_ctx: DecisionContext | None = None,
     ) -> tuple[torch.Tensor, int, torch.Tensor]:
         """Unified intra-task state update `next_state = observe(previous_state, actual_action, actual_public_response)`."""
         device = self.transition_logits.device
+        if decision_ctx is not None:
+            goal_text = decision_ctx.goal_text
+            pre_public_fields = decision_ctx.public_fields
+            remaining_budget_ratio = decision_ctx.remaining_budget_ratio
+            spent_seconds_ratio = decision_ctx.spent_seconds_ratio
+            remaining_steps_ratio = decision_ctx.remaining_steps_ratio
+            role_bindings = decision_ctx.role_bindings
+            frozen_context_vec = decision_ctx.frozen_context_vec
         outcome_bin = PublicBenchmarkBinder.encode_response_outcome_bin(
             pre_public_fields,
             post_public_fields,
@@ -2398,11 +2723,19 @@ class ControlledResponseEnsemble(nn.Module):
             public_fields=pre_public_fields,
             action_text=actual_action,
             remaining_budget_ratio=remaining_budget_ratio,
+            spent_seconds_ratio=spent_seconds_ratio,
+            remaining_steps_ratio=remaining_steps_ratio,
+            role_bindings=role_bindings,
             frozen_context_vec=frozen_context_vec,
             frozen_action_vec=frozen_action_vec,
             device=device,
         )
-        res = self.step_and_predict(previous_state, ctx, observed_outcome_bin=outcome_bin)
+        res = self.step_and_predict(
+            previous_state,
+            ctx,
+            observed_outcome_bin=outcome_bin,
+            remaining_budget_ratio=remaining_budget_ratio,
+        )
         return res["post_belief"], outcome_bin, res["outcome_probs"]
 
     def predict_transition_heads(
@@ -2429,11 +2762,16 @@ class ControlledResponseEnsemble(nn.Module):
     def evaluate_candidate_q(
         self,
         *,
-        goal_text: str,
-        public_fields: Mapping[str, str],
+        goal_text: str = "",
+        public_fields: Mapping[str, str] | None = None,
         belief: torch.Tensor,
         candidate_action: str,
         program: ExecutableProgram | None = None,
+        initial_frame: ExecutionFrame | None = None,
+        decision_ctx: DecisionContext | None = None,
+        benchmark: str = "alfworld",
+        action_schema: Mapping[str, Any] | None = None,
+        role_bindings: Mapping[str, str] | None = None,
         remaining_budget_ratio: float = 1.0,
         remaining_steps_ratio: float = 1.0,
         step_budget_fraction: float = 0.05,
@@ -2444,18 +2782,36 @@ class ControlledResponseEnsemble(nn.Module):
         prior_action_logprob: float = 0.0,
         prior_success_logit: float = 0.0,
         member_index: int | None = None,
+        controller_mode: str = "expected_utility",
         use_initial_params: bool = False,
     ) -> dict[str, Any]:
         """Compute unified long-horizon value Q_m^rho(g, h, beta) = E_{K_{phi,m}, rho -> pi_0}[U_B(Y, C_seconds)].
 
-        Fixes D and E:
-          - Unrolls `program.ast_nodes` with Bayesian state conditioning inside `Case`:
-            b_m(s' | z) proportional to b_m(s') * P_m(z | s', c), updating both member beliefs and
-            branch public field states before evaluating true/false subtrees.
-          - Advances `remaining_steps_ratio` per Call and applies finite-horizon Bellman contraction
-            on predicted zero-change self-loops (`outcome_probs[:, :4]`), preventing zero-cost no-op loops.
-          - Evaluates leaves via the canonical `encode_tail_state_context` shared with `TailExample` training.
+        First-principles semantics:
+          1. Primary `expected_utility` controller advances alive mass strictly via normalized `live`
+             probability `termination_probs[:, 0]` (zero artificial no-change contraction) and selects
+             by ensemble mean `q_mean` (zero ad-hoc LCB penalty).
+          2. Leaves evaluate the exact state-conditioned joint field-slot expectation
+             E_Z[H_{phi,m}^{pi_0}(b_m(. | Z), one_hot(Z), spent_m)] in one vectorized batch pass,
+             preserving per-member resource states and avoiding Jensen's inequality bias.
+          3. Multi-step AST lookahead executes a cloned `ExecutionFrame` (`Call`, `Read`, `Case`, `Seq`, `Stop`),
+             binding symbolic return handles (`record_symbolic_call_return`), instantiating subsequent `Call`s,
+             and updating `Case` false branches with the exact 3-value complement conditional distribution.
         """
+        if decision_ctx is not None:
+            benchmark = decision_ctx.benchmark
+            goal_text = decision_ctx.goal_text
+            public_fields = decision_ctx.public_fields
+            role_bindings = decision_ctx.role_bindings
+            action_schema = decision_ctx.action_schema
+            remaining_budget_ratio = decision_ctx.remaining_budget_ratio
+            remaining_steps_ratio = decision_ctx.remaining_steps_ratio
+            step_budget_fraction = decision_ctx.step_budget_fraction
+            frozen_context_vec = decision_ctx.frozen_context_vec
+            frozen_tail_action_vec = decision_ctx.frozen_tail_action_vec
+            member_index = decision_ctx.member_index if member_index is None else member_index
+            controller_mode = decision_ctx.controller_mode
+
         if use_initial_params and self._initial_state_tensors:
             return self.active_model_view(use_initial_params=True).evaluate_candidate_q(
                 goal_text=goal_text,
@@ -2463,6 +2819,10 @@ class ControlledResponseEnsemble(nn.Module):
                 belief=belief,
                 candidate_action=candidate_action,
                 program=program,
+                initial_frame=initial_frame,
+                benchmark=benchmark,
+                action_schema=action_schema,
+                role_bindings=role_bindings,
                 remaining_budget_ratio=remaining_budget_ratio,
                 remaining_steps_ratio=remaining_steps_ratio,
                 step_budget_fraction=step_budget_fraction,
@@ -2473,6 +2833,7 @@ class ControlledResponseEnsemble(nn.Module):
                 prior_action_logprob=prior_action_logprob,
                 prior_success_logit=prior_success_logit,
                 member_index=member_index,
+                controller_mode=controller_mode,
                 use_initial_params=False,
             )
 
@@ -2480,78 +2841,177 @@ class ControlledResponseEnsemble(nn.Module):
         init_belief = belief.clone().to(device)
         rem_ratio = float(max(0.0, min(1.0, remaining_budget_ratio)))
         init_rem_steps = float(max(0.0, min(1.0, remaining_steps_ratio)))
-        step_frac = float(max(0.01, min(1.0, step_budget_fraction)))
+        step_frac = float(max(1e-4, min(1.0, step_budget_fraction)))
         init_spent = torch.full(
             (self.ensemble_size,), 1.0 - rem_ratio, device=device, dtype=torch.float32
         )
         init_alive = torch.ones(self.ensemble_size, device=device, dtype=torch.float32)
-        base_fields = dict(public_fields)
+        base_fields = dict(public_fields or {})
+        base_bindings = dict(role_bindings or {})
+        base_schema = action_schema or {}
+        eff_benchmark = (program.benchmark if program is not None else benchmark) or "alfworld"
+
+        root_slots = PublicBenchmarkBinder.encode_typed_field_slots(base_fields)
+        init_slot_probs_s = torch.zeros(
+            (self.ensemble_size, self.state_dim, NUM_FIELD_SLOTS, NUM_SLOT_VALUES),
+            device=device,
+            dtype=torch.float32,
+        )
+        for s_i, v_i in enumerate(root_slots):
+            init_slot_probs_s[:, :, s_i, int(v_i) % NUM_SLOT_VALUES] = 1.0
+
+        grid_idx = torch.tensor(_JOINT_SLOT_GRID_NP, device=device, dtype=torch.long)  # (256, 4)
+        base_tail_cvec = self.encode_context_vector(
+            goal_text=goal_text,
+            public_fields=base_fields,
+            action_text=TAIL_POLICY_VERSION,
+            remaining_budget_ratio=rem_ratio,
+            spent_seconds_ratio=1.0 - rem_ratio,
+            remaining_steps_ratio=init_rem_steps,
+            frozen_context_vec=frozen_context_vec,
+            frozen_action_vec=frozen_tail_action_vec,
+            typed_slots=root_slots,
+            device=device,
+        )
 
         def _leaf_tail_value(
             cur_b: torch.Tensor,
             cur_spent: torch.Tensor,
             cur_alive: torch.Tensor,
             cur_rem_steps: float,
-            cur_slot_probs_s: torch.Tensor | None,
-            cur_fields: Mapping[str, str],
+            cur_slot_probs_s: torch.Tensor,
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            if cur_rem_steps <= 0.0:
+            if cur_rem_steps <= 1e-7:
                 zeros = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
                 return zeros, cur_spent.clamp(max=1.0), zeros
-            rem_mean = float((1.0 - cur_spent).clamp(min=0.0, max=1.0).mean().item())
-            spent_mean = float(cur_spent.clamp(min=0.0, max=1.0).mean().item())
-            tail_h_ctx = self.encode_tail_state_context(
-                goal_text=goal_text,
-                public_fields=cur_fields,
-                remaining_budget_ratio=rem_mean,
-                spent_seconds_ratio=spent_mean,
-                remaining_steps_ratio=cur_rem_steps,
-                frozen_context_vec=frozen_context_vec,
-                frozen_tail_action_vec=frozen_tail_action_vec,
-                device=device,
-            )
-            if cur_slot_probs_s is not None:
+
+            if controller_mode == "legacy_lcb_v3":
+                rem_mean = float((1.0 - cur_spent).clamp(min=0.0, max=1.0).mean().item())
+                spent_mean = float(cur_spent.clamp(min=0.0, max=1.0).mean().item())
+                tail_h_ctx = self.encode_tail_state_context(
+                    goal_text=goal_text,
+                    public_fields=base_fields,
+                    remaining_budget_ratio=rem_mean,
+                    spent_seconds_ratio=spent_mean,
+                    remaining_steps_ratio=cur_rem_steps,
+                    frozen_context_vec=frozen_context_vec,
+                    frozen_tail_action_vec=frozen_tail_action_vec,
+                    device=device,
+                )
                 leaf_field_probs = torch.einsum("ms,mskv->mkv", cur_b, cur_slot_probs_s).clamp(min=1e-8)
                 leaf_field_probs = leaf_field_probs / leaf_field_probs.sum(dim=-1, keepdim=True)
-            else:
-                leaf_field_probs = self._one_hot_field_slots(
-                    cur_fields, self.ensemble_size, device, cur_b.dtype
+                tail_out = self.predict_tail_pi0(
+                    cur_b,
+                    tail_h_ctx,
+                    cur_spent,
+                    field_slot_probs=leaf_field_probs,
+                    public_fields=base_fields,
+                    remaining_steps_ratio=cur_rem_steps,
+                    step_budget_fraction=step_frac,
+                    prior_success_logit=prior_success_logit,
                 )
+                return (
+                    cur_alive * tail_out["expected_tail_utility"],
+                    (cur_spent + cur_alive * tail_out["expected_cond_tail_cost"]).clamp(max=1.0),
+                    tail_out["tail_y_prob"],
+                )
+
+            # Exact state-conditioned joint field-slot distribution P_m(z) = sum_s b_m(s) prod_j G_{m,s,j}(z_j)
+            p0 = cur_slot_probs_s[:, :, 0, grid_idx[:, 0]]
+            p1 = cur_slot_probs_s[:, :, 1, grid_idx[:, 1]]
+            p2 = cur_slot_probs_s[:, :, 2, grid_idx[:, 2]]
+            p3 = cur_slot_probs_s[:, :, 3, grid_idx[:, 3]]
+            lik_z = p0 * p1 * p2 * p3  # (M, S, 256)
+            unnorm_post = cur_b.unsqueeze(-1) * lik_z  # (M, S, 256)
+            p_z = unnorm_post.sum(dim=1)  # (M, 256)
+            p_z = p_z / p_z.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+
+            active_mask = p_z.max(dim=0).values > 1e-6
+            active_cols = torch.nonzero(active_mask, as_tuple=False).squeeze(-1)
+            if active_cols.numel() == 0:
+                active_cols = p_z.mean(dim=0).argmax().view(1)
+
+            g_act = int(active_cols.numel())
+            p_z_act = p_z[:, active_cols]  # (M, G_act)
+            p_z_act = p_z_act / p_z_act.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+            post_b_act = unnorm_post[:, :, active_cols].permute(0, 2, 1)  # (M, G_act, S)
+            post_b_act = post_b_act / post_b_act.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+            act_slots = grid_idx[active_cols]  # (G_act, 4)
+
+            c_batch = base_tail_cvec.view(1, 1, self.context_dim).expand(
+                self.ensemble_size, g_act, self.context_dim
+            ).clone()
+            spent_clamped = cur_spent.clamp(min=0.0, max=1.0)
+            rem_clamped = (1.0 - spent_clamped).clamp(min=0.0, max=1.0)
+            b_idx = FROZEN_HISTORY_DIM + FROZEN_ACTION_DIM
+            c_batch[:, :, b_idx + 0] = rem_clamped.unsqueeze(1)
+            c_batch[:, :, b_idx + 1] = spent_clamped.unsqueeze(1)
+            c_batch[:, :, b_idx + 2] = float(min(1.0, max(0.0, cur_rem_steps)))
+            c_batch[:, :, b_idx + 10 : b_idx + 14] = (
+                (act_slots.to(dtype=c_batch.dtype) - 1.5) / 1.5
+            ).unsqueeze(0)
+            c_batch[:, :, b_idx + 14] = (act_slots[:, 0] == 3).to(dtype=c_batch.dtype).unsqueeze(0)
+            c_batch[:, :, b_idx + 15] = (act_slots[:, 3] == 3).to(dtype=c_batch.dtype).unsqueeze(0)
+
+            h_ctx_batch = self.context_encoder(c_batch.reshape(-1, self.context_dim)).view(
+                self.ensemble_size, g_act, self.context_dim
+            )
+            slot_oh_act = (
+                F.one_hot(act_slots, num_classes=NUM_SLOT_VALUES)
+                .to(dtype=cur_b.dtype)
+                .reshape(1, g_act, NUM_FIELD_SLOTS * NUM_SLOT_VALUES)
+                .expand(self.ensemble_size, g_act, -1)
+            )
             tail_out = self.predict_tail_pi0(
-                cur_b,
-                tail_h_ctx,
-                cur_spent,
-                field_slot_probs=leaf_field_probs,
-                public_fields=cur_fields,
+                post_b_act,
+                h_ctx_batch,
+                spent_clamped,
+                field_slot_probs=slot_oh_act,
+                remaining_steps_ratio=cur_rem_steps,
+                step_budget_fraction=step_frac,
+                prior_action_logprob=prior_action_logprob,
                 prior_success_logit=prior_success_logit,
             )
-            leaf_u = cur_alive * tail_out["expected_tail_utility"]
-            leaf_cost = (cur_spent + cur_alive * tail_out["expected_cond_tail_cost"]).clamp(max=1.0)
-            return leaf_u, leaf_cost, tail_out["tail_y_prob"]
+            exp_tail_u = (p_z_act * tail_out["expected_tail_utility"]).sum(dim=-1)
+            exp_tail_c = (p_z_act * tail_out["expected_cond_tail_cost"]).sum(dim=-1)
+            exp_tail_y = (p_z_act * tail_out["tail_y_prob"]).sum(dim=-1)
+            return (
+                cur_alive * exp_tail_u,
+                (spent_clamped + cur_alive * exp_tail_c).clamp(max=1.0),
+                exp_tail_y,
+            )
 
         def _eval_call_step(
             cur_b: torch.Tensor,
             cur_spent: torch.Tensor,
             cur_alive: torch.Tensor,
             cur_rem_steps: float,
+            cur_slot_probs_s: torch.Tensor,
             cur_fields: Mapping[str, str],
+            cur_bindings: Mapping[str, str],
             act_str: str,
             is_first: bool,
-        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, torch.Tensor, torch.Tensor]:
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, torch.Tensor, torch.Tensor, tuple[int, int, int, int]]:
             rem_vec = (1.0 - cur_spent).clamp(min=0.0, max=1.0)
+            norm_act = PublicBenchmarkBinder.normalize_action_for_semantic_encoding(act_str, cur_bindings)
             if is_first and frozen_action_vec:
                 act_vec: Sequence[float] = frozen_action_vec
             elif action_embedder is not None:
-                act_vec = action_embedder(act_str)
+                act_vec = action_embedder(norm_act)
             else:
                 act_vec = ()
+            marg_slots = torch.einsum("ms,mskv->mkv", cur_b, cur_slot_probs_s).mean(dim=0)  # (4, 4)
+            modal_slots = tuple(int(x) for x in marg_slots.argmax(dim=-1).tolist())
+            eff_fields = PublicBenchmarkBinder.slots_to_canonical_fields(cur_fields, modal_slots)  # type: ignore[arg-type]
             ctx = self.encode_context_vector(
                 goal_text=goal_text,
-                public_fields=cur_fields,
-                action_text=act_str,
+                public_fields=eff_fields,
+                action_text=norm_act,
                 remaining_budget_ratio=float(rem_vec.mean().item()),
                 spent_seconds_ratio=float(cur_spent.mean().item()),
                 remaining_steps_ratio=cur_rem_steps,
+                role_bindings=cur_bindings,
+                typed_slots=modal_slots,  # type: ignore[arg-type]
                 frozen_context_vec=frozen_context_vec,
                 frozen_action_vec=act_vec,
                 prior_success_logit=prior_success_logit,
@@ -2561,21 +3021,25 @@ class ControlledResponseEnsemble(nn.Module):
                 cur_b,
                 ctx,
                 observed_outcome_bin=None,
+                prior_action_logprob=prior_action_logprob,
                 prior_success_logit=prior_success_logit,
                 remaining_budget_ratio=rem_vec,
             )
             next_spent = (cur_spent + preds["cost_ratio"]).clamp(min=0.0, max=1.0)
             next_rem_steps = max(0.0, cur_rem_steps - step_frac)
             p_live = preds["termination_probs"][:, 0]
-            p_nat_term = preds["termination_probs"][:, 1]
-            y_prob = preds["terminal_success_prob"]
+            p_term_succ = preds["termination_probs"][:, 1]
             rem_after = (1.0 - next_spent).clamp(min=0.0, max=1.0)
-            step_u = cur_alive * p_nat_term * y_prob * rem_after
-            # Finite-horizon Bellman contraction on zero-field-change transitions (`outcome_probs[:, :4]`)
-            p_no_change = preds["outcome_probs"][:, :4].sum(dim=-1).clamp(min=0.0, max=1.0)
-            contraction = (1.0 - p_no_change * max(step_frac, 0.05)).clamp(min=0.0, max=1.0)
-            horizon_alive = 1.0 if next_rem_steps > 0.0 else 0.0
-            next_alive = cur_alive * p_live * contraction * horizon_alive
+            step_u = cur_alive * p_term_succ * rem_after
+            horizon_alive = 1.0 if next_rem_steps > 1e-7 else 0.0
+            if controller_mode == "legacy_lcb_v3":
+                p_no_change = preds["outcome_probs"][:, :4].sum(dim=-1).clamp(min=0.0, max=1.0)
+                contraction = (1.0 - p_no_change * max(step_frac, 0.05)).clamp(min=0.0, max=1.0)
+                next_alive = cur_alive * p_live * contraction * horizon_alive
+            else:
+                next_alive = cur_alive * p_live * horizon_alive
+            next_marg = torch.einsum("ms,mskv->mkv", preds["next_state_prior"], preds["slot_probs_per_state"]).mean(dim=0)
+            next_modal_slots = tuple(int(x) for x in next_marg.argmax(dim=-1).tolist())
             return (
                 preds["next_state_prior"],
                 next_spent,
@@ -2583,50 +3047,81 @@ class ControlledResponseEnsemble(nn.Module):
                 next_rem_steps,
                 step_u,
                 preds["slot_probs_per_state"],
+                next_modal_slots,  # type: ignore[return-value]
             )
 
-        def _eval_ast_sequence(
-            nodes: Sequence[ASTNode],
+        def _eval_ast_frame(
+            sim_frame: ExecutionFrame,
             cur_b: torch.Tensor,
             cur_spent: torch.Tensor,
             cur_alive: torch.Tensor,
             cur_rem_steps: float,
-            cur_slot_probs_s: torch.Tensor | None,
-            cur_fields: dict[str, str],
+            cur_slot_probs_s: torch.Tensor,
             calls_used: int,
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            if not nodes or calls_used >= DEFAULT_MAX_PROBE_STEPS + 1 or cur_rem_steps <= 0.0:
-                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, cur_fields)
+            if (
+                sim_frame.completed
+                or sim_frame.binding_failed
+                or not sim_frame.node_stack
+                or calls_used >= DEFAULT_MAX_PROBE_STEPS + 1
+                or cur_rem_steps <= 1e-7
+            ):
+                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s)
 
-            head = nodes[0]
-            rest = nodes[1:]
+            head = sim_frame.node_stack[0]
+            rest = sim_frame.node_stack[1:]
             if head.op == "Stop":
-                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, cur_fields)
+                return _leaf_tail_value(cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s)
 
             if head.op == "Seq":
-                return _eval_ast_sequence(
-                    tuple(head.children) + tuple(rest),
+                next_f = sim_frame.clone()
+                next_f.node_stack = list(head.children) + list(rest)
+                return _eval_ast_frame(next_f, cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, calls_used)
+
+            if head.op == "Read":
+                next_f = sim_frame.clone()
+                next_f.node_stack = list(rest)
+                if head.variable and head.variable in next_f.local_env:
+                    val = next_f.local_env[head.variable].get(head.public_field_path)
+                    if val is not None:
+                        next_f.observed_readouts[head.public_field_path] = val
+                return _eval_ast_frame(next_f, cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, calls_used)
+
+            if head.op == "Call":
+                next_f = sim_frame.clone()
+                next_f.node_stack = list(rest)
+                if calls_used == 0:
+                    act_str = candidate_action
+                else:
+                    inst_act = PublicBenchmarkBinder.instantiate_template_action(
+                        eff_benchmark,
+                        head.tool_or_action or candidate_action,
+                        base_schema,
+                        goal_text,
+                        next_f.bound_variables,
+                        next_f.local_env,
+                        head.typed_arguments,
+                        allow_symbolic=True,
+                    )
+                    act_str = inst_act or head.tool_or_action or candidate_action
+                next_f.program_counter += 1
+                next_f.pending_return_var = head.bind_return_to or f"ret_{next_f.program_counter - 1}"
+                next_f.executed_actions.append(act_str)
+
+                nb, n_spent, n_alive, n_rem_steps, step_u, n_slots_s, next_modal_slots = _eval_call_step(
                     cur_b,
                     cur_spent,
                     cur_alive,
                     cur_rem_steps,
                     cur_slot_probs_s,
-                    cur_fields,
-                    calls_used,
+                    next_f.observed_readouts or base_fields,
+                    next_f.bound_variables,
+                    act_str,
+                    is_first=(calls_used == 0),
                 )
-
-            if head.op == "Read":
-                return _eval_ast_sequence(
-                    rest, cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, cur_fields, calls_used
-                )
-
-            if head.op == "Call":
-                act_str = candidate_action if calls_used == 0 else (head.tool_or_action or candidate_action)
-                nb, n_spent, n_alive, n_rem_steps, step_u, n_slots_s = _eval_call_step(
-                    cur_b, cur_spent, cur_alive, cur_rem_steps, cur_fields, act_str, is_first=(calls_used == 0)
-                )
-                rem_u, end_cost, tail_y = _eval_ast_sequence(
-                    rest, nb, n_spent, n_alive, n_rem_steps, n_slots_s, cur_fields, calls_used + 1
+                next_f.record_symbolic_call_return(act_str, calls_used, next_modal_slots)
+                rem_u, end_cost, tail_y = _eval_ast_frame(
+                    next_f, nb, n_spent, n_alive, n_rem_steps, n_slots_s, calls_used + 1
                 )
                 return step_u + rem_u, end_cost, tail_y
 
@@ -2634,87 +3129,315 @@ class ControlledResponseEnsemble(nn.Module):
                 slot_idx, val_idx = PublicBenchmarkBinder.condition_slot_and_value(
                     head.condition_field, head.condition_equals
                 )
-                if cur_slot_probs_s is not None:
-                    lik_true = cur_slot_probs_s[:, :, slot_idx, val_idx].clamp(min=1e-6, max=1.0 - 1e-6)
-                    lik_false = (1.0 - lik_true).clamp(min=1e-6, max=1.0 - 1e-6)
-                    unnorm_b_true = cur_b * lik_true
-                    p_true = unnorm_b_true.sum(dim=-1).clamp(min=0.0, max=1.0)
-                    b_true = unnorm_b_true / unnorm_b_true.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                lik_true = cur_slot_probs_s[:, :, slot_idx, val_idx].clamp(min=0.0, max=1.0)
+                unnorm_b_true = cur_b * lik_true.clamp(min=1e-8)
+                p_true = (cur_b * lik_true).sum(dim=-1).clamp(min=0.0, max=1.0)
+                b_true = unnorm_b_true / unnorm_b_true.sum(dim=-1, keepdim=True).clamp(min=1e-8)
 
-                    unnorm_b_false = cur_b * lik_false
-                    p_false = (1.0 - p_true).clamp(min=0.0, max=1.0)
-                    b_false = unnorm_b_false / unnorm_b_false.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-                else:
-                    obs_val = cur_fields.get(head.condition_field, "unknown")
-                    if obs_val != "unknown":
-                        lhs = PublicBenchmarkBinder.canonical_slot_predicate_value(head.condition_field, obs_val)
-                        rhs = PublicBenchmarkBinder.canonical_slot_predicate_value(head.condition_field, head.condition_equals)
-                        p_t_val = 1.0 if lhs == rhs else 0.0
-                    else:
-                        p_t_val = 0.5
-                    p_true = torch.full((self.ensemble_size,), p_t_val, device=device, dtype=torch.float32)
-                    p_false = 1.0 - p_true
-                    b_true = cur_b
-                    b_false = cur_b
+                slots_s_true = cur_slot_probs_s.clone()
+                slots_s_true[:, :, slot_idx, :] = 0.0
+                slots_s_true[:, :, slot_idx, val_idx] = 1.0
 
-                fields_true = {**cur_fields, head.condition_field: head.condition_equals}
-                alt_val = "no_or_low" if head.condition_equals == "yes_or_high" else "none"
-                fields_false = {**cur_fields, head.condition_field: alt_val}
+                # Exact 3-value complement distribution given Z_{slot_idx} != val_idx
+                slots_s_false_raw = cur_slot_probs_s.clone()
+                slots_s_false_raw[:, :, slot_idx, val_idx] = 0.0
+                lik_false = slots_s_false_raw[:, :, slot_idx, :].sum(dim=-1).clamp(min=0.0, max=1.0)
+                unnorm_b_false = cur_b * lik_false.clamp(min=1e-8)
+                p_false = (1.0 - p_true).clamp(min=0.0, max=1.0)
+                b_false = unnorm_b_false / unnorm_b_false.sum(dim=-1, keepdim=True).clamp(min=1e-8)
 
-                true_child = (head.children[0],) if len(head.children) >= 1 else (ASTNode(op="Stop"),)
-                false_child = (head.children[1],) if len(head.children) >= 2 else (ASTNode(op="Stop"),)
-                u_t, c_t, y_t = _eval_ast_sequence(
-                    true_child + tuple(rest),
-                    b_true,
-                    cur_spent,
-                    cur_alive * p_true,
-                    cur_rem_steps,
-                    cur_slot_probs_s,
-                    fields_true,
-                    calls_used,
+                comp_mask = torch.ones(NUM_SLOT_VALUES, device=device, dtype=cur_b.dtype)
+                comp_mask[val_idx] = 0.0
+                comp_denom = slots_s_false_raw[:, :, slot_idx, :].sum(dim=-1, keepdim=True)
+                slots_s_false = slots_s_false_raw.clone()
+                slots_s_false[:, :, slot_idx, :] = torch.where(
+                    comp_denom > 1e-8,
+                    slots_s_false_raw[:, :, slot_idx, :] / comp_denom.clamp(min=1e-8),
+                    comp_mask.view(1, 1, NUM_SLOT_VALUES) / float(NUM_SLOT_VALUES - 1),
                 )
-                u_f, c_f, y_f = _eval_ast_sequence(
-                    false_child + tuple(rest),
-                    b_false,
-                    cur_spent,
-                    cur_alive * p_false,
-                    cur_rem_steps,
-                    cur_slot_probs_s,
-                    fields_false,
-                    calls_used,
+
+                true_child = [head.children[0]] if len(head.children) >= 1 else [ASTNode(op="Stop")]
+                false_child = [head.children[1]] if len(head.children) >= 2 else [ASTNode(op="Stop")]
+
+                frame_true = sim_frame.clone()
+                frame_true.observed_readouts[head.condition_field] = SLOT_VALUE_NAMES[slot_idx][val_idx]
+                frame_true.node_stack = true_child + list(rest)
+
+                comp_marg = torch.einsum("ms,msv->mv", b_false, slots_s_false[:, :, slot_idx, :]).mean(dim=0)
+                best_comp_v = int(comp_marg.argmax().item())
+                frame_false = sim_frame.clone()
+                frame_false.observed_readouts[head.condition_field] = SLOT_VALUE_NAMES[slot_idx][best_comp_v]
+                frame_false.node_stack = false_child + list(rest)
+
+                u_t, c_t, y_t = _eval_ast_frame(
+                    frame_true, b_true, cur_spent, cur_alive * p_true, cur_rem_steps, slots_s_true, calls_used
+                )
+                u_f, c_f, y_f = _eval_ast_frame(
+                    frame_false, b_false, cur_spent, cur_alive * p_false, cur_rem_steps, slots_s_false, calls_used
                 )
                 return u_t + u_f, p_true * c_t + p_false * c_f, p_true * y_t + p_false * y_f
 
-            return _eval_ast_sequence(
-                rest, cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, cur_fields, calls_used
+            next_f = sim_frame.clone()
+            next_f.node_stack = list(rest)
+            return _eval_ast_frame(next_f, cur_b, cur_spent, cur_alive, cur_rem_steps, cur_slot_probs_s, calls_used)
+
+        if initial_frame is not None:
+            # `initial_frame` is the post-Call-0 frame produced by `step_ast_frame`: execute Call-0 (`candidate_action`)
+            # then continue `initial_frame` after binding its symbolic return handle!
+            nb0, n_spent0, n_alive0, n_rem0, step_u0, n_slots0, modal_slots0 = _eval_call_step(
+                init_belief,
+                init_spent,
+                init_alive,
+                init_rem_steps,
+                init_slot_probs_s,
+                initial_frame.observed_readouts or base_fields,
+                initial_frame.bound_variables or base_bindings,
+                candidate_action,
+                is_first=True,
+            )
+            cont_frame = initial_frame.clone()
+            cont_frame.record_symbolic_call_return(candidate_action, 0, modal_slots0)
+            rem_u0, end_spent, tail_y_members = _eval_ast_frame(
+                cont_frame, nb0, n_spent0, n_alive0, n_rem0, n_slots0, 1
+            )
+            q_members = step_u0 + rem_u0
+        else:
+            ast_seq = (
+                program.ast_nodes
+                if (program is not None and program.ast_nodes)
+                else (ASTNode(op="Call", tool_or_action=candidate_action), ASTNode(op="Stop"))
+            )
+            wrapper_prog = program or ExecutableProgram(
+                program_id=f"atomic:{_short_hash(candidate_action)}",
+                benchmark=eff_benchmark,
+                step_templates=(candidate_action,),
+                readout_fields=(),
+                ast_nodes=ast_seq,
+            )
+            root_frame = ExecutionFrame(
+                program=wrapper_prog,
+                bound_variables=dict(base_bindings),
+                observed_readouts=dict(base_fields),
+                node_stack=list(ast_seq),
+            )
+            q_members, end_spent, tail_y_members = _eval_ast_frame(
+                root_frame, init_belief, init_spent, init_alive, init_rem_steps, init_slot_probs_s, 0
             )
 
-        ast_seq = (
-            program.ast_nodes
-            if (program is not None and program.ast_nodes)
-            else (ASTNode(op="Call", tool_or_action=candidate_action), ASTNode(op="Stop"))
-        )
-        q_members, end_spent, tail_y_members = _eval_ast_sequence(
-            ast_seq, init_belief, init_spent, init_alive, init_rem_steps, None, base_fields, 0
-        )
         q_members = q_members.clamp(min=0.0, max=1.0)
+        q_mean_t = q_members.mean()
+        q_std_t = q_members.std(unbiased=False) if self.ensemble_size > 1 else torch.zeros_like(q_mean_t)
+        q_lcb_val = float((q_mean_t - 0.5 * q_std_t).clamp(min=0.0).item())
 
         if member_index is not None:
             m_idx = int(member_index) % self.ensemble_size
             q_scalar = float(q_members[m_idx].item())
+        elif controller_mode == "legacy_lcb_v3":
+            q_scalar = q_lcb_val
         else:
-            # Pessimistic ensemble lower-confidence bound at deployment prevents out-of-support
-            # overestimation on unvisited actions while equaling q_mean at phi_0 where std == 0.
-            q_mean_t = q_members.mean()
-            q_std_t = q_members.std(unbiased=False) if self.ensemble_size > 1 else torch.zeros_like(q_mean_t)
-            q_scalar = float((q_mean_t - 0.5 * q_std_t).clamp(min=0.0).item())
+            q_scalar = float(q_mean_t.item())
 
         return {
-            "q_mean": float(q_members.mean().item()),
+            "q_mean": float(q_mean_t.item()),
+            "q_std": float(q_std_t.item()),
+            "q_lcb": q_lcb_val,
             "q_selected": q_scalar,
             "q_members": [float(x) for x in q_members.detach().cpu().tolist()],
             "predicted_terminal_success": float(tail_y_members.mean().item()),
             "predicted_cost_ratio": float(end_spent.mean().item()),
+        }
+
+    @torch.no_grad()
+    def evaluate_decision_candidates(
+        self,
+        decision_ctx: DecisionContext,
+        belief: torch.Tensor,
+        candidates: Sequence[tuple[str, str, ExecutableProgram | None, ExecutionFrame | None]],
+        *,
+        action_embedder: Any | None = None,
+        precomputed_action_vecs: Mapping[str, Sequence[float]] | None = None,
+        precomputed_prior_logprobs: Mapping[str, float] | None = None,
+        use_initial_params: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Single unified candidate-scoring entrypoint shared by training q-selection, post-q d_model, R_h(u,v), and act()."""
+        results: list[dict[str, Any]] = []
+        vec_map = precomputed_action_vecs or {}
+        lp_map = precomputed_prior_logprobs or {}
+        for cid, c_act, c_prog, c_frame in candidates:
+            norm_act = PublicBenchmarkBinder.normalize_action_for_semantic_encoding(
+                c_act, decision_ctx.role_bindings
+            )
+            act_vec = vec_map.get(norm_act) or vec_map.get(c_act) or (
+                action_embedder(norm_act) if action_embedder is not None else ()
+            )
+            cand_lp = float(lp_map.get(c_act, lp_map.get(c_act.strip(), 0.0)))
+            q_eval = self.evaluate_candidate_q(
+                belief=belief,
+                candidate_action=c_act,
+                program=c_prog,
+                initial_frame=c_frame,
+                decision_ctx=decision_ctx,
+                frozen_action_vec=act_vec,
+                action_embedder=action_embedder,
+                prior_action_logprob=cand_lp,
+                use_initial_params=use_initial_params,
+            )
+            results.append(
+                {
+                    "candidate_id": cid,
+                    "candidate_action": c_act,
+                    "program": c_prog,
+                    "frame": c_frame,
+                    "prior_action_logprob": cand_lp,
+                    **q_eval,
+                }
+            )
+        return results
+
+    @staticmethod
+    def select_fork_continuation_pair(
+        scored_candidates: Sequence[Mapping[str, Any]],
+        *,
+        benchmark: str,
+        goal_category: str,
+        prior_action_text: str = "",
+        existing_comparison_keys: Mapping[str, set[str]] | None = None,
+        current_readout_sig: str = "",
+        rng: random.Random | None = None,
+    ) -> dict[str, Any] | None:
+        """Select continuation pair (u, v) by ensemble decision-disagreement R_h(u, v) per paired execution cost.
+
+        R_h(u, v) = (1/M) * sum_m max(Q_m(u), Q_m(v)) - max(Q_bar(u), Q_bar(v))
+                  = 0.5 * (E_m |Delta_m| - |E_m Delta_m|).
+        When R_h == 0 (undifferentiated initialization), anchors u on the frozen LM prior proposal and
+        selects v by reusing cross-anchor canonical `comparison_key`s or role-diverse seeded sampling
+        (eliminating static lexicographic first-two selection).
+        """
+        distinct: list[Mapping[str, Any]] = []
+        seen_tmpls: set[str] = set()
+        seen_acts: set[str] = set()
+        # Preserve prior proposal first so tie-breaking favors a_{pi_0}
+        ordered_in = sorted(
+            scored_candidates,
+            key=lambda item: (0 if str(item.get("candidate_action", "")).strip() == prior_action_text.strip() else 1),
+        )
+        for item in ordered_in:
+            act = str(item.get("candidate_action", "")).strip()
+            if not act or act in seen_acts:
+                continue
+            tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark, act)
+            if tmpl in seen_tmpls and len(scored_candidates) > 2:
+                continue
+            seen_acts.add(act)
+            seen_tmpls.add(tmpl)
+            distinct.append(item)
+
+        if len(distinct) < 2:
+            distinct = []
+            seen_acts.clear()
+            for item in ordered_in:
+                act = str(item.get("candidate_action", "")).strip()
+                if act and act not in seen_acts:
+                    seen_acts.add(act)
+                    distinct.append(item)
+        if len(distinct) < 2:
+            return None
+
+        # Identify mean-optimal candidate (prior-anchored on exact ties)
+        best_u_idx = max(
+            range(len(distinct)),
+            key=lambda i: (
+                round(float(distinct[i]["q_mean"]), 7),
+                1 if str(distinct[i]["candidate_action"]).strip() == prior_action_text.strip() else 0,
+            ),
+        )
+
+        best_pair: tuple[int, int] | None = None
+        best_r_per_cost = -1.0
+        best_r_raw = 0.0
+        existing_map = existing_comparison_keys or {}
+
+        # Evaluate pairs involving competitive candidates (top-8 by q_mean + prior + previously measured keys)
+        ranked_indices = sorted(
+            range(len(distinct)),
+            key=lambda i: float(distinct[i]["q_mean"]),
+            reverse=True,
+        )
+        anchor_indices = list(dict.fromkeys([0, best_u_idx, *ranked_indices[:8]]))
+
+        for idx_pos, i in enumerate(anchor_indices):
+            qi = np.asarray(distinct[i]["q_members"], dtype=np.float64)
+            q_bar_i = float(qi.mean())
+            cost_i = max(0.01, float(distinct[i].get("predicted_cost_ratio", 0.05)))
+            tmpl_i = PublicBenchmarkBinder.abstract_action_to_template(benchmark, str(distinct[i]["candidate_action"]))
+            for j in range(len(distinct)):
+                if i == j:
+                    continue
+                qj = np.asarray(distinct[j]["q_members"], dtype=np.float64)
+                q_bar_j = float(qj.mean())
+                r_val = float(np.maximum(qi, qj).mean() - max(q_bar_i, q_bar_j))
+                cost_j = max(0.01, float(distinct[j].get("predicted_cost_ratio", 0.05)))
+                pair_cost = max(0.05, cost_i + cost_j)
+                tmpl_j = PublicBenchmarkBinder.abstract_action_to_template(benchmark, str(distinct[j]["candidate_action"]))
+                comp = Comparison.canonicalize(
+                    goal_category=goal_category,
+                    u_policy_id=tmpl_i,
+                    v_policy_id=tmpl_j,
+                )
+                seen_sigs = existing_map.get(comp.comparison_key, set())
+                cross_anchor_bonus = 1.05 if (seen_sigs and current_readout_sig not in seen_sigs) else 1.0
+                score = (r_val / pair_cost) * cross_anchor_bonus
+                if score > best_r_per_cost + 1e-12:
+                    best_r_per_cost = score
+                    best_r_raw = r_val
+                    best_pair = (i, j) if q_bar_i >= q_bar_j else (j, i)
+
+        selection_mode = "decision_disagreement_r_h"
+        if best_pair is None or best_r_raw <= 5e-4:
+            # Below meaningful disagreement threshold: anchor u on frozen LM prior proposal (index 0 if valid)
+            u_idx = 0 if (prior_action_text and str(distinct[0]["candidate_action"]).strip() == prior_action_text.strip()) else best_u_idx
+            u_act = str(distinct[u_idx]["candidate_action"])
+            u_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark, u_act)
+            u_verb = u_act.split()[0].split("[")[0].lower() if u_act else ""
+
+            # 1) Reuse a canonical comparison_key already measured at a distinct public readout z' != z
+            reusable_v: list[int] = []
+            diverse_v: list[int] = []
+            all_other_v: list[int] = []
+            for j in range(len(distinct)):
+                if j == u_idx:
+                    continue
+                all_other_v.append(j)
+                v_act = str(distinct[j]["candidate_action"])
+                v_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark, v_act)
+                comp = Comparison.canonicalize(goal_category=goal_category, u_policy_id=u_tmpl, v_policy_id=v_tmpl)
+                seen_sigs = existing_map.get(comp.comparison_key, set())
+                if seen_sigs and current_readout_sig not in seen_sigs:
+                    reusable_v.append(j)
+                v_verb = v_act.split()[0].split("[")[0].lower() if v_act else ""
+                if v_verb != u_verb:
+                    diverse_v.append(j)
+
+            chooser = rng or random.Random(42)
+            if reusable_v:
+                v_idx = chooser.choice(reusable_v)
+                selection_mode = "prior_cross_anchor_key_reuse"
+            elif diverse_v:
+                v_idx = chooser.choice(diverse_v)
+                selection_mode = "prior_role_diverse_sample"
+            else:
+                v_idx = chooser.choice(all_other_v)
+                selection_mode = "prior_uniform_support_sample"
+            best_pair = (u_idx, v_idx)
+            best_r_raw = 0.0
+
+        idx_u, idx_v = best_pair
+        return {
+            "u_entry": distinct[idx_u],
+            "v_entry": distinct[idx_v],
+            "disagreement_r": float(best_r_raw),
+            "selection_mode": selection_mode,
+            "num_distinct_candidates": len(distinct),
         }
 
     @torch.no_grad()
@@ -2816,6 +3539,27 @@ class ControlledResponseEnsemble(nn.Module):
         observed_outcomes = 0
         tail_supervised_count = 0
 
+        # Pre-index episode-level pi_0 branch outcomes so fork-head steps `(u_0, v_0)` receive exact
+        # marginal continuation likelihood supervision and multi-step branches are normalized 1:1 per episode.
+        ep_tail_counts: dict[str, int] = {}
+        ep_outcome_info: dict[str, tuple[bool, tuple[float, ...], float]] = {}
+        for tex in tail_examples:
+            if not tex.censored and tex.observed_y is not None:
+                ep_key = str(tex.episode_id or "default_ep")
+                ep_tail_counts[ep_key] = ep_tail_counts.get(ep_key, 0) + 1
+                res_tb = ResourceState.from_dict(tex.resource_before)
+                sf_tb = (
+                    float(tex.step_budget_fraction)
+                    if tex.step_budget_fraction > 0
+                    else 1.0 / max(1.0, float(res_tb.max_env_steps))
+                )
+                ep_outcome_info[ep_key] = (bool(tex.observed_y), tex.frozen_tail_action_vec, sf_tb)
+
+        seen_branch_heads: set[str] = set()
+        fork_head_nll = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
+        fork_heads_supervised = 0
+        grid_idx = torch.tensor(_JOINT_SLOT_GRID_NP, device=device, dtype=torch.long)
+
         # Map transition_id -> post-step belief tensor (retaining computation graph for shared prefix gradients!)
         belief_by_node: dict[str, torch.Tensor] = {}
         last_belief = root_belief
@@ -2837,6 +3581,7 @@ class ControlledResponseEnsemble(nn.Module):
                 remaining_budget_ratio=rem_sec_ratio,
                 spent_seconds_ratio=res_before.spent_seconds_ratio,
                 remaining_steps_ratio=res_before.remaining_steps_ratio,
+                role_bindings=tr.role_bindings,
                 frozen_context_vec=tr.frozen_context_vec,
                 frozen_action_vec=tr.frozen_action_vec,
                 device=device,
@@ -2855,12 +3600,13 @@ class ControlledResponseEnsemble(nn.Module):
                 in_belief,
                 ctx,
                 observed_outcome_bin=obs_bin,
+                prior_action_logprob=float(tr.prior_action_logprob),
                 remaining_budget_ratio=rem_sec_ratio,
             )
             belief_by_node[tr.transition_id] = preds["post_belief"]
             last_belief = preds["post_belief"]
 
-            # 1. Outcome bin NLL + typed field-slot NLL (fixes F09)
+            # 1. Outcome bin NLL + typed field-slot NLL
             resp_nll = -torch.log(preds["outcome_probs"][:, obs_bin].clamp(min=1e-8))
             target_slots = PublicBenchmarkBinder.encode_typed_field_slots(tr.typed_response)
             slot_nll = torch.zeros_like(resp_nll)
@@ -2869,39 +3615,120 @@ class ControlledResponseEnsemble(nn.Module):
                     preds["field_slot_probs"][:, s_idx, v_idx].clamp(min=1e-8)
                 )
 
-            # 2. Termination category NLL
-            term_idx = (
-                1 if tr.termination == "native_terminal"
-                else 2 if tr.termination == "task_budget_terminal"
-                else 0
-            )
+            # 2. Coupled 3-way step outcome NLL: 0=live, 1=native_terminal_success, 2=terminal_failure
+            if term_done:
+                observed_outcomes += 1
+                term_idx = 1 if term_succ else 2
+            else:
+                term_idx = 0
             term_nll = -torch.log(preds["termination_probs"][:, term_idx].clamp(min=1e-8))
 
-            # 3. Wall-clock step cost ratio loss (aligned with seconds/budget_seconds, fixes F11)
+            # 3. Wall-clock step cost ratio loss
             target_cost = float(
                 min(1.0, max(0.0, tr.resource_delta.get("seconds_ratio", tr.resource_delta.get("cost_ratio", 0.01))))
             )
             cost_nll = 0.5 * (preds["cost_ratio"] - target_cost).square()
 
-            # 4. Terminal outcome NLL on terminal transitions (masked when None)
-            if tr.native_outcome is not None and term_done:
-                observed_outcomes += 1
-                y_val = 1.0 if tr.native_outcome else 0.0
-                p_y = preds["terminal_success_prob"].clamp(min=1e-6, max=1.0 - 1e-6)
-                y_nll = -(y_val * torch.log(p_y) + (1.0 - y_val) * torch.log(1.0 - p_y))
-            else:
-                y_nll = torch.zeros_like(resp_nll)
+            total_member_nll = total_member_nll + (resp_nll + slot_nll + term_nll + cost_nll)
 
-            total_member_nll = total_member_nll + (resp_nll + slot_nll + 0.5 * term_nll + cost_nll + y_nll)
+            # 4. Exact 1-step marginal continuation likelihood on fork-head steps `(u -> pi_0, v -> pi_0)`:
+            #    P_m(Y_branch | b_t, a_t, do(pi_0)) = p_term_succ(a_t) + p_live(a_t) * E_Z[P_m^{pi_0}(Y=1 | b_m(.|Z), Z)]
+            ep_id_str = str(tr.episode_id or "")
+            if (
+                tr.controller_id == TAIL_POLICY_VERSION
+                and ep_id_str not in seen_branch_heads
+                and (ep_id_str in ep_outcome_info or (term_done and tr.native_outcome is not None))
+            ):
+                seen_branch_heads.add(ep_id_str)
+                if ep_id_str in ep_outcome_info:
+                    y_branch_bool, t_act_vec, sf_val = ep_outcome_info[ep_id_str]
+                else:
+                    y_branch_bool = bool(tr.native_outcome)
+                    t_act_vec = ()
+                    sf_val = 1.0 / max(1.0, float(res_before.max_env_steps))
+                next_rem_s = max(0.0, res_before.remaining_steps_ratio - sf_val)
+                p_live_h = preds["termination_probs"][:, 0]
+                p_succ_h = preds["termination_probs"][:, 1]
+                if next_rem_s > 1e-7:
+                    sp_s = preds["slot_probs_per_state"]
+                    nb_h = preds["next_state_prior"]
+                    lik_g = (
+                        sp_s[:, :, 0, grid_idx[:, 0]]
+                        * sp_s[:, :, 1, grid_idx[:, 1]]
+                        * sp_s[:, :, 2, grid_idx[:, 2]]
+                        * sp_s[:, :, 3, grid_idx[:, 3]]
+                    )
+                    un_g = nb_h.unsqueeze(-1) * lik_g
+                    pz_g = un_g.sum(dim=1)
+                    pz_g = pz_g / pz_g.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                    pb_g = (un_g.permute(0, 2, 1)) / un_g.sum(dim=1).unsqueeze(-1).clamp(min=1e-8)
 
-        # 5. Supervise fixed-tail head H_{phi,m}^{pi_0}(Y, C_tail | Y=1) using exact fork-tree `prefix_node_id`
-        # and the canonical `encode_tail_state_context` shared with Q leaf evaluation (fixes C & D).
+                    base_c_tail = self.encode_context_vector(
+                        goal_text=tr.goal_text,
+                        public_fields=tr.pre_public_fields,
+                        action_text=TAIL_POLICY_VERSION,
+                        remaining_budget_ratio=rem_sec_ratio,
+                        spent_seconds_ratio=res_before.spent_seconds_ratio,
+                        remaining_steps_ratio=next_rem_s,
+                        frozen_context_vec=tr.frozen_context_vec,
+                        frozen_action_vec=t_act_vec,
+                        device=device,
+                    )
+                    c_b = base_c_tail.view(1, 1, self.context_dim).expand(
+                        self.ensemble_size, 256, self.context_dim
+                    ).clone()
+                    sp_after = (res_before.spent_seconds_ratio + preds["cost_ratio"]).clamp(0.0, 1.0)
+                    rm_after = (1.0 - sp_after).clamp(0.0, 1.0)
+                    bi = FROZEN_HISTORY_DIM + FROZEN_ACTION_DIM
+                    c_b[:, :, bi + 0] = rm_after.unsqueeze(1)
+                    c_b[:, :, bi + 1] = sp_after.unsqueeze(1)
+                    c_b[:, :, bi + 2] = next_rem_s
+                    c_b[:, :, bi + 10 : bi + 14] = ((grid_idx.to(dtype=c_b.dtype) - 1.5) / 1.5).unsqueeze(0)
+                    c_b[:, :, bi + 14] = (grid_idx[:, 0] == 3).to(dtype=c_b.dtype).unsqueeze(0)
+                    c_b[:, :, bi + 15] = (grid_idx[:, 3] == 3).to(dtype=c_b.dtype).unsqueeze(0)
+                    h_b = self.context_encoder(c_b.reshape(-1, self.context_dim)).view(
+                        self.ensemble_size, 256, self.context_dim
+                    )
+                    oh_b = (
+                        F.one_hot(grid_idx, num_classes=NUM_SLOT_VALUES)
+                        .to(dtype=nb_h.dtype)
+                        .reshape(1, 256, NUM_FIELD_SLOTS * NUM_SLOT_VALUES)
+                        .expand(self.ensemble_size, 256, -1)
+                    )
+                    t_out_h = self.predict_tail_pi0(
+                        pb_g,
+                        h_b,
+                        sp_after,
+                        field_slot_probs=oh_b,
+                        remaining_steps_ratio=next_rem_s,
+                        step_budget_fraction=sf_val,
+                        prior_action_logprob=float(tr.prior_action_logprob),
+                    )
+                    marg_tail_y = (pz_g * t_out_h["tail_y_prob"]).sum(dim=-1)
+                    p_branch_y = (p_succ_h + p_live_h * marg_tail_y).clamp(min=1e-6, max=1.0 - 1e-6)
+                else:
+                    p_branch_y = p_succ_h.clamp(min=1e-6, max=1.0 - 1e-6)
+
+                y_br_t = 1.0 if y_branch_bool else 0.0
+                fork_head_nll = fork_head_nll - (
+                    y_br_t * torch.log(p_branch_y) + (1.0 - y_br_t) * torch.log(1.0 - p_branch_y)
+                )
+                fork_heads_supervised += 1
+
+        # 5. Supervise fixed-tail head H_{phi,m}^{pi_0}(Y, C_tail | Y=1) normalized 1:1 per episode
         tail_member_nll = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
+        num_tail_episodes = max(1, len(ep_tail_counts))
         for tex in tail_examples:
             if tex.censored or tex.observed_y is None:
                 continue
             tail_supervised_count += 1
+            ep_w = 1.0 / float(max(1, ep_tail_counts.get(str(tex.episode_id or "default_ep"), 1)))
             res_b = ResourceState.from_dict(tex.resource_before)
+            eff_step_frac = (
+                float(tex.step_budget_fraction)
+                if tex.step_budget_fraction > 0
+                else 1.0 / max(1.0, float(res_b.max_env_steps))
+            )
             h_ctx_t = self.encode_tail_state_context(
                 goal_text=tex.goal_text,
                 public_fields=tex.pre_public_fields,
@@ -2909,6 +3736,7 @@ class ControlledResponseEnsemble(nn.Module):
                 spent_seconds_ratio=res_b.spent_seconds_ratio,
                 remaining_steps_ratio=res_b.remaining_steps_ratio,
                 frozen_context_vec=tex.frozen_context_vec,
+                frozen_tail_action_vec=tex.frozen_tail_action_vec,
                 device=device,
             )
             spent_vec = torch.full(
@@ -2927,20 +3755,23 @@ class ControlledResponseEnsemble(nn.Module):
                 spent_vec,
                 field_slot_probs=obs_slot_oh,
                 public_fields=tex.pre_public_fields,
+                remaining_steps_ratio=res_b.remaining_steps_ratio,
+                step_budget_fraction=eff_step_frac,
             )
             p_y = tail_preds["tail_y_prob"].clamp(min=1e-6, max=1.0 - 1e-6)
             y_target = 1.0 if tex.observed_y else 0.0
             t_loss = -(y_target * torch.log(p_y) + (1.0 - y_target) * torch.log(1.0 - p_y))
             if tex.observed_y and tex.tail_seconds_cost_ratio is not None:
-                c_ratio = float(min(0.999, max(0.0, tex.tail_seconds_cost_ratio)))
-                bin_idx = min(TAIL_COST_BINS - 1, int(c_ratio * TAIL_COST_BINS))
+                bin_idx = _tail_cost_bin_index(float(tex.tail_seconds_cost_ratio))
                 p_bin = tail_preds["tail_cost_bin_probs"][:, bin_idx].clamp(min=1e-8)
                 t_loss = t_loss - torch.log(p_bin)
-            tail_member_nll = tail_member_nll + t_loss
+            tail_member_nll = tail_member_nll + ep_w * t_loss
 
         n_steps = max(1, len(transitions))
-        combined_member_loss = (total_member_nll / float(n_steps)) + (
-            tail_member_nll / float(max(1, tail_supervised_count)) if tail_supervised_count > 0 else 0.0
+        combined_member_loss = (
+            (total_member_nll / float(n_steps))
+            + (tail_member_nll / float(num_tail_episodes) if tail_supervised_count > 0 else 0.0)
+            + (fork_head_nll / float(max(1, fork_heads_supervised)) if fork_heads_supervised > 0 else 0.0)
         )
         weighted_loss = (b_weights * combined_member_loss).mean()
         return weighted_loss, last_belief.detach(), {
@@ -3050,6 +3881,7 @@ class ActionContrastProposer:
         max_candidate_checks: int = DEFAULT_MAX_CANDIDATE_CHECKS,
         shuffle_witness_labels: bool = False,
         use_model_diff_variant: bool = False,
+        proposer_mode: str = "witness_hard",
         seed: int = 42,
     ) -> None:
         self.benchmark = benchmark.split(":", 1)[0]
@@ -3058,6 +3890,7 @@ class ActionContrastProposer:
         self.max_candidate_checks = int(max_candidate_checks)
         self.shuffle_witness_labels = bool(shuffle_witness_labels)
         self.use_model_diff_variant = bool(use_model_diff_variant)
+        self.proposer_mode = str(proposer_mode or "witness_hard")
         self.rng = random.Random(int(seed))
         self.records: list[MeasurementRecord] = []
         self.unique_witness_pair_ids: set[tuple[str, str]] = set()
@@ -3311,10 +4144,47 @@ class ActionContrastProposer:
         for _, comp_records in sorted(by_comparison.items()):
             if candidates_checked >= self.max_candidate_checks:
                 break
-            pos_records = [rec for rec in comp_records if label_view.get(rec.record_id, 0.0) > 0.01]
-            neg_records = [rec for rec in comp_records if label_view.get(rec.record_id, 0.0) < -0.01]
-            if not pos_records or not neg_records:
-                continue
+            if self.proposer_mode == "conditional_gain":
+                # Continuous conditional selection gain Gamma(f; u, v) = sum_z p(z) max(0, E[d|z]) - max(0, E[d])
+                if len(comp_records) < 2:
+                    continue
+                d_vals = [float(label_view.get(r.record_id, 0.0)) for r in comp_records]
+                base_gain = max(0.0, float(sum(d_vals)) / float(len(d_vals)))
+                all_f_keys = list(dict.fromkeys(k for r in comp_records for k in r.public_readout_z.keys()))
+                best_f = ""
+                best_gamma = 0.0
+                best_pos_z = ""
+                for fk in all_f_keys:
+                    by_z: dict[str, list[float]] = {}
+                    for r, dv in zip(comp_records, d_vals):
+                        raw_z = r.public_readout_z.get(fk, "unknown")
+                        if raw_z == "unknown":
+                            continue
+                        cz = PublicBenchmarkBinder.canonical_slot_predicate_value(fk, raw_z)
+                        by_z.setdefault(cz, []).append(dv)
+                    if len(by_z) < 2:
+                        continue
+                    n_obs = sum(len(vs) for vs in by_z.values())
+                    cond_val = sum((len(vs) / float(n_obs)) * max(0.0, sum(vs) / float(len(vs))) for vs in by_z.values())
+                    gamma = cond_val - base_gain
+                    if gamma > best_gamma + 1e-6:
+                        best_gamma = gamma
+                        best_f = fk
+                        best_pos_z = max(by_z.items(), key=lambda kv: sum(kv[1]) / float(len(kv[1])))[0]
+                if best_gamma <= 1e-6 or not best_f:
+                    continue
+                pos_records = [r for r in comp_records if float(label_view.get(r.record_id, 0.0)) > 0.0]
+                neg_records = [r for r in comp_records if float(label_view.get(r.record_id, 0.0)) < 0.0]
+                if not pos_records or not neg_records:
+                    continue
+            else:
+                best_f = ""
+                best_gamma = 0.0
+                best_pos_z = ""
+                pos_records = [rec for rec in comp_records if label_view.get(rec.record_id, 0.0) > 0.01]
+                neg_records = [rec for rec in comp_records if label_view.get(rec.record_id, 0.0) < -0.01]
+                if not pos_records or not neg_records:
+                    continue
 
             for r1 in pos_records[-6:]:
                 if candidates_checked >= self.max_candidate_checks:
@@ -3328,7 +4198,11 @@ class ActionContrastProposer:
 
                     d1_view = float(label_view[r1.record_id])
                     d2_view = float(label_view[r2.record_id])
-                    contrast_mag = abs(d1_view - d2_view)
+                    contrast_mag = (
+                        float(best_gamma) + 0.5 * abs(d1_view - d2_view)
+                        if self.proposer_mode == "conditional_gain"
+                        else abs(d1_view - d2_view)
+                    )
 
                     differing_fields = [
                         k for k in r1.public_readout_z
@@ -3336,14 +4210,18 @@ class ActionContrastProposer:
                         and r2.public_readout_z.get(k, "unknown") != "unknown"
                         and r1.public_readout_z.get(k) != r2.public_readout_z.get(k)
                     ]
+                    if self.proposer_mode == "conditional_gain" and best_f and best_f not in differing_fields:
+                        differing_fields = [best_f, *differing_fields]
                     ordered_fields = tuple(
                         differing_fields
                         + [k for k in r1.readout_fields if k not in differing_fields]
                     )[:4] or r1.readout_fields
 
-                    cond_f = differing_fields[0] if differing_fields else ""
+                    cond_f = best_f if (self.proposer_mode == "conditional_gain" and best_f) else (
+                        differing_fields[0] if differing_fields else ""
+                    )
                     raw_cond_v = r1.public_readout_z.get(cond_f, "") if cond_f else ""
-                    cond_v = (
+                    cond_v = best_pos_z if (self.proposer_mode == "conditional_gain" and best_pos_z) else (
                         PublicBenchmarkBinder.canonical_slot_predicate_value(cond_f, raw_cond_v)
                         if (cond_f and raw_cond_v)
                         else ""

@@ -1,7 +1,7 @@
 {
   "protocol_version": "native-v1",
   "action_contract_version": "prism-native-text-v1",
-  "dcc_contract_version": "prism-dcc-v2-unified-r3",
+  "dcc_contract_version": "prism-dcc-v2-unified-r4",
   "experiment_id": "prism-qwen7b-dcc-v2-s42-20261110-r10",
   "site_id": "host_b",
   "workload_plan": [
@@ -203,6 +203,11 @@
   "dcc_full_tail_rollout": true,
   "dcc_proposal_budget": 3,
   "dcc_learning_rate": 0.001,
+  "dcc_controller_mode": "expected_utility",
+  "dcc_fork_acquisition": "decision_disagreement",
+  "dcc_cluster_updates_per_block": 4,
+  "dcc_proposer_mode": "witness_hard",
+  "dcc_quantize_prompt_wall_seconds": true,
   "completed_training_imports": {
     "qwen25_7b.alfworld.infopo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/366ce5752ebc4e3e90e547a078c8e58b/cells/qwen25_7b.alfworld.infopo.s42",
     "qwen25_7b.alfworld.step_dpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/366ce5752ebc4e3e90e547a078c8e58b/cells/qwen25_7b.alfworld.step_dpo.s42",

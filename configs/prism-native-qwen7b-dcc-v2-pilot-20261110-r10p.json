@@ -1,8 +1,8 @@
 {
   "protocol_version": "native-v1",
   "action_contract_version": "prism-native-text-v1",
-  "dcc_contract_version": "prism-dcc-v2-unified-r3",
-  "experiment_id": "prism-qwen7b-dcc-v2-pilot-s42-20261110-r10p",
+  "dcc_contract_version": "prism-dcc-v2-unified-r4",
+  "experiment_id": "prism-qwen7b-dcc-v2-pilot-s42-20261111-r11p",
   "site_id": "host_b",
   "workload_plan": [
     {
@@ -186,6 +186,11 @@
   "dcc_full_tail_rollout": true,
   "dcc_proposal_budget": 3,
   "dcc_learning_rate": 0.001,
+  "dcc_controller_mode": "expected_utility",
+  "dcc_fork_acquisition": "decision_disagreement",
+  "dcc_cluster_updates_per_block": 4,
+  "dcc_proposer_mode": "witness_hard",
+  "dcc_quantize_prompt_wall_seconds": true,
   "completed_training_imports": {},
   "reuse_completed_paired_evaluations": false,
   "completed_evaluation_imports": {},
@@ -202,8 +207,8 @@
     "claim": "change_in_feedback_use_on_fixed_initial_policy_anchors"
   },
   "training_budget": {
-    "max_env_steps": 600,
-    "max_model_tokens": 500000,
+    "max_env_steps": 1200,
+    "max_model_tokens": 1200000,
     "max_wall_seconds": 1800
   },
   "training_objective": "U_B=Y*max(0,1-C/B)",
