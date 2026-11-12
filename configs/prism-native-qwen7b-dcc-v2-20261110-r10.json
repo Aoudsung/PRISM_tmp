@@ -215,7 +215,6 @@
   "reusable_baselines_manifest": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/reusable_baselines/qwen25_7b_s42/manifest.json",
   "reuse_completed_paired_evaluations": false,
   "completed_evaluation_imports": {
-    "qwen25_7b.alfworld.frozen_base.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.frozen_base.s42",
     "qwen25_7b.alfworld.gigpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.gigpo.s42",
     "qwen25_7b.alfworld.step_dpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.step_dpo.s42",
     "qwen25_7b.alfworld.infopo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.infopo.s42",

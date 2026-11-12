@@ -1,6 +1,6 @@
 # PRISM-Exact 当前研究状态
 
-> 自动生成，只读摘要。生成时间：2026-11-11T09:23:46+00:00；数据库修订：3855。
+> 自动生成，只读摘要。生成时间：2026-11-12T08:19:45+00:00；数据库修订：3858。
 > 任务和结论通过 prism-knowledge 更新；此页不是另一套可写状态。
 
 ## 有效约束
@@ -29,8 +29,8 @@
   已按用户停下指令终止双方顺序运行器和PRISM子进程，确认无遗留项目实验进程，持久目标已暂停。本次新baseline已自然完成20/20、13正确（65%）、7失败、耗时1137.556秒，453次物理请求usage全部已知、0重试。PRISM刚启动首题：0完成、1题中断、19未开始；4次已落盘请求usage已知，已知输入3659与输出7891 tokens，但中断时可能在途的请求未返回或未落盘，不能将总消耗标完整。PRISM没有最终评分文件，不能把0完成称为0/20成功率；本次也没有配对报告。原始输出、user_stop.json和interruption.json保留，不续跑或拼接，不自动重启。
   owner：lead
   历史依据：doc:docs/RESEARCH_STATE.md，源版本 1，L42–42（用 show --source-revision 读取原文快照）。
-- **R5.1 · PRISM-Evolve 原生环境与完整基线公平协议修复**（in_progress，修订 68）
-  22:09台北小时检查：r7已取得一张卡，LOCA cohort在GPU2实际执行AREW训练，累计约106万计算tokens、成本日志持续更新，无新增异常。alfworld/WebShop两个cohort仍在资源准入队列，GPU0/1由其他native作业占用；本批次当前1个worker，遵守同机配额及最多3并发，不干预其他作业。PoS容器修订尚未进入alfworld实际评测，不能声称已通过触发点。18完成训练阶段及有效评测/记忆来源配置保持。每小时循环heartbeat cc7f4a50保持，下次2026-11-09 23:09台北（UTC15:09）；仍推进全部33单元7799回合与统一统计。
+- **R5.1 · PRISM-Evolve 原生环境与完整基线公平协议修复**（paused，修订 69）
+  按用户三端整理授权完成过时大产物清理与服务器归档。Host B统一索引保留15个基线训练终点（含零更新/预算截断）、8组无门控ALFWorld完整134题评测、9组WebShop部分评测及1组旧门控Frozen Base历史评测。后者原first3初始checkpoint已随旧目录删除，不再登记为当前无门控策略复用。源单元、manifest/schedule与WorldEvolver记忆绝对路径原位保留；自动评测复用仍关闭。Host A保留r12原始轨迹/摘要及Git内r11/r12精简证据，pilot权重已清理。17个历史配置与5个旧脚本只归档在服务器，本地不存archive。两端无活动实验/relay；本次仅文件与元数据检查、mgt01入口检查，不运行训练评测。DCC正式运行尚未开始，研究仍待方法/实现问题解决后另行安排。旧数据被清理的路径不可继续读取，不能把Git当作全部实验数据备份。
   来源：[原文](</Users/cxw/Documents/科研方案实现/long-horizon-decision/docs/prism-evolve-design.md:1>)（doc:docs/prism-evolve-design.md，源版本 1，L1–392；历史原文用 show --source-revision 查看）。
   来源：[原文](</Users/cxw/Documents/科研方案实现/long-horizon-decision/docs/baseline-benchmark-official-audit-20261108.md:1>)（doc:docs/baseline-benchmark-official-audit-20261108.md，源版本 1，L1–210；历史原文用 show --source-revision 查看）。
 

@@ -225,11 +225,11 @@ def _environment(config: Mapping[str, Any], benchmark: str, output: Path, meter=
 
 def _source_files() -> list[Path]:
     files = list((ROOT / "src" / "prism_evolve").rglob("*.py"))
-    for relative in ("scripts/run_prism_evolve_experiments.py", "scripts/run_prism_native_experiments.py",
+    for relative in ("scripts/run_prism_native_experiments.py",
                      "scripts/collect_prism_native_experiments.py",
-                     "configs/prism-native-v1.json", "configs/prism-native-host-a.json",
-                     "configs/prism-native-host-b.json", "configs/prism-native-colab.json",
-                     "scripts/deploy_prism_native_colab.py", "docs/native-experiment-protocol.md", "pyproject.toml"):
+                     "scripts/run_dcc_v2_r12_sota_pilot.py",
+                     "configs/prism-native-host-a.json", "configs/prism-native-host-b.json",
+                     "docs/prism-dcc-v2-design.md", "docs/native-experiment-protocol.md", "pyproject.toml"):
         path = ROOT / relative
         if path.exists():
             files.append(path)
@@ -1044,7 +1044,7 @@ def run_pipeline(config_path: Path, run_dir: Path, *,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Native-v1 remote host shards; legacy results stay immutable.")
-    parser.add_argument("--config", type=Path, default=ROOT / "configs/prism-native-v1.json")
+    parser.add_argument("--config", type=Path, help="Explicit active host/experiment config; required for --prepare/--pipeline.")
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--schedule", action="store_true")
@@ -1061,6 +1061,8 @@ def main() -> None:
         raise SystemExit(worker_bundle(args.worker_bundle, args.gpu))
     if args.run_dir is None:
         parser.error("Supply a new --run-dir (or the existing immutable run for --schedule/--aggregate).")
+    if (args.prepare or args.pipeline) and args.config is None:
+        parser.error("--prepare/--pipeline requires an explicit --config; historical defaults have been archived.")
     if args.pipeline:
         result = run_pipeline(args.config, args.run_dir,
                               selected_backbones=args.backbones, selected_methods=args.methods)
