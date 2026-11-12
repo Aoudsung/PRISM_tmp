@@ -21,7 +21,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from .native_core import BudgetExhausted, BudgetMeter, NativeGeneration, monotonic_seconds
+from .native_core import BudgetExhausted, BudgetMeter, ModelCall, NativeGeneration, monotonic_seconds
 
 
 PROMPT_VERSION = "native-causal-r3.3-public-constructible"
@@ -1491,7 +1491,45 @@ class NativeCausalPolicy(nn.Module):
         greedy: bool = False, program_contract: Mapping[str, Any] | None = None,
         retain_kv_cache: bool = False,
     ) -> NativeGeneration:
-        """Generate exact response tokens and record the physical model request."""
+        """Close the physical attempt in finally, including setup and failed generation."""
+        meter = self.meter
+        call = meter.start_model_call(role, self.model_metadata, PROMPT_VERSION, messages) if meter else None
+        generation = None
+        try:
+            generation = self._complete_impl(
+                messages, role, max_new_tokens=max_new_tokens, temperature=temperature,
+                greedy=greedy, program_contract=program_contract, retain_kv_cache=retain_kv_cache,
+                call_record=call,
+            )
+            if call is not None:
+                call.status = ("TIMEOUT" if generation.metadata.get("wall_deadline_reached") else
+                               "BUDGET_TRUNCATED" if generation.metadata.get("output_limit_reached") else "OK")
+            return generation
+        except BaseException as exc:
+            if call is not None:
+                call.status = ("TIMEOUT" if isinstance(exc, TimeoutError) else
+                               "BUDGET_TRUNCATED" if isinstance(exc, BudgetExhausted) else "ERROR")
+                call.error = f"{type(exc).__name__}: {exc}"
+                if not call.generation_started:
+                    call.usage_complete = True  # known: no physical forward was issued
+            raise
+        finally:
+            if call is not None:
+                cost_id = meter.finish_model_call(call)
+                if generation is not None:
+                    generation.elapsed_seconds = call.timings["total_wall"]
+                    generation.metadata.update(model_call_id=call.call_id, cost_event_ids=[cost_id],
+                                               usage_complete=call.usage_complete,
+                                               model_call_status=call.status,
+                                               lease_status=call.lease_status, timings=dict(call.timings))
+
+    def _complete_impl(
+        self, messages: Sequence[Mapping[str, Any]], role: str = "actor", *,
+        max_new_tokens: int | None = None, temperature: float | None = None,
+        greedy: bool = False, program_contract: Mapping[str, Any] | None = None,
+        retain_kv_cache: bool = False, call_record: ModelCall | None = None,
+    ) -> NativeGeneration:
+        """Generate exact response tokens; the outer complete owns the bill."""
         from transformers import GenerationConfig, LogitsProcessorList, StoppingCriteria, StoppingCriteriaList
 
         limit = self.max_new_tokens if max_new_tokens is None else int(max_new_tokens)
@@ -1499,7 +1537,12 @@ class NativeCausalPolicy(nn.Module):
         temp = self.temperature if temperature is None else float(temperature)
         if limit <= 0 or not math.isfinite(temp) or temp <= 0:
             raise ValueError("Generation length and temperature must be positive.")
+        tokenize_started = monotonic_seconds()
         prompt_ids = self._tokenize_messages(messages)
+        if call_record is not None:
+            call_record.prompt_token_ids = list(prompt_ids)
+            call_record.timings.update(tokenize=monotonic_seconds() - tokenize_started,
+                                       grammar_prepare=0.0, generate=0.0, postprocess=0.0)
         context_remaining = self.max_context_tokens - len(prompt_ids)
         limit = min(limit, context_remaining)
         if limit <= 0:
@@ -1520,6 +1563,8 @@ class NativeCausalPolicy(nn.Module):
             program_processor = self._action_decoder_engine(program_contract).processor(program_contract, len(prompt_ids))
             program_setup_seconds = monotonic_seconds() - setup_started
             processors = LogitsProcessorList([program_processor])
+        if call_record is not None:
+            call_record.timings["grammar_prepare"] = program_setup_seconds
         eos_ids = list(self.eos_token_ids)
         settings: dict[str, Any] = {
             "max_new_tokens": limit, "do_sample": not greedy, "num_beams": 1,
@@ -1570,14 +1615,27 @@ class NativeCausalPolicy(nn.Module):
             self.meter.ensure_model_call(len(prompt_ids), limit, role)
         self._synchronize()
         started = monotonic_seconds()
+        if call_record is not None:
+            call_record.generation_started = True
+            call_record.generation_started_at = started
+            call_record.input_tokens = len(prompt_ids)
+            call_record.output_tokens = None
         with self._model_mode(), torch.no_grad():
             output = self.model.generate(
                 input_ids=prompt, attention_mask=torch.ones_like(prompt),
                 generation_config=GenerationConfig(**settings),
                 stopping_criteria=stopping, logits_processor=processors,
             )
+            self._synchronize()
+            postprocess_started = monotonic_seconds()
+            if call_record is not None:
+                call_record.timings["generate"] = postprocess_started - started
             response = output.sequences[0, len(prompt_ids):]
             response_ids = tuple(int(item) for item in response.tolist())
+            if call_record is not None:
+                call_record.output_tokens = len(response_ids)
+                call_record.response_token_ids = list(response_ids)
+                call_record.usage_complete = True
             if len(output.scores) != len(response_ids):
                 raise RuntimeError("Generation scores do not align with emitted response tokens.")
             token_scores = [
@@ -1617,14 +1675,16 @@ class NativeCausalPolicy(nn.Module):
         stop_reason = ("action_complete" if action_complete else "eos" if eos_reached else
                        "wall_time_budget" if wall_reached else
                        "+".join(limit_sources) if length_reached else "generation_returned")
-        if self.meter:
-            self.meter.record_model_call(len(prompt_ids), len(response_ids), elapsed, role)
+        text = self.tokenizer.decode(response_ids, skip_special_tokens=True,
+                                     clean_up_tokenization_spaces=False)
+        if call_record is not None:
+            call_record.timings["postprocess"] = monotonic_seconds() - postprocess_started
         return NativeGeneration(
-            text=self.tokenizer.decode(response_ids, skip_special_tokens=True,
-                                       clean_up_tokenization_spaces=False),
+            text=text,
             prompt_ids=prompt_ids, response_ids=response_ids, input_tokens=len(prompt_ids),
             output_tokens=len(response_ids), elapsed_seconds=elapsed, role=role,
             metadata={"prompt_version": PROMPT_VERSION, "temperature": temp if not greedy else 1.0,
+                      "actor_messages": deepcopy(list(messages)), "execution_origin": "pi0",
                       **program_metadata,
                       "greedy": bool(greedy), "sampling_log_probs": sampling_log_probs,
                       "max_new_tokens": limit, "requested_max_new_tokens": requested_limit,
@@ -2148,7 +2208,11 @@ class NativeCausalPolicy(nn.Module):
             "prompt_version": PROMPT_VERSION,
             "temperature": 1.0 if greedy else self.temperature,
             "greedy": bool(greedy),
-            "sampling_log_probs": [0.0 for _ in response_ids],
+            "sampling_log_probs": None,
+            "model_call_id": None,
+            "execution_origin": "program",
+            "diagnostic_action_token_length": len(response_ids),
+            "diagnostic_prompt_token_length": len(prompt_ids) + len(mode_prompt_ids),
             "max_new_tokens": self.max_new_tokens,
             "requested_max_new_tokens": self.max_new_tokens,
             "output_limit_reached": False,
@@ -2168,7 +2232,7 @@ class NativeCausalPolicy(nn.Module):
             "gate_active": gate_active,
             "mode_sampled": False,
             "mode_temperature": 1.0 if greedy else self.temperature,
-            "mode_log_probability": math.log(0.5) if gate_active else 0.0,
+            "mode_log_probability": None,
             "gate_probability": 0.5 if gate_active else float(selected_mode == "I"),
             "forced_mode": None,
             "action_schema": public_schema,
@@ -2186,8 +2250,8 @@ class NativeCausalPolicy(nn.Module):
             mode=selected_mode,
             mode_prompt_ids=mode_prompt_ids,
             mode_token_id=self.mode_token_ids.get(selected_mode) if gate_active else None,
-            input_tokens=len(prompt_ids) + len(mode_prompt_ids),
-            output_tokens=len(response_ids) + int(gate_active),
+            input_tokens=0,
+            output_tokens=0,
             elapsed_seconds=planning_elapsed,
             role=role,
             metadata=metadata,

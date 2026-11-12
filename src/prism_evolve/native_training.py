@@ -380,6 +380,15 @@ def public_trace(trajectory: NativeTrajectory, *, method: str | None = None) -> 
     for index, event in enumerate(trajectory.events):
         record = {
             "index": index, "messages_before": event.messages_before,
+            "actor_messages": event.generation.metadata.get("actor_messages"),
+            "action_execution": {
+                "origin": event.generation.metadata.get("execution_origin", "pi0"),
+                "model_call_id": event.generation.metadata.get("model_call_id"),
+                "program_version": event.generation.metadata.get("program_version"),
+                "node_version": event.generation.metadata.get("node_version"),
+                "cost_event_ids": list(event.generation.metadata.get("cost_event_ids", []))
+                    + list(event.metadata.get("cost_event_ids", [])),
+            },
             "action": event.generation.action, "response": event.generation.text,
             "mode": event.generation.mode, "observation": event.observation,
             "prompt_token_ids": list(event.generation.prompt_ids),
@@ -394,7 +403,8 @@ def public_trace(trajectory: NativeTrajectory, *, method: str | None = None) -> 
                 "eos_token_ids", "eos_reached", "wall_deadline_reached", "generation_stop_reason",
                 "generation_limit_sources", "requested_max_new_tokens",
                 "program_complete", "program_eos_accepted", "program_compile_seconds",
-                "counterfactual_support",
+                "counterfactual_support", "model_call_id", "usage_complete", "model_call_status",
+                "lease_status", "timings", "diagnostic_action_token_length", "diagnostic_prompt_token_length",
             ) if key in event.generation.metadata},
             "native_step": dict(event.metadata.get("native_step", {})),
             "receipts": deepcopy(event.receipts),
@@ -404,7 +414,8 @@ def public_trace(trajectory: NativeTrajectory, *, method: str | None = None) -> 
             "environment_seconds": event.environment_seconds,
         }
         if event.generation.metadata.get("classic_text"):
-            record["response_representation"] = "model_sampled_native_action"
+            record["response_representation"] = ("deterministic_bound_native_action"
+                if event.generation.metadata.get("program_bound_execution") else "model_sampled_native_action")
             record["action_representation"] = "native_text"
             record["text_action_contract"] = {
                 key: value for key, value in event.generation.metadata.get("text_action_contract", {}).items()
@@ -432,6 +443,8 @@ def public_trace(trajectory: NativeTrajectory, *, method: str | None = None) -> 
                 record[key] = asdict(value) if isinstance(value, NativeGeneration) else value
         events.append(record)
     return {"task_id": trajectory.task_id, "scenario_id": trajectory.scenario_id,
+            "initial_observation": trajectory.metadata.get("public_reset_observation"),
+            "goal": trajectory.metadata.get("public_goal"),
             "success": trajectory.success, "utility": trajectory.utility,
             "training_return": trajectory.training_return,
             "termination": trajectory.termination, "elapsed_seconds": trajectory.elapsed_seconds,
@@ -638,6 +651,7 @@ def rollout(
     capture_information: dict[str, Any] | None = None,
     dcc_episode_preinitialized: bool = False,
     record_dcc_features: bool = False,
+    trajectory_capture: dict[str, Any] | None = None,
 ) -> NativeTrajectory:
     """Run the actual actor until native termination or an explicit experiment cap.
 
@@ -687,8 +701,12 @@ def rollout(
             events=list(prefix), elapsed_seconds=float(prefix_seconds),
             budget_seconds=limits.max_wall_seconds,
             metadata={"environment_seed": seed,
+                      "public_reset_observation": context.get("observation"),
+                      "public_goal": context.get("instruction", task_info.get("instruction", "")),
                       "actor_contract": actor_contract(method, classic_text=bool(env.action_schema.get("classic_text")))},
         )
+        if trajectory_capture is not None:
+            trajectory_capture["trajectory"] = trajectory
         messages = ([dict(item) for item in prefix_messages] if prefix_messages is not None
                     else initial_messages(context))
         started = monotonic_seconds()
@@ -766,12 +784,14 @@ def rollout(
                 if not isinstance(generation.action, Mapping):
                     raise RuntimeError("The actor returned no compiled native action.")
                 env_started = monotonic_seconds()
+                cost_start = len(meter.cost_events)
                 step = env.step(generation.action) if gated_actor else env.step_native(generation.action)
                 post_submission_seconds += terminal_scoring_seconds(env, step)
                 event = NativeEvent(
                     messages_before=before, generation=generation, observation=step.observation,
                     environment_seconds=monotonic_seconds() - env_started,
                     metadata={"public_error": _public_error(step.metadata, step.observation),
+                              "cost_event_ids": [cost["cost_event_id"] for cost in meter.cost_events[cost_start:]],
                               "native_step": dict(step.metadata), "native_done": bool(step.done),
                               "native_terminal_success": bool(step.done and step.success)},
                     receipts=deepcopy(step.metadata.get("receipts", [])),

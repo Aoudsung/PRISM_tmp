@@ -409,7 +409,17 @@ def _episode_meter(config: Mapping[str, Any], path: Path, parent=None) -> Budget
 
 def _save_trace(path: Path, trajectory) -> None:
     from .native_training import public_trace
-    _json(path, public_trace(trajectory), exclusive=True)
+    record = public_trace(trajectory)
+    _json(path, record, exclusive=True)
+    if trajectory.events and trajectory.events[0].generation.metadata.get("classic_text"):
+        from .native_trace_artifacts import export_trace, put_blob, write_json_exclusive
+        root = path.parent.parent
+        exported = export_trace(root, record, path.stem)
+        write_json_exclusive(root / "trace_manifests" / (path.stem + ".json"), {
+            "raw_trace_ref": put_blob(root, path.read_text(encoding="utf-8")),
+            "export_path": "trace_exports/" + path.stem + ".json",
+            "public_input_ref": exported["public_input_ref"],
+        })
 
 
 def _train_cell(policy, config, manifest, cell, directory, initial):

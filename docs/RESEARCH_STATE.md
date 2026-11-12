@@ -1,6 +1,6 @@
 # PRISM-Exact 当前研究状态
 
-> 自动生成，只读摘要。生成时间：2026-11-12T08:19:45+00:00；数据库修订：3858。
+> 自动生成，只读摘要。生成时间：2026-11-12T10:29:45+00:00；数据库修订：3862。
 > 任务和结论通过 prism-knowledge 更新；此页不是另一套可写状态。
 
 ## 有效约束
@@ -11,6 +11,7 @@
 - **K-macro-orchestration-20261106 · 主代理仅宏观统筹，具体执行由已声明模型与强度的执行者承担**：用户要求本会话主代理只负责需求、规划、任务分配、沟通与最终验收，不参与具体实施；每次分配简洁告知所用模型及thinking effort。当前具体双机运维交GPT-6.1 Sol high执行，核心科研或训练接口修复交GPT-6 Astra high。用户暂缓Colab，先在Host A/B依据真实训练表现判断可行性。
 - **K-magpie-local-execution-20261029 · 允许本机实验；当前仅WorkBuddy与百炼**：用户允许本机执行、主动处理真实故障，并已明确要求以WorkBuddy自定义cn:deepseek-v4.1-flash替换后续全部原生WorkBuddy来源；该模型配置指定https://dyschop.online:8444/v1，使用既有密钥，已获明确验证及后续实验接入授权。百炼仅保留既有格式修复及原100元预算保护。Qoder系列仍撤回；不改变全局代理或其他聊天来源。用户选择全部后续换源、接受旧题跨来源比较限制，要求保留完成结果且不重跑，并独立记账。
 - **K-minimal-validation-current · 只处理主线必要故障，不扩展测试与评审**：用户最新明确禁止把新故障的必要验证扩大成多轮合成用例、兼容回归和评审，反复检查相近问题拖慢正式实验；所有实验须有意义且保持主线。复用已有适用证据。当前只做官方完整PoS必要接入并推进正式公共基准比较；遇实际阻断，定位根因、最小修复、一次针对触发点验证，不追加测试套件或重复评审。
+- **K-model-allowlist-20261112 · 后续模型仅从三项允许来源选择**：用户明确要求后续所有模型只能从 kimi-k3.1-pro、deepseek-v4-1-flash 或 6.1 sol 中选择，thinking effort由主代理按任务决定。Gate 0执行使用GPT-6.1 Sol high，不再使用Astra。
 - **K-prism-active-watcher-20261030 · 恢复五分钟监测并主动修复确定性故障**：用户明确选择恢复监测与主动处理：每5分钟检查当前正式运行，确定性重复故障先止损留证并在原授权范围最小修复；不只告警任其消耗。主代理工作时不并发写入或另启实验，正常推进保持安静。只允许WorkBuddy与百炼，不恢复已撤回的Qoder来源。
 - **K-prism-native-formal-only-20261105 · 完整实现后仅在Host B统一正式实验，禁止单元测试与额外核验**：用户直接约束（2026-11-05）：全部实现完成后统一正式实验，禁止单元测试、独立试运行、不必要的审计核验、任何新增兜底和逐阶段放行。Host A与Host B均获授权；训练和评测允许共享GPU。旧日志和结果保留，新正式实验独立记录；真实运行故障保留现场并直接修复，不自动重跑、不换方法或缩预算。
 - **K-public-pos-comparison-20261029 · 仅完整PoS与PRISM的同条件公共基准对照**：唯一强对照仍为官方完整PoS，固定同一303题，开发校准20题和调试4题仍排除。保留139完成结果与1117已存返回，不重复模型调用；全部后续主调用cn:deepseek-v4.1-flash经dyschop网关，原百炼JSON修复次数和上限不变，Task8192/belief4096/Sentinels2048低思考，百炼Sentinels512非思考，PRISM compiler2048，每题最多4编译调用、环境100步、后续并发1（用户明确授权；原并发4阶段保留）。原134/169提示分组保留，PRISM仍完整303题。用户接受旧题跨来源限制并提供同模型判断；完整总体统计保留，同时标注实际来源、同来源配对数量，不能把跨服务结果冒充严格同服务条件。各来源用量和费用单独记录，网关费率未知为null，不套百炼费率；所有历史用量和未知费用保留，复制账本按ID去重。 用户已明确选择单并发恢复，若仍CPU过载则停止等待。对明确503/system_cpu_overloaded的已失败请求，保留原记录且仅各允许一次完全相同输入的恢复；不重跑完成题或改模型答案。单并发下再次同类503时共享等待保持原调用栈，不自动重发或猜窗口。最终必须披露并发阶段和基础设施恢复；SDK retries仍0，原JSON修复次数不变。
@@ -29,10 +30,10 @@
   已按用户停下指令终止双方顺序运行器和PRISM子进程，确认无遗留项目实验进程，持久目标已暂停。本次新baseline已自然完成20/20、13正确（65%）、7失败、耗时1137.556秒，453次物理请求usage全部已知、0重试。PRISM刚启动首题：0完成、1题中断、19未开始；4次已落盘请求usage已知，已知输入3659与输出7891 tokens，但中断时可能在途的请求未返回或未落盘，不能将总消耗标完整。PRISM没有最终评分文件，不能把0完成称为0/20成功率；本次也没有配对报告。原始输出、user_stop.json和interruption.json保留，不续跑或拼接，不自动重启。
   owner：lead
   历史依据：doc:docs/RESEARCH_STATE.md，源版本 1，L42–42（用 show --source-revision 读取原文快照）。
-- **R5.1 · PRISM-Evolve 原生环境与完整基线公平协议修复**（paused，修订 69）
-  按用户三端整理授权完成过时大产物清理与服务器归档。Host B统一索引保留15个基线训练终点（含零更新/预算截断）、8组无门控ALFWorld完整134题评测、9组WebShop部分评测及1组旧门控Frozen Base历史评测。后者原first3初始checkpoint已随旧目录删除，不再登记为当前无门控策略复用。源单元、manifest/schedule与WorldEvolver记忆绝对路径原位保留；自动评测复用仍关闭。Host A保留r12原始轨迹/摘要及Git内r11/r12精简证据，pilot权重已清理。17个历史配置与5个旧脚本只归档在服务器，本地不存archive。两端无活动实验/relay；本次仅文件与元数据检查、mgt01入口检查，不运行训练评测。DCC正式运行尚未开始，研究仍待方法/实现问题解决后另行安排。旧数据被清理的路径不可继续读取，不能把Git当作全部实验数据备份。
-  来源：[原文](</Users/cxw/Documents/科研方案实现/long-horizon-decision/docs/prism-evolve-design.md:1>)（doc:docs/prism-evolve-design.md，源版本 1，L1–392；历史原文用 show --source-revision 查看）。
-  来源：[原文](</Users/cxw/Documents/科研方案实现/long-horizon-decision/docs/baseline-benchmark-official-audit-20261108.md:1>)（doc:docs/baseline-benchmark-official-audit-20261108.md，源版本 1，L1–210；历史原文用 show --source-revision 查看）。
+- **R5.1 · PRISM-Evolve 原生环境与完整基线公平协议修复**（paused_gate0_fail_input_coverage，修订 70）
+  用户明确启动 2026-11-12 程序图 Gate 0 合同。实现与真实运行已完成本轮：恢复86条r12完整轨迹并新增每基准10个训练split冻结基座episode，共30个、506环境步、5005676物理模型Token；固定18窗。原始完整性、公共字段扰动、物理调用闭合与租约检查通过。固定ALFWorld/WebShop正窗缺少至少两个不同绑定、相同结构且结果真实消费的Loop见证，按合同以FAIL_INPUT_COVERAGE停止；真实编译调用0，AST实证回放、语义A/B成本和启动可达性均未执行，Gate 0整体FAIL，不进入Gate 1/2。r1 GPU0加载权重发生ECC且零生成/episode，r2仅切换mgt01 GPU2并复用相同输入。原始包、全部账单、日志和机器报告保留。后续修改确定性窗口规则须另立协议与运行身份，不在r2换窗、补采或回填通过。
+  来源：[原文](</apps/users/adminuser/prism-exact-reproduction/docs/prism-evolve-design.md:1>)（doc:docs/prism-evolve-design.md，源版本 1，L1–392；历史原文用 show --source-revision 查看）。
+  来源：[原文](</apps/users/adminuser/prism-exact-reproduction/docs/baseline-benchmark-official-audit-20261108.md:1>)（doc:docs/baseline-benchmark-official-audit-20261108.md，源版本 1，L1–210；历史原文用 show --source-revision 查看）。
 
 ## 历史覆盖
 
