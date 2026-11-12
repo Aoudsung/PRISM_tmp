@@ -200,22 +200,32 @@
     "qwen25_7b.alfworld.step_dpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/366ce5752ebc4e3e90e547a078c8e58b/cells/qwen25_7b.alfworld.step_dpo.s42",
     "qwen25_7b.alfworld.gigpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/366ce5752ebc4e3e90e547a078c8e58b/cells/qwen25_7b.alfworld.gigpo.s42",
     "qwen25_7b.alfworld.arew.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/366ce5752ebc4e3e90e547a078c8e58b/cells/qwen25_7b.alfworld.arew.s42",
+    "qwen25_7b.alfworld.t3.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r6/executions/f3c347b5a0414d9e9d66cf45d96e5a19/cells/qwen25_7b.alfworld.t3.s42",
     "qwen25_7b.webshop.gigpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/e293b65c1f1a485b8105f65e31bd02c0/cells/qwen25_7b.webshop.gigpo.s42",
     "qwen25_7b.webshop.step_dpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/e293b65c1f1a485b8105f65e31bd02c0/cells/qwen25_7b.webshop.step_dpo.s42",
     "qwen25_7b.webshop.infopo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/e293b65c1f1a485b8105f65e31bd02c0/cells/qwen25_7b.webshop.infopo.s42",
     "qwen25_7b.webshop.arew.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r6/executions/dcf193f653f045bf8694ffd227295a68/cells/qwen25_7b.webshop.arew.s42",
-    "qwen25_7b.alfworld.t3.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r6/executions/f3c347b5a0414d9e9d66cf45d96e5a19/cells/qwen25_7b.alfworld.t3.s42",
-    "qwen25_7b.loca.infopo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r6/executions/14f98bdd8adb4003aa49eb6b745cd0d3/cells/qwen25_7b.loca.infopo.s42",
+    "qwen25_7b.webshop.t3.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/6ee0069d1d76443daf3b10ccf72bd457/cells/qwen25_7b.webshop.t3.s42",
+    "qwen25_7b.loca.gigpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/a9169fb829ad41cdb78e290fba49080c/cells/qwen25_7b.loca.gigpo.s42",
     "qwen25_7b.loca.step_dpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/a9169fb829ad41cdb78e290fba49080c/cells/qwen25_7b.loca.step_dpo.s42",
-    "qwen25_7b.loca.gigpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r5/executions/a9169fb829ad41cdb78e290fba49080c/cells/qwen25_7b.loca.gigpo.s42"
+    "qwen25_7b.loca.infopo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r6/executions/14f98bdd8adb4003aa49eb6b745cd0d3/cells/qwen25_7b.loca.infopo.s42",
+    "qwen25_7b.loca.arew.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r7/executions/66013f47c9b54777addadc5972d92529/cells/qwen25_7b.loca.arew.s42",
+    "qwen25_7b.loca.t3.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-main11-s42-20261109-r7/executions/66013f47c9b54777addadc5972d92529/cells/qwen25_7b.loca.t3.s42"
   },
+  "reusable_baselines_manifest": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/reusable_baselines/qwen25_7b_s42/manifest.json",
   "reuse_completed_paired_evaluations": false,
-  "completed_evaluation_imports": {},
-  "historical_gated_frozen_base_imports": {
-    "qwen25_7b.webshop.frozen_base.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-first3-s42-20261109-r4/executions/5aa7653e494947e8b45b5af75aa4664d/cells/qwen25_7b.webshop.frozen_base.s42",
-    "qwen25_7b.alfworld.frozen_base.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-first3-s42-20261109-r4/executions/70764f002ec04af1beebaafdef3eaad4/cells/qwen25_7b.alfworld.frozen_base.s42",
-    "qwen25_7b.loca.frozen_base.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-first3-s42-20261109-r4/executions/cadff2a2a62b48f4877ced52f11eda57/cells/qwen25_7b.loca.frozen_base.s42"
+  "completed_evaluation_imports": {
+    "qwen25_7b.alfworld.frozen_base.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.frozen_base.s42",
+    "qwen25_7b.alfworld.gigpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.gigpo.s42",
+    "qwen25_7b.alfworld.step_dpo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.step_dpo.s42",
+    "qwen25_7b.alfworld.infopo.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.infopo.s42",
+    "qwen25_7b.alfworld.arew.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.arew.s42",
+    "qwen25_7b.alfworld.t3.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.t3.s42",
+    "qwen25_7b.alfworld.worldevolver.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.worldevolver.s42",
+    "qwen25_7b.alfworld.envprobe_simple.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.envprobe_simple.s42",
+    "qwen25_7b.alfworld.envprobe_judge.s42": "/home/chenxiangwei/workspace/long-horizon-decision/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-s42-20261109-r7/executions/b03fef72a15c4c3fa496f139dc12181f/cells/qwen25_7b.alfworld.envprobe_judge.s42"
   },
+  "historical_gated_frozen_base_imports": {},
   "allow_expanded_method_evaluation_reuse": false,
   "feedback_diagnostic": {
     "enabled": false,
