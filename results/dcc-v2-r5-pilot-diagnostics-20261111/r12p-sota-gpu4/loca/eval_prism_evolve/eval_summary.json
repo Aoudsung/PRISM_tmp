@@ -1,0 +1,50 @@
+{
+  "method": "prism_evolve",
+  "tasks": 2,
+  "successes": 0,
+  "success_rate": 0.0,
+  "mean_utility_u_b": 0.0,
+  "mean_elapsed_seconds": 101.88786094728857,
+  "mean_env_steps": 5.0,
+  "total_model_tokens": 256607,
+  "consecutive_repeat_steps": 8,
+  "dcc_steps_total": 10,
+  "prior_action_overrides": 9,
+  "program_attributed_steps": 0,
+  "per_task": [
+    {
+      "task_index": 0,
+      "task_id": "loca/8k/CanvasArrangeExamS2LEnv/seed_20001",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 102.0881433263421,
+      "env_steps": 5,
+      "model_tokens": 128335,
+      "termination": "budget:model_tokens",
+      "actions": [
+        "{\"arguments\":{\"course_id\":1.0,\"question_id\":1.0,\"quiz_id\":1.0},\"name\":\"canvas_canvas_update_quiz_question\"}",
+        "{\"arguments\":{\"course_id\":1.0,\"question_id\":1.0,\"quiz_id\":1.0},\"name\":\"canvas_canvas_update_quiz_question\"}",
+        "{\"arguments\":{\"course_id\":1.0,\"question_id\":1.0,\"quiz_id\":1.0},\"name\":\"canvas_canvas_update_quiz_question\"}",
+        "{\"arguments\":{\"course_id\":1.0,\"question_id\":1.0,\"quiz_id\":1.0},\"name\":\"canvas_canvas_update_quiz_question\"}",
+        "{\"arguments\":{\"course_id\":1.0,\"question_id\":1.0,\"quiz_id\":1.0},\"name\":\"canvas_canvas_update_quiz_question\"}"
+      ]
+    },
+    {
+      "task_index": 1,
+      "task_id": "loca/8k/CanvasArrangeExamS2LEnv/seed_20002",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 101.68757856823504,
+      "env_steps": 5,
+      "model_tokens": 128272,
+      "termination": "budget:model_tokens",
+      "actions": [
+        "{\"arguments\":{\"course_id\":1.0,\"question_id\":1.0,\"quiz_id\":1.0},\"name\":\"canvas_canvas_update_quiz_question\"}",
+        "{\"arguments\":{\"course_id\":1.0,\"question_id\":1.0,\"quiz_id\":1.0},\"name\":\"canvas_canvas_update_quiz_question\"}",
+        "{\"arguments\":{\"course_id\":1.0,\"question_id\":1.0,\"quiz_id\":1.0},\"name\":\"canvas_canvas_update_quiz_question\"}",
+        "{\"arguments\":{\"course_id\":1.0,\"question_id\":1.0,\"quiz_id\":1.0},\"name\":\"canvas_canvas_update_quiz_question\"}",
+        "{\"arguments\":{\"course_id\":1.0,\"question_id\":1.0,\"quiz_id\":1.0},\"name\":\"canvas_canvas_update_quiz_question\"}"
+      ]
+    }
+  ]
+}

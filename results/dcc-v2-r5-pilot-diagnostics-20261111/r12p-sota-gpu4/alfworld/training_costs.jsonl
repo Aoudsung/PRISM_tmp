@@ -1,0 +1,678 @@
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1054, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.28549356386065483}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 177, "elapsed_seconds": 1.315468329936266}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12027646042406559}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 1790, "elapsed_seconds": 0.4322839053347707}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08970207162201405}
+{"kind": "snapshot_save", "elapsed_seconds": 0.006577830761671066}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2443, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.5615929570049047}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 241, "elapsed_seconds": 1.3156662238761783}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.13373494800180197}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3105, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 0.6843577781692147}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09959103167057037}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3605, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 0.7100897273048759}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11397737450897694}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4150, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.763368995860219}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08037026319652796}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4701, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9298686403781176}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08520106598734856}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5250, "output_tokens": 2, "forward_tokens": 0, "elapsed_seconds": 0.8679944183677435}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10200550779700279}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5772, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.0799795193597674}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10230041109025478}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6358, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.2201115228235722}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10203229635953903}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6928, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 1.394878282211721}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10958509054034948}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7607, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.4759053802117705}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11395904142409563}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8269, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 1.6484644236043096}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0977894039824605}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8769, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.6901101302355528}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10505630914121866}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9314, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7822503317147493}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08977257087826729}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9865, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.870179882273078}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10512252617627382}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10413, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.9792559212073684}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10021464619785547}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10962, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.065611886791885}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0999875059351325}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11511, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.2117017144337296}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08604072500020266}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "snapshot_restore", "elapsed_seconds": 1.500764699652791, "replayed_env_steps": 2}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08099567703902721}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2934, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.5975874401628971}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10082135535776615}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3481, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.6597721381112933}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0995211424306035}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4025, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.7587618827819824}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10064698569476604}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4569, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8881795359775424}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09576495829969645}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5113, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9220354240387678}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09601456765085459}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5657, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.043420696631074}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0973599012941122}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6200, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.1499424148350954}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0970667153596878}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6744, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.2698547905310988}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11576839629560709}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7288, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.58311262819916}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10010156780481339}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7832, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.505591626279056}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09800069499760866}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8376, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.569589621387422}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10000326856970787}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8920, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.6896310625597835}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09921775944530964}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9464, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7700722767040133}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0996920159086585}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10007, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.9211205272004008}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09634642954915762}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10551, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.0017060562968254}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09918912407010794}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11095, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.1340835345909}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10261587332934141}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11639, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.2195133278146386}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10078668873757124}
+{"kind": "gradient_update", "elapsed_seconds": 0.6574986157938838}
+{"kind": "gradient_update", "elapsed_seconds": 0.6594071360304952}
+{"kind": "gradient_update", "elapsed_seconds": 0.38719032797962427}
+{"kind": "gradient_update", "elapsed_seconds": 0.3971246751025319}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1054, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.289864856749773}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 177, "elapsed_seconds": 1.012233548797667}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11403257586061954}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1754, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.4320593075826764}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 232, "elapsed_seconds": 1.2511708587408066}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08985931798815727}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2396, "output_tokens": 2, "forward_tokens": 0, "elapsed_seconds": 0.40772074554115534}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 232, "elapsed_seconds": 1.2941911863163114}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11201000679284334}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 3047, "elapsed_seconds": 0.6535324938595295}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12369175255298615}
+{"kind": "snapshot_save", "elapsed_seconds": 0.002697189338505268}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3680, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.7296479418873787}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 232, "elapsed_seconds": 1.382276738062501}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11469141766428947}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4322, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8020121371373534}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.14133540447801352}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4964, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9345769276842475}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11276812478899956}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5606, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.0197782795876265}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12035103049129248}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6248, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.1595361465588212}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08850507438182831}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6889, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.522790809161961}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11767583712935448}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7531, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.4230604069307446}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10521637089550495}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8173, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5282041225582361}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11241687275469303}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8815, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.670769039541483}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10322726517915726}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9457, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7865365985780954}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11420593690127134}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10099, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.9020247273147106}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11334609892219305}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10741, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.0238198144361377}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10853035654872656}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11382, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.1735556051135063}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.13209952972829342}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 12024, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.2862911336123943}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11100064218044281}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "snapshot_restore", "elapsed_seconds": 1.5289494739845395, "replayed_env_steps": 4}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08069632202386856}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4138, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 0.7949216337874532}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07377495430409908}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4640, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8681478165090084}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09868153929710388}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5340, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.985891031101346}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09327656123787165}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5982, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 1.2629053127020597}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07717836555093527}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6490, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.2440865794196725}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09639717452228069}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7035, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 1.3997715953737497}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09126549866050482}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7689, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.4383101128041744}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11510977614670992}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8331, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5694805830717087}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08527474198490381}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8973, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.6901596579700708}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.1120134349912405}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9615, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 1.8969681058079004}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09442330617457628}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10124, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.9371654381975532}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09525303542613983}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10668, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 2.1050352416932583}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11405802704393864}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11322, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.13914467766881}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11147119663655758}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11964, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 2.3644338119775057}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09703405760228634}
+{"kind": "gradient_update", "elapsed_seconds": 0.30139623302966356}
+{"kind": "gradient_update", "elapsed_seconds": 0.37839264422655106}
+{"kind": "gradient_update", "elapsed_seconds": 0.38468619622290134}
+{"kind": "gradient_update", "elapsed_seconds": 0.384646731428802}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1055, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.2877625487744808}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 177, "elapsed_seconds": 1.0019160397350788}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12268811278045177}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1887, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.4253534786403179}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 270, "elapsed_seconds": 1.4009613348171115}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12853917200118303}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2628, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.5418301187455654}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 270, "elapsed_seconds": 1.4428629595786333}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12770165409892797}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 3378, "elapsed_seconds": 0.6926133325323462}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12930130492895842}
+{"kind": "snapshot_save", "elapsed_seconds": 0.0052275275811553}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4110, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.7744807321578264}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 270, "elapsed_seconds": 1.577169382944703}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12655717320740223}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4851, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9392298478633165}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11676433216780424}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5592, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.0239622872322798}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12215051520615816}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6333, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.1549332533031702}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.1290247067809105}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7074, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.314570328220725}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.1182252112776041}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7814, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.4874413833022118}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12520285230129957}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8555, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.6144337225705385}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12634725589305162}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9296, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.774889713153243}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.13493399415165186}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10037, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.8987970184534788}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12421825621277094}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10778, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.023540816269815}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10537020210176706}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11519, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.1796864671632648}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12518152222037315}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 12260, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.30256559420377}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12213963642716408}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 13000, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.4836369967088103}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12511059641838074}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "snapshot_restore", "elapsed_seconds": 1.7599968295544386, "replayed_env_steps": 4}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07213992159813643}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4530, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 0.8614835478365421}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09422254469245672}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5032, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9262209516018629}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12526243645697832}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5864, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.0882652616128325}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11105196084827185}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6605, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.2817383110523224}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11998786684125662}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7345, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 1.575971140526235}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11367432679980993}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7816, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.5063871052116156}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10783372819423676}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8361, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 1.6663672681897879}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12390729133039713}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9131, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7147814994677901}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.1324558099731803}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9872, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.8592783426865935}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12368871178478003}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10613, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.9932662835344672}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11368756648153067}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11354, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 2.260685509070754}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10445293970406055}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11824, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 2.291551122441888}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10845741257071495}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 12369, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.4044839963316917}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.120658740401268}
+{"kind": "gradient_update", "elapsed_seconds": 0.2884850427508354}
+{"kind": "gradient_update", "elapsed_seconds": 0.36531502939760685}
+{"kind": "gradient_update", "elapsed_seconds": 0.39111474715173244}
+{"kind": "gradient_update", "elapsed_seconds": 0.3439955012872815}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 725, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.25037135276943445}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 93, "elapsed_seconds": 0.564339597709477}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09214562829583883}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1399, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.34855210967361927}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 187, "elapsed_seconds": 0.9104569535702467}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0911029102280736}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1968, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.47702812496572733}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 187, "elapsed_seconds": 0.9680813588202}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10172814875841141}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2537, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.5171410171315074}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 187, "elapsed_seconds": 1.008606151677668}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09148576948791742}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 3115, "elapsed_seconds": 0.6399026867002249}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09869694337248802}
+{"kind": "snapshot_save", "elapsed_seconds": 0.0016087191179394722}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3675, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.7063803793862462}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 187, "elapsed_seconds": 1.0380546851083636}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10718845389783382}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4244, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.771537403576076}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06533539947122335}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4813, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9001837084069848}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06908376701176167}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5382, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.0112343849614263}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09717831760644913}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5951, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.1162261348217726}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07281142100691795}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6519, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.224570419639349}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09822801873087883}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7088, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.468850682489574}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10527943447232246}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7657, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.4522809153422713}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09471437241882086}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8226, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.539566340856254}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0952502191066742}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8795, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.661684826016426}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0910981297492981}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9364, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7468197410926223}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08695129118859768}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9932, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.8773347288370132}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09463007189333439}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10501, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.9940782580524683}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06806923635303974}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11070, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.1066429624333978}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09257372096180916}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11639, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.2270656526088715}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08960551396012306}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "snapshot_restore", "elapsed_seconds": 1.0935706133022904, "replayed_env_steps": 5}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06694308295845985}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3923, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 0.80909813195467}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06673548277467489}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4259, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8056390825659037}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09951113071292639}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4933, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9584143757820129}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09796381276100874}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5502, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 1.1668380228802562}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06792310997843742}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5808, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.0946409879252315}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07524710241705179}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6183, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.181077841669321}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.05329636670649052}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6589, "output_tokens": 11, "forward_tokens": 0, "elapsed_seconds": 1.420915575698018}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0786973237991333}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7039, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.3351552886888385}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0730377659201622}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7479, "output_tokens": 11, "forward_tokens": 0, "elapsed_seconds": 1.5716760782524943}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.048535545356571674}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7842, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.513366211205721}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07913667801767588}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8222, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5420980220660567}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07349648606032133}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8646, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 1.7290631225332618}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0663140993565321}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9253, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7474817344918847}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09468612540513277}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9822, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 1.978652261197567}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.05755982547998428}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10129, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 2.016129138879478}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08420051541179419}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10736, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.0408826069906354}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09000604785978794}
+{"kind": "gradient_update", "elapsed_seconds": 0.3353966297581792}
+{"kind": "gradient_update", "elapsed_seconds": 0.3739735186100006}
+{"kind": "gradient_update", "elapsed_seconds": 0.3165308553725481}
+{"kind": "gradient_update", "elapsed_seconds": 0.37160022370517254}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 725, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.2467810930684209}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 93, "elapsed_seconds": 0.5733746318146586}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08566705696284771}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1362, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.35919962264597416}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 177, "elapsed_seconds": 0.8810128001496196}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.087550631724298}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1903, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.4296910585835576}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 177, "elapsed_seconds": 0.9366917544975877}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08878203108906746}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 2453, "elapsed_seconds": 0.6097036078572273}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08602623920887709}
+{"kind": "snapshot_save", "elapsed_seconds": 0.0015497040003538132}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2985, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.6726675694808364}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 177, "elapsed_seconds": 0.9719224236905575}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08826480153948069}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3526, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.679374011233449}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09481258038431406}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4067, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.7727712150663137}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09035912342369556}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4608, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8776870453730226}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07694098725914955}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5149, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9486068924888968}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08776684757322073}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5690, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.0651692152023315}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07155684102326632}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6230, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.1520414259284735}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09119939245283604}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6771, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.2693818639963865}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09040080662816763}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7312, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.3742914907634258}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08285500016063452}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7853, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5021082032471895}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08891034591943026}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8394, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5879592830315232}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0762384831905365}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8935, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.6840703934431076}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08853020332753658}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9475, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7854672623798251}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.088298374786973}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10016, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.8926136856898665}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0751219093799591}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10557, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.0018621925264597}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08628165535628796}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11098, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.128845324739814}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08108201157301664}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "snapshot_restore", "elapsed_seconds": 0.917873009108007, "replayed_env_steps": 4}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.045600797049701214}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3243, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 0.6605760427191854}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.054224382154643536}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3579, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.6975232176482677}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11058673728257418}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4216, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8168408228084445}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.086974305100739}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4757, "output_tokens": 10, "forward_tokens": 0, "elapsed_seconds": 0.9988237358629704}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06486892700195312}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5069, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 0.9538177214562893}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07747359946370125}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5441, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.0801093988120556}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06987112201750278}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5830, "output_tokens": 11, "forward_tokens": 0, "elapsed_seconds": 1.216513179242611}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.053314048796892166}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6217, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.1730738151818514}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.058615393936634064}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6605, "output_tokens": 11, "forward_tokens": 0, "elapsed_seconds": 1.4146936144679785}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06676770467311144}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6984, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.3199742827564478}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07360823079943657}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7359, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.3977861078456044}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07136520091444254}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7782, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.497290593571961}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07842890918254852}
+{"kind": "gradient_update", "elapsed_seconds": 0.3785390807315707}
+{"kind": "gradient_update", "elapsed_seconds": 0.41827072110027075}
+{"kind": "gradient_update", "elapsed_seconds": 0.425911677069962}
+{"kind": "gradient_update", "elapsed_seconds": 0.376547128893435}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 725, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.2493955809623003}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 93, "elapsed_seconds": 0.57612435054034}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07772296387702227}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1127, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.305680182762444}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 111, "elapsed_seconds": 0.6404288653284311}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06595011707395315}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1507, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.3859836431220174}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 111, "elapsed_seconds": 0.6669782651588321}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.04539959225803614}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1887, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.4271235419437289}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 111, "elapsed_seconds": 0.6826652698218822}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.054233377799391747}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 2276, "elapsed_seconds": 0.5197262177243829}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07119798194617033}
+{"kind": "snapshot_save", "elapsed_seconds": 0.0013120323419570923}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2647, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.5533191841095686}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 111, "elapsed_seconds": 0.7083023777231574}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06502843368798494}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3027, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.6030462849885225}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07522882148623466}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3407, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.6956202406436205}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07120152655988932}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3787, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.7240287223830819}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07348488830029964}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4167, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8059992333874106}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06985406205058098}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4547, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8552787899971008}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07615545578300953}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4927, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9117041574791074}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07028804440051317}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5306, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9898116169497371}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07073638308793306}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5686, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.0521046537905931}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07227216195315123}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6066, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.1314799282699823}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06302255764603615}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6446, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.1837968984618783}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06473919842392206}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6825, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.246430697850883}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06796157360076904}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7205, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.3791928999125957}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08174432348459959}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7585, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.4084599316120148}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06825519818812609}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7965, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5023755952715874}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07825190480798483}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8345, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5572053231298923}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07028913591057062}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8725, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.634965999983251}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07784496061503887}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9105, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7255107406526804}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.053406357765197754}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9485, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7924518790096045}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0638670613989234}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "snapshot_restore", "elapsed_seconds": 0.8685306217521429, "replayed_env_steps": 5}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0797424865886569}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3103, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.6154894847422838}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08432526048272848}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3537, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.7051601018756628}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09151613526046276}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3971, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.7638623612001538}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06646068207919598}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4336, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8373890668153763}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06900658458471298}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4716, "output_tokens": 9, "forward_tokens": 0, "elapsed_seconds": 0.9723684806376696}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06915632169693708}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5092, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9511049287393689}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07109902892261744}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5458, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.0345134567469358}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06923401169478893}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5858, "output_tokens": 9, "forward_tokens": 0, "elapsed_seconds": 1.1767117734998465}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08036152552813292}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6324, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.165074192918837}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07463090494275093}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6778, "output_tokens": 9, "forward_tokens": 0, "elapsed_seconds": 1.3511661672964692}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.05927673354744911}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7116, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.406590479426086}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07067922502756119}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7496, "output_tokens": 9, "forward_tokens": 0, "elapsed_seconds": 1.4998945416882634}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06762690842151642}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7876, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.4720518719404936}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08044472057372332}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8256, "output_tokens": 9, "forward_tokens": 0, "elapsed_seconds": 1.6051643379032612}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06588699948042631}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8627, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.6115973647683859}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07282130513340235}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8999, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.692575328052044}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07001755014061928}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9372, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.736471401527524}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06430190149694681}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9745, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.8411080166697502}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.06572730746120214}
+{"kind": "gradient_update", "elapsed_seconds": 0.6813638219609857}
+{"kind": "gradient_update", "elapsed_seconds": 0.33088219072669744}
+{"kind": "gradient_update", "elapsed_seconds": 0.3430676655843854}
+{"kind": "gradient_update", "elapsed_seconds": 0.3851486472412944}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 922, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.2719860067591071}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 143, "elapsed_seconds": 0.8388676615431905}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10126681067049503}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1511, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.38980833254754543}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 187, "elapsed_seconds": 1.034297295846045}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10095239896327257}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2060, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.44473664183169603}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 187, "elapsed_seconds": 1.0742888422682881}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09613087493926287}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2584, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.522803925909102}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 187, "elapsed_seconds": 1.0841965861618519}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09402182511985302}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3133, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.5973042733967304}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 187, "elapsed_seconds": 1.1137320371344686}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09718188736587763}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3682, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.716162147000432}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 187, "elapsed_seconds": 1.3721442641690373}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09688905719667673}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 4240, "elapsed_seconds": 0.8327328907325864}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10134517215192318}
+{"kind": "snapshot_save", "elapsed_seconds": 0.002702973783016205}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4780, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8887475011870265}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 187, "elapsed_seconds": 1.2089261896908283}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09917646553367376}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5329, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9756846632808447}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09064782876521349}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5878, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.068737887777388}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07687571831047535}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6426, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.1932905670255423}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08751156460493803}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6975, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.2592736296355724}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10672047454863787}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7524, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.4184120614081621}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10720610152930021}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8073, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5227944757789373}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07908293046057224}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8622, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.6169760413467884}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09509997069835663}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9171, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.72458906006068}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.1732365656644106}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9719, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.8178937314078212}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09200531709939241}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10268, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.9338815631344914}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08854895178228617}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10817, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.0234767254441977}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09492483083158731}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11366, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.1464698975905776}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08410938270390034}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "snapshot_restore", "elapsed_seconds": 1.4638410853222013, "replayed_env_steps": 7}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11638940963894129}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5180, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.947376967407763}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07701508700847626}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5616, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.0253940196707845}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09948186669498682}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6204, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.1414326969534159}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09362975042313337}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6753, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.2752775941044092}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09383148234337568}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7302, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5238245772197843}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0895242216065526}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7851, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5221287747845054}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09670342784374952}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8400, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.571049915626645}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09846995305269957}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8949, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.684112642891705}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.095555754378438}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9497, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7646622471511364}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09424816258251667}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10046, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.8918653894215822}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.12231012806296349}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10595, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.0055322032421827}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07778333406895399}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11144, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.1156893614679575}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0967176454141736}
+{"kind": "gradient_update", "elapsed_seconds": 0.30226889066398144}
+{"kind": "gradient_update", "elapsed_seconds": 0.3601501686498523}
+{"kind": "gradient_update", "elapsed_seconds": 0.4565542498603463}
+{"kind": "gradient_update", "elapsed_seconds": 0.3952285936102271}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 916, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.27735359594225883}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 143, "elapsed_seconds": 0.8415395505726337}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10127107799053192}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 1513, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 0.41992055997252464}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 186, "elapsed_seconds": 1.022640504874289}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09758602175861597}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2026, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.44217719603329897}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 186, "elapsed_seconds": 1.0554787954315543}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0995838176459074}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 2568, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.5610779542475939}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 186, "elapsed_seconds": 1.1112848464399576}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.11236534547060728}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 3110, "output_tokens": 2, "forward_tokens": 0, "elapsed_seconds": 0.4809616031125188}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 186, "elapsed_seconds": 1.1704207295551896}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10368144884705544}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 3661, "elapsed_seconds": 0.7617026474326849}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.1008374560624361}
+{"kind": "snapshot_save", "elapsed_seconds": 0.0023445487022399902}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4194, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8105135960504413}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 186, "elapsed_seconds": 1.1729886531829834}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09279919974505901}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4736, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9253471503034234}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07351452950388193}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5278, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9787355912849307}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07215162459760904}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5820, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.0903754876926541}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09057294949889183}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6361, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.2264143535867333}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.076765320263803}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6903, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.3422467801719904}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10528117883950472}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7445, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.39385284204036}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09798676520586014}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7987, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5084281815215945}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09909478481858969}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8529, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.603442837484181}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09605385083705187}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9071, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7130612591281533}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10055071767419577}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9612, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.8065127450972795}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09605528134852648}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10154, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.9305794602259994}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09031329303979874}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10696, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.036100928671658}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0959737915545702}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11238, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.139099210500717}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09715636074542999}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "environment_step", "replay": true, "elapsed_seconds": 0.0}
+{"kind": "snapshot_restore", "elapsed_seconds": 1.318105443380773, "replayed_env_steps": 6}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08817812521010637}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 4588, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.8846826050430536}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10503818839788437}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5018, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 0.9155884683132172}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07392912823706865}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 5615, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.03152269218117}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07867230847477913}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6156, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.1410554219037294}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0769704906269908}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 6698, "output_tokens": 9, "forward_tokens": 0, "elapsed_seconds": 1.6095962366089225}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09429268632084131}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7167, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.4043362876400352}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.10206339601427317}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 7651, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.508452738635242}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.0721641955897212}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8090, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.5358260599896312}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07939048856496811}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 8544, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.6117161065340042}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09917311742901802}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9070, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.711555496789515}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09381291642785072}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 9576, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 1.7981057530269027}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.09070964995771646}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10082, "output_tokens": 7, "forward_tokens": 0, "elapsed_seconds": 1.9319546474143863}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08798892889171839}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 10567, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.008539763279259}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.07684437278658152}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 11073, "output_tokens": 6, "forward_tokens": 0, "elapsed_seconds": 2.118224274367094}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 0.08848443161696196}
+{"kind": "gradient_update", "elapsed_seconds": 0.4036978902295232}
+{"kind": "gradient_update", "elapsed_seconds": 0.34808037243783474}
+{"kind": "gradient_update", "elapsed_seconds": 0.45487161353230476}
+{"kind": "gradient_update", "elapsed_seconds": 0.3038739962503314}

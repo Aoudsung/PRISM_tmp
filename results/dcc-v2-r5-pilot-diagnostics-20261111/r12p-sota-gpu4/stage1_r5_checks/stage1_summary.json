@@ -1,0 +1,31 @@
+{
+  "phi0_bellman_neutrality": {
+    "depth_1": 0.07114631682634354,
+    "depth_2": 0.07114633172750473,
+    "depth_3": 0.07114633917808533,
+    "max_spread": 2.2351741790771484e-08
+  },
+  "single_prefill_kv_crop_check": {
+    "candidates": [
+      "search[home office furniture sets dining room living room color blue gray shape round size ft in]",
+      "click[search]"
+    ],
+    "goal_query_bound": "home office furniture sets dining room living room color blue gray shape round size ft in",
+    "raw_logprobs_fresh": {
+      "search[home office furniture sets dining room living room color blue gray shape round size ft in]": -6.99159,
+      "click[search]": -0.01816
+    },
+    "raw_logprobs_reused": {
+      "search[home office furniture sets dining room living room color blue gray shape round size ft in]": -6.99159,
+      "click[search]": -0.01816
+    },
+    "centered_advantages": {
+      "search[home office furniture sets dining room living room color blue gray shape round size ft in]": -6.96691,
+      "click[search]": 0.00652
+    },
+    "max_abs_logprob_diff": 0.0,
+    "fresh_charged_tokens": 490,
+    "reused_suffix_only_charged_tokens": 25,
+    "prompt_tokens_len": 466
+  }
+}

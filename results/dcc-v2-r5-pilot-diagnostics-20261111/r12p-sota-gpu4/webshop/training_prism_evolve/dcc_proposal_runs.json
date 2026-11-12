@@ -1,0 +1,440 @@
+{
+  "full": [
+    {
+      "run_id": "ccd0926f91f0",
+      "benchmark": "webshop",
+      "dataset_version": "step_8",
+      "model_version": "step_8",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2"
+      ],
+      "call_index": 2,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "true_d_real",
+      "label_view_values": [
+        0.0,
+        0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "2c9f3978577a",
+      "benchmark": "webshop",
+      "dataset_version": "step_12",
+      "model_version": "step_12",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e"
+      ],
+      "call_index": 3,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "true_d_real",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "6746dd33aa49",
+      "benchmark": "webshop",
+      "dataset_version": "step_16",
+      "model_version": "step_16",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e",
+        "bcd10050ad5e"
+      ],
+      "call_index": 4,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "true_d_real",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "c855c677758a",
+      "benchmark": "webshop",
+      "dataset_version": "step_20",
+      "model_version": "step_20",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e",
+        "bcd10050ad5e",
+        "9f2b28375e90"
+      ],
+      "call_index": 5,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "true_d_real",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "c3dcd11cefdd",
+      "benchmark": "webshop",
+      "dataset_version": "step_24",
+      "model_version": "step_24",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e",
+        "bcd10050ad5e",
+        "9f2b28375e90",
+        "926ae41564b2"
+      ],
+      "call_index": 6,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "true_d_real",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "f0fb450960a6",
+      "benchmark": "webshop",
+      "dataset_version": "step_28",
+      "model_version": "step_28",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e",
+        "bcd10050ad5e",
+        "9f2b28375e90",
+        "926ae41564b2",
+        "43758daa92d8"
+      ],
+      "call_index": 7,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "true_d_real",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.0,
+        -0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "fa468c5573bc",
+      "benchmark": "webshop",
+      "dataset_version": "step_32",
+      "model_version": "step_32",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e",
+        "bcd10050ad5e",
+        "9f2b28375e90",
+        "926ae41564b2",
+        "43758daa92d8",
+        "7bb48e66c807"
+      ],
+      "call_index": 8,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "true_d_real",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.0,
+        -0.0,
+        0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 1,
+      "permutable_records": 2
+    }
+  ],
+  "fixed_d_shuffled": [
+    {
+      "run_id": "a4afc1402dbd",
+      "benchmark": "webshop",
+      "dataset_version": "step_8",
+      "model_version": "step_8",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2"
+      ],
+      "call_index": 2,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "label_shuffled",
+      "label_view_values": [
+        0.0,
+        0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "12533a56500c",
+      "benchmark": "webshop",
+      "dataset_version": "step_12",
+      "model_version": "step_12",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e"
+      ],
+      "call_index": 3,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "label_shuffled",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "0e65d6863a39",
+      "benchmark": "webshop",
+      "dataset_version": "step_16",
+      "model_version": "step_16",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e",
+        "bcd10050ad5e"
+      ],
+      "call_index": 4,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "label_shuffled",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "e608ea1f0dbc",
+      "benchmark": "webshop",
+      "dataset_version": "step_20",
+      "model_version": "step_20",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e",
+        "bcd10050ad5e",
+        "9f2b28375e90"
+      ],
+      "call_index": 5,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "label_shuffled",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "0ad0b2ef3963",
+      "benchmark": "webshop",
+      "dataset_version": "step_24",
+      "model_version": "step_24",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e",
+        "bcd10050ad5e",
+        "9f2b28375e90",
+        "926ae41564b2"
+      ],
+      "call_index": 6,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "label_shuffled",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "b0ccdbc56305",
+      "benchmark": "webshop",
+      "dataset_version": "step_28",
+      "model_version": "step_28",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e",
+        "bcd10050ad5e",
+        "9f2b28375e90",
+        "926ae41564b2",
+        "43758daa92d8"
+      ],
+      "call_index": 7,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "label_shuffled",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.0,
+        -0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 0,
+      "permutable_records": 0
+    },
+    {
+      "run_id": "7452c5c8f35d",
+      "benchmark": "webshop",
+      "dataset_version": "step_32",
+      "model_version": "step_32",
+      "grammar_version": "typed-ast-v5",
+      "record_order": [
+        "01fd6adeb3bd",
+        "f93c9e47e8c2",
+        "c389942f598e",
+        "bcd10050ad5e",
+        "9f2b28375e90",
+        "926ae41564b2",
+        "43758daa92d8",
+        "7bb48e66c807"
+      ],
+      "call_index": 8,
+      "candidates_constructed": 0,
+      "candidates_checked": 0,
+      "candidates_scored": 0,
+      "label_view_mode": "label_shuffled",
+      "label_view_values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.0,
+        -0.0,
+        0.0
+      ],
+      "unique_witness_pairs": 0,
+      "cumulative_witness_visits": 0,
+      "added_program_ids": [],
+      "permutable_groups": 1,
+      "permutable_records": 2
+    }
+  ]
+}

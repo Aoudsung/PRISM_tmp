@@ -1,0 +1,57 @@
+[
+  {
+    "record_id": "789ece61feb0",
+    "benchmark": "loca",
+    "task_id": "loca/8k/CanvasArrangeExamS2LEnv/seed_10001",
+    "goal_category": "CanvasArrangeExamS2LEnv",
+    "anchor_signature": "334bfb294c7c",
+    "program_id": "ba52662c7f5c",
+    "step_templates": [
+      "inspect_schema:{primary_read_tool}"
+    ],
+    "readout_fields": [
+      "last_tool_family",
+      "prerequisite_status"
+    ],
+    "public_readout_z": {
+      "last_tool_family": "{\"arguments\":{\"account_id\":1.0},",
+      "bound_identifiers": "count_0",
+      "prerequisite_status": "error",
+      "workspace_artifact_state": "unchanged"
+    },
+    "z_parity_bit": 1,
+    "continuation_pair_key": "canvas_canvas_get_dashboard()__vs__excel_merge_cells(end_cell=.,filepath=$bound_path,sheet_name=.)",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 4,
+    "v_cost": 4,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 4,
+    "surprise": 3.5400424003601074,
+    "rebound_trace_templates": [
+      "canvas_canvas_get_account(account_id=1.0)"
+    ],
+    "rebound_trace_fields": [
+      "bound_identifiers",
+      "last_tool_family",
+      "prerequisite_status",
+      "workspace_artifact_state"
+    ],
+    "post_q_checkpoint_id": "5830a3ad41e6",
+    "u_policy_id": "canvas_canvas_get_dashboard()",
+    "v_policy_id": "excel_merge_cells(end_cell=.,filepath=$bound_path,sheet_name=.)",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "loca/8k/CanvasArrangeExamS2LEnv/seed_10001:factual_u:1:5",
+    "counterfactual_tail_ref": "loca/8k/CanvasArrangeExamS2LEnv/seed_10001:counterfactual_v:1:5",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.005135508254170418,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "CanvasArrangeExamS2LEnv::canvas_canvas_get_dashboard()__vs__excel_merge_cells(end_cell=.,filepath=$bound_path,sheet_name=.)::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  }
+]

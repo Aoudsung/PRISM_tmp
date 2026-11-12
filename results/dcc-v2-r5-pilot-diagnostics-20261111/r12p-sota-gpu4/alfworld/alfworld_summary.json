@@ -1,0 +1,451 @@
+{
+  "training_usage": {
+    "limits": {
+      "max_env_steps": 3200,
+      "max_model_tokens": 3600000,
+      "max_wall_seconds": 3600.0
+    },
+    "env_steps": 319,
+    "replayed_env_steps": 37,
+    "input_tokens": 1802098,
+    "native_api_calls": 0,
+    "successful_native_api_calls": 0,
+    "replayed_api_calls": 0,
+    "output_tokens": 1708,
+    "forward_tokens": 30578,
+    "total_model_tokens": 1834384,
+    "model_seconds": 390.13969622924924,
+    "environment_seconds": 26.005586951971054,
+    "restore_seconds": 10.451631776057184,
+    "snapshot_saves": 8,
+    "snapshot_restores": 8,
+    "snapshot_save_seconds": 0.024020525626838207,
+    "gradient_steps": 32,
+    "update_seconds": 12.701210816390812,
+    "wall_seconds": 476.155022315681,
+    "calls_by_role": {
+      "actor.action": 266,
+      "dcc.candidate_suffix_prior": 45
+    }
+  },
+  "dcc_summary": {
+    "contract_version": "prism-dcc-v2-unified-r5",
+    "frozen_language_backbone": true,
+    "ensemble_size": 8,
+    "final_mechanism_weights": [
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125
+    ],
+    "library_size": 4,
+    "grow_calls": 8,
+    "unique_witness_pairs": 0,
+    "cumulative_witness_visits": 0,
+    "witness_pairs_found": 0,
+    "proposed_counts": {
+      "witness_full": 0,
+      "witness_delete": 0,
+      "witness_concat": 0,
+      "prior_fallback": 0
+    },
+    "shuffle_witness_labels": false,
+    "zero_success_throughout_training": false
+  },
+  "train_diagnostics": {
+    "blocks_completed": 8,
+    "first_3_losses": [],
+    "last_3_losses": [],
+    "nonzero_d_real_blocks": 1,
+    "fork_selection_mode_counts": {
+      "prior_role_diverse_sample": 5,
+      "prior_cross_anchor_key_reuse": 3
+    },
+    "distinct_comparison_keys": 5,
+    "reused_comparison_keys": 1,
+    "branch_success_pairs": [
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        true
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ]
+    ]
+  },
+  "eval_comparison": {
+    "frozen_base": {
+      "method": "frozen_base",
+      "tasks": 12,
+      "successes": 2,
+      "success_rate": 0.16666666666666666,
+      "mean_utility_u_b": 0.1660614189328367,
+      "mean_elapsed_seconds": 22.76812116879349,
+      "mean_env_steps": 19.583333333333332,
+      "total_model_tokens": 1261088,
+      "consecutive_repeat_steps": 42,
+      "dcc_steps_total": 0,
+      "prior_action_overrides": 0,
+      "program_attributed_steps": 0
+    },
+    "prism_evolve": {
+      "method": "prism_evolve",
+      "tasks": 12,
+      "successes": 1,
+      "success_rate": 0.08333333333333333,
+      "mean_utility_u_b": 0.08230347444225723,
+      "mean_elapsed_seconds": 47.32411603668394,
+      "mean_env_steps": 20.666666666666668,
+      "total_model_tokens": 1388534,
+      "consecutive_repeat_steps": 171,
+      "dcc_steps_total": 248,
+      "prior_action_overrides": 24,
+      "program_attributed_steps": 20
+    }
+  },
+  "paired_outcomes": {
+    "frozen_base": [
+      [
+        "valid_seen/look_at_obj_in_light-AlarmClock-None-DeskLamp-323/trial_T20190909_044715_250790/game.tw-pddl",
+        0,
+        0.0,
+        20,
+        [
+          "go to desk 1",
+          "use desklamp 1",
+          "look",
+          "examine desk 1",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Bowl-None-DeskLamp-301/trial_T20190909_150719_492274/game.tw-pddl",
+        0,
+        0.0,
+        19,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Bowl-None-DeskLamp-316/trial_T20190908_230702_962704/game.tw-pddl",
+        1,
+        0.9979,
+        3,
+        [
+          "go to desk 1",
+          "take bowl 1 from desk 1",
+          "use desklamp 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Box-None-DeskLamp-205/trial_T20190907_074425_330493/game.tw-pddl",
+        0,
+        0.0,
+        24,
+        [
+          "go to sidetable 1",
+          "examine sidetable 1",
+          "look",
+          "go to sidetable 2",
+          "examine sidetable 2"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-302/trial_T20190907_154618_526741/game.tw-pddl",
+        0,
+        0.0,
+        22,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "look",
+          "go to bed 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-314/trial_T20190907_114323_767231/game.tw-pddl",
+        0,
+        0.0,
+        25,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "look",
+          "go to bed 1",
+          "examine bed 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-320/trial_T20190907_224451_655673/game.tw-pddl",
+        0,
+        0.0,
+        25,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "look",
+          "go to desk 2",
+          "examine desk 2"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-KeyChain-None-DeskLamp-327/trial_T20190906_202601_548273/game.tw-pddl",
+        0,
+        0.0,
+        23,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "take book 1 from desk 1",
+          "examine book 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Laptop-None-DeskLamp-328/trial_T20190908_201550_622420/game.tw-pddl",
+        0,
+        0.0,
+        24,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "use desklamp 1",
+          "look",
+          "go to drawer 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-302/trial_T20190909_150916_682139/game.tw-pddl",
+        0,
+        0.0,
+        23,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "look",
+          "go to bed 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-323/trial_T20190908_053153_077977/game.tw-pddl",
+        0,
+        0.0,
+        21,
+        [
+          "go to bed 1",
+          "go to bed 2",
+          "take pillow 1 from bed 2",
+          "examine pillow 1",
+          "move pillow 1 to bed 2"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Statue-None-DeskLamp-216/trial_T20190909_193045_208933/game.tw-pddl",
+        1,
+        0.9948,
+        6,
+        [
+          "go to sidetable 1",
+          "examine sidetable 1",
+          "examine sidetable 1",
+          "use desklamp 1",
+          "examine sidetable 1"
+        ]
+      ]
+    ],
+    "prism_evolve": [
+      [
+        "valid_seen/look_at_obj_in_light-AlarmClock-None-DeskLamp-323/trial_T20190909_044715_250790/game.tw-pddl",
+        0,
+        0.0,
+        19,
+        [
+          "go to desk 1",
+          "use desklamp 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Bowl-None-DeskLamp-301/trial_T20190909_150719_492274/game.tw-pddl",
+        0,
+        0.0,
+        19,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Bowl-None-DeskLamp-316/trial_T20190908_230702_962704/game.tw-pddl",
+        0,
+        0.0,
+        22,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Box-None-DeskLamp-205/trial_T20190907_074425_330493/game.tw-pddl",
+        0,
+        0.0,
+        24,
+        [
+          "go to sidetable 1",
+          "examine sidetable 1",
+          "examine sidetable 1",
+          "examine sidetable 1",
+          "examine sidetable 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-302/trial_T20190907_154618_526741/game.tw-pddl",
+        0,
+        0.0,
+        21,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-314/trial_T20190907_114323_767231/game.tw-pddl",
+        0,
+        0.0,
+        25,
+        [
+          "go to desk 1",
+          "use desklamp 1",
+          "look",
+          "examine desk 1",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-320/trial_T20190907_224451_655673/game.tw-pddl",
+        0,
+        0.0,
+        25,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "look",
+          "examine desk 1",
+          "take cd 1 from desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-KeyChain-None-DeskLamp-327/trial_T20190906_202601_548273/game.tw-pddl",
+        0,
+        0.0,
+        23,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Laptop-None-DeskLamp-328/trial_T20190908_201550_622420/game.tw-pddl",
+        0,
+        0.0,
+        22,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "use desklamp 1",
+          "look",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-302/trial_T20190909_150916_682139/game.tw-pddl",
+        0,
+        0.0,
+        22,
+        [
+          "go to desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-323/trial_T20190908_053153_077977/game.tw-pddl",
+        0,
+        0.0,
+        20,
+        [
+          "go to desk 1",
+          "use desklamp 1",
+          "examine desk 1",
+          "examine desk 1",
+          "examine desk 1"
+        ]
+      ],
+      [
+        "valid_seen/look_at_obj_in_light-Statue-None-DeskLamp-216/trial_T20190909_193045_208933/game.tw-pddl",
+        1,
+        0.9876,
+        6,
+        [
+          "go to sidetable 1",
+          "examine sidetable 1",
+          "examine sidetable 1",
+          "use desklamp 1",
+          "examine sidetable 1"
+        ]
+      ]
+    ]
+  }
+}

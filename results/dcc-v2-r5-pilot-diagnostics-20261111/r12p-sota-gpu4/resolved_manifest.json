@@ -1,0 +1,15 @@
+{
+  "git_commit": "unknown",
+  "dcc_contract_version": "prism-dcc-v2-unified-r5",
+  "host": "mgt01",
+  "cuda_visible_devices": "4",
+  "backbone": "Qwen/Qwen2.5-7B-Instruct",
+  "model_path": "/apps/users/adminuser/models/Qwen2.5-7B-Instruct",
+  "seed": 42,
+  "train_groups": 8,
+  "eval_tasks": 12,
+  "methods": [
+    "frozen_base",
+    "prism_evolve"
+  ]
+}

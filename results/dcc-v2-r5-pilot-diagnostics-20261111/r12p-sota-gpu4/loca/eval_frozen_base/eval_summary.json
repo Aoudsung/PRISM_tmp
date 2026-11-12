@@ -1,0 +1,50 @@
+{
+  "method": "frozen_base",
+  "tasks": 2,
+  "successes": 0,
+  "success_rate": 0.0,
+  "mean_utility_u_b": 0.0,
+  "mean_elapsed_seconds": 35.43525078473613,
+  "mean_env_steps": 5.0,
+  "total_model_tokens": 223076,
+  "consecutive_repeat_steps": 5,
+  "dcc_steps_total": 0,
+  "prior_action_overrides": 0,
+  "program_attributed_steps": 0,
+  "per_task": [
+    {
+      "task_index": 0,
+      "task_id": "loca/8k/CanvasArrangeExamS2LEnv/seed_20001",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 34.468210991472006,
+      "env_steps": 5,
+      "model_tokens": 110484,
+      "termination": "budget:model_tokens",
+      "actions": [
+        "{\"arguments\":{\"email_id\":\"12345\",\"to\":\"john.doe@example.com\"},\"name\":\"email_forward_email\"}",
+        "{\"arguments\":{\"filepath\":\"exam_schedule.xlsx\",\"sheet_name\":\"exam_schedule\",\"start_cell\":\"A1\",\"wrap_text\":true},\"name\":\"excel_format_range\"}",
+        "{\"arguments\":{\"filepath\":\"exam_schedule.xlsx\",\"sheet_name\":\"exam_schedule\",\"start_cell\":\"A1\",\"wrap_text\":true},\"name\":\"excel_format_range\"}",
+        "{\"arguments\":{\"filepath\":\"exam_schedule.xlsx\",\"sheet_name\":\"exam_schedule\",\"start_cell\":\"A1\",\"wrap_text\":true},\"name\":\"excel_format_range\"}",
+        "{\"arguments\":{\"filepath\":\"exam_schedule.xlsx\",\"sheet_name\":\"exam_schedule\",\"start_cell\":\"A1\",\"wrap_text\":true},\"name\":\"excel_format_range\"}"
+      ]
+    },
+    {
+      "task_index": 1,
+      "task_id": "loca/8k/CanvasArrangeExamS2LEnv/seed_20002",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 36.40229057800025,
+      "env_steps": 5,
+      "model_tokens": 112592,
+      "termination": "budget:model_tokens",
+      "actions": [
+        "{\"arguments\":{\"name\":\"canvas_canvas_get_upcoming_assignments\"},\"name\":\"canvas_canvas_update_user_profile\"}",
+        "{\"arguments\":{\"name\":\"canvas_canvas_get_upcoming_assignments\",\"short_name\":\"canvas_canvas_get_upcoming_assignments\"},\"name\":\"canvas_canvas_update_user_profile\"}",
+        "{\"arguments\":{\"name\":\"canvas_canvas_get_upcoming_assignments\",\"short_name\":\"canvas_canvas_get_upcoming_assignments\"},\"name\":\"canvas_canvas_update_user_profile\"}",
+        "{\"arguments\":{\"name\":\"canvas_canvas_get_upcoming_assignments\",\"short_name\":\"canvas_canvas_get_upcoming_assignments\"},\"name\":\"canvas_canvas_update_user_profile\"}",
+        "{\"arguments\":{\"name\":\"canvas_canvas_get_upcoming_assignments\"},\"name\":\"canvas_canvas_update_user_profile\"}"
+      ]
+    }
+  ]
+}

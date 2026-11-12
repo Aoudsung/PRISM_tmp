@@ -38,12 +38,12 @@ from .native_program import PROGRAM_VERSION, available_modes, build_frontier
 DCC_METHODS = frozenset({
     "prism_evolve", "dcc_label_shuffled", "dcc_no_program_growth",
     "dcc_reset_parameters", "dcc_pre_first_success", "dcc_k0_planner",
-    "dcc_fixed_d_shuffled",
+    "dcc_prior_reranker", "dcc_fixed_d_shuffled",
 })
 TRAINING_METHODS = frozenset({
     "prism_evolve", "dcc_label_shuffled", "dcc_no_program_growth",
     "dcc_reset_parameters", "dcc_pre_first_success", "dcc_k0_planner",
-    "dcc_fixed_d_shuffled",
+    "dcc_prior_reranker", "dcc_fixed_d_shuffled",
     "ablation_unweighted", "unstratified_2branch",
     "gigpo", "infopo", "arew", "t3", "step_dpo", "frozen_base",
 })
@@ -51,7 +51,7 @@ PRISM_ACTOR_METHODS = frozenset({
     "frozen_base",
     "prism_evolve", "dcc_label_shuffled", "dcc_no_program_growth",
     "dcc_reset_parameters", "dcc_pre_first_success", "dcc_k0_planner",
-    "dcc_fixed_d_shuffled",
+    "dcc_prior_reranker", "dcc_fixed_d_shuffled",
     "ablation_unweighted", "unstratified_2branch",
 })
 GROUP_SIZES = {"gigpo": 8, "infopo": 5, "arew": 3, "t3": 5, "frozen_base": 2}
@@ -662,11 +662,15 @@ def rollout(
     quantize_prompt_sec = bool(config.get("dcc_quantize_prompt_wall_seconds", False))
     if hasattr(policy, "dcc_mode_enabled"):
         policy.dcc_mode_enabled = method in DCC_METHODS
-        policy.dcc_controller_mode = str(config.get("dcc_controller_mode", "expected_utility"))
+        policy.dcc_controller_mode = (
+            "prior_only_reranker"
+            if method == "dcc_prior_reranker"
+            else str(config.get("dcc_controller_mode", "expected_utility"))
+        )
         policy.dcc_eval_variant = (
             "no_program_growth" if method == "dcc_no_program_growth"
             else "reset_parameters" if method == "dcc_reset_parameters"
-            else "k0_planner" if method == "dcc_k0_planner"
+            else "k0_planner" if method in ("dcc_k0_planner", "dcc_prior_reranker")
             else "full"
         )
     with _meters(policy, env, meter):
@@ -1069,15 +1073,7 @@ def _extract_public_transitions(
         elif "selected_prior_logprob" in dcc_dec_meta:
             step_prior_lp = float(dcc_dec_meta["selected_prior_logprob"])
         else:
-            raw_slp = gen_meta.get("sampling_log_probs") or ()
-            # Exclude trailing EOS token when averaging actual sampled frozen_base action tokens
-            content_slp = list(raw_slp[:-1]) if len(raw_slp) > 1 else list(raw_slp)
-            non_zero_slp = [float(x) for x in content_slp if math.isfinite(float(x))]
-            step_prior_lp = (
-                sum(non_zero_slp) / float(len(non_zero_slp))
-                if (non_zero_slp and any(x != 0.0 for x in non_zero_slp))
-                else 0.0
-            )
+            step_prior_lp = 0.0
         transitions.append(
             PublicTransition(
                 transition_id=node_id,
@@ -1217,6 +1213,7 @@ def _run_branch_with_frozen_tail_pi0(
     prefix_seconds: float,
     root_messages: Sequence[Mapping[str, str]],
     first_action_text: str | None,
+    first_action_prior_adv: float | None = None,
     forced_mode: str | None,
     cont_stop_after: int,
     progress_supervisor: Any | None = None,
@@ -1296,9 +1293,11 @@ def _run_branch_with_frozen_tail_pi0(
                     ev.metadata["dcc_outcome_bin"] = obs_u["outcome_bin"]
                     ev.metadata["dcc_frozen_context_vec"] = list(obs_u.get("frozen_context_vec", ()))
                     ev.metadata["dcc_frozen_action_vec"] = list(obs_u.get("frozen_action_vec", ()))
-                if hasattr(policy, "score_frozen_action_logprobs"):
+                if first_action_prior_adv is not None:
+                    ev.metadata["dcc_prior_action_logprob"] = float(first_action_prior_adv)
+                elif hasattr(policy, "score_frozen_action_logprobs"):
                     lp_head = policy.score_frozen_action_logprobs(
-                        root_messages, schema, [first_action_text], prefill_already_charged=False
+                        root_messages, schema, [first_action_text]
                     )
                     ev.metadata["dcc_prior_action_logprob"] = float(lp_head.get(first_action_text, 0.0))
                 head_done = bool(step.done)
@@ -1544,7 +1543,7 @@ def collect_branch_pair(
         with _meters(policy, env, prefix_meter):
             anchor_lp_map = (
                 policy.score_frozen_action_logprobs(
-                    anchor_msgs_check, anchor_schema, [c[1] for c in q_cand_entries], prefill_already_charged=False
+                    anchor_msgs_check, anchor_schema, [c[1] for c in q_cand_entries]
                 )
                 if hasattr(policy, "score_frozen_action_logprobs") else {}
             )
@@ -1704,9 +1703,13 @@ def collect_branch_pair(
         return BranchPair(probe_events, probe_trajectory, None,
                           len(probe_events), 0.0, stratified, "global_budget_during_prefix")
 
-    public_readout_z = PublicBenchmarkBinder.extract_public_fields(
-        benchmark_name, task_instruction, probe_events, env.action_schema
-    )
+    public_readout_z = {
+        k: v
+        for k, v in PublicBenchmarkBinder.extract_public_fields(
+            benchmark_name, task_instruction, probe_events, env.action_schema
+        ).items()
+        if not str(k).startswith("_")
+    }
     post_q_bindings = PublicBenchmarkBinder.extract_role_bindings(
         benchmark_name, task_instruction, probe_events, env.action_schema
     )
@@ -1757,8 +1760,10 @@ def collect_branch_pair(
 
     post_q_decision_ctx = None
     disagreement_r = 0.0
+    max_raw_disagreement_r = 0.0
     fork_selection_mode = "lexicographic"
     post_q_prior_act = ""
+    post_q_lp_map: dict[str, float] = {}
 
     # Choose two repeatable continuation actions (u, v) from the post-q schema BEFORE observing outcomes
     admissible_post_q = PublicBenchmarkBinder.enumerate_admissible_actions(
@@ -1781,7 +1786,8 @@ def collect_branch_pair(
         )
         acq_mode = str(config.get("dcc_fork_acquisition", "decision_disagreement"))
         if acq_mode != "lexicographic" and len(admissible_post_q) >= 2:
-            # Sample one frozen LM prior proposal at post-q to anchor R_h == 0 tie-breaking semantically
+            # Sample one frozen LM prior proposal at post-q and retain its prompt KV cache in-place
+            # so candidate scoring reuses the exact single prefill with zero duplicate prompt forward!
             try:
                 with _meters(policy, env, prefix_meter), _preserve_actor_rng(), policy.frozen_reference():
                     prior_seed = _deterministic_seed(task_info["task_id"], seed, split_step, "post_q_prior")
@@ -1795,6 +1801,7 @@ def collect_branch_pair(
                             greedy=False,
                             role="actor.action",
                             max_new_tokens=prior_max_new,
+                            retain_kv_cache=True,
                         )
                     else:
                         p_gen = policy._generate_program(
@@ -1804,6 +1811,7 @@ def collect_branch_pair(
                             greedy=False,
                             role="actor.action",
                             max_new_tokens=prior_max_new,
+                            retain_kv_cache=True,
                         )
                     post_q_prior_act = p_gen.text.strip()
             except BudgetExhausted:
@@ -1827,7 +1835,7 @@ def collect_branch_pair(
             with _meters(policy, env, prefix_meter):
                 post_q_lp_map = (
                     policy.score_frozen_action_logprobs(
-                        root_messages, post_q_schema, [c[1] for c in cand_pool], prefill_already_charged=bool(post_q_prior_act)
+                        root_messages, post_q_schema, [c[1] for c in cand_pool]
                     )
                     if hasattr(policy, "score_frozen_action_logprobs") else {}
                 )
@@ -1854,6 +1862,8 @@ def collect_branch_pair(
                 scored_post_q,
                 benchmark=benchmark_name,
                 goal_category=goal_cat,
+                role_bindings=post_q_decision_ctx.role_bindings,
+                action_templates=post_q_decision_ctx.action_templates,
                 prior_action_text=post_q_prior_act,
                 existing_comparison_keys=existing_comp_map,
                 current_readout_sig=_short_hash(public_readout_z),
@@ -1863,19 +1873,32 @@ def collect_branch_pair(
                 u_bound_act = str(sel_pair["u_entry"]["candidate_action"])
                 v_bound_act = str(sel_pair["v_entry"]["candidate_action"])
                 disagreement_r = float(sel_pair["disagreement_r"])
+                max_raw_disagreement_r = float(sel_pair.get("max_raw_disagreement_r", disagreement_r))
                 fork_selection_mode = str(sel_pair["selection_mode"])
 
     if (u_bound_act is None or v_bound_act is None) and len(admissible_post_q) >= 2:
         by_tmpl = sorted(
             admissible_post_q,
             key=lambda a: (
-                PublicBenchmarkBinder.abstract_action_to_template(benchmark_name, a, post_q_bindings),
+                post_q_decision_ctx.template_for_action(a)
+                if post_q_decision_ctx is not None
+                else PublicBenchmarkBinder.abstract_action_to_template(benchmark_name, a, post_q_bindings),
                 a,
             ),
         )
         u_bound_act = by_tmpl[0]
         v_bound_act = next((a for a in by_tmpl[1:] if a != u_bound_act), by_tmpl[-1])
         fork_selection_mode = "lexicographic"
+        if is_dcc and not post_q_lp_map and hasattr(policy, "score_frozen_action_logprobs"):
+            try:
+                with _meters(policy, env, prefix_meter):
+                    post_q_lp_map = policy.score_frozen_action_logprobs(
+                        root_messages, post_q_schema, list(admissible_post_q)
+                    )
+                prefix_usage = prefix_meter.snapshot()
+                probe_trajectory.metadata["resource_usage"] = prefix_usage
+            except BudgetExhausted:
+                post_q_lp_map = {}
 
     cont_horizon_cfg = config.get("dcc_full_tail_rollout", True)
     continuation_steps = (
@@ -1906,6 +1929,7 @@ def collect_branch_pair(
                 prefix_seconds=probe_trajectory.elapsed_seconds,
                 root_messages=root_messages,
                 first_action_text=u_bound_act,
+                first_action_prior_adv=post_q_lp_map.get(u_bound_act, 0.0) if u_bound_act else None,
                 forced_mode=forced_first,
                 cont_stop_after=cont_stop_after,
                 progress_supervisor=progress_supervisor,
@@ -1969,6 +1993,7 @@ def collect_branch_pair(
                 prefix_seconds=probe_trajectory.elapsed_seconds,
                 root_messages=root_messages,
                 first_action_text=v_bound_act,
+                first_action_prior_adv=post_q_lp_map.get(v_bound_act, 0.0) if v_bound_act else None,
                 forced_mode=forced_second,
                 cont_stop_after=cont_stop_after,
                 progress_supervisor=progress_supervisor,
@@ -2184,8 +2209,8 @@ def collect_branch_pair(
         sorted(k for k, v in public_readout_z.items() if v != "unknown")
     )[:4] or selected_prog.readout_fields
 
-    u_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark_name, u_first_act, post_q_bindings)
-    v_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark_name, v_first_act, post_q_bindings)
+    u_tmpl = post_q_decision_ctx.template_for_action(u_first_act)
+    v_tmpl = post_q_decision_ctx.template_for_action(v_first_act)
     comp = Comparison.canonicalize(
         goal_category=goal_cat,
         u_policy_id=u_tmpl,
@@ -2272,6 +2297,7 @@ def collect_branch_pair(
         "dcc_q_first_preupdate": float(q_u_eval["q_mean"]),
         "dcc_q_second_preupdate": float(q_v_eval["q_mean"]),
         "dcc_fork_disagreement_r": float(disagreement_r),
+        "dcc_fork_max_raw_disagreement_r": float(max_raw_disagreement_r),
         "dcc_fork_selection_mode": fork_selection_mode,
         "dcc_post_q_prior_action": post_q_prior_act,
     }
@@ -3496,6 +3522,9 @@ def run_training(
     outcomes: Counter[str] = Counter()
     physical_events: list[NativeEvent] = []
     trajectories: list[NativeTrajectory] = []
+    milestone_tokens_cfg = sorted(int(x) for x in config.get("dcc_checkpoint_token_milestones", ()))
+    saved_milestones: list[dict[str, Any]] = []
+    next_milestone_idx = 0
     stop_reason = "configured_groups_completed" if max_groups is not None else "budget_exhausted"
     attempted_groups = 0
     no_work_groups = 0
@@ -3689,6 +3718,36 @@ def run_training(
             _write_json(output / "traces" / f"group-{group:05d}-trajectory-{index}.json", public_trace(trajectory, method=method))
         entry.update(resource_usage=meter.snapshot(), complete_groups=complete_groups)
         _append_json(output / "training.jsonl", entry)
+        if is_dcc and dcc_proposer is not None and next_milestone_idx < len(milestone_tokens_cfg):
+            cur_toks = int(meter.total_model_tokens)
+            while next_milestone_idx < len(milestone_tokens_cfg) and cur_toks >= milestone_tokens_cfg[next_milestone_idx]:
+                m_target = milestone_tokens_cfg[next_milestone_idx]
+                m_dir = output / "milestones" / f"tokens_{m_target:08d}_group_{complete_groups:04d}"
+                if not m_dir.exists():
+                    policy.save_adapter(m_dir / "adapter")
+                    _write_json(
+                        m_dir / "dcc_measurement_records.json",
+                        [r.to_dict() for r in dcc_proposer.records],
+                    )
+                    _write_json(
+                        m_dir / "milestone_meta.json",
+                        {
+                            "target_tokens": m_target,
+                            "actual_tokens": cur_toks,
+                            "complete_groups": complete_groups,
+                            "gradient_steps": int(meter.gradient_steps),
+                            "library_size": len(dcc_library.active_programs()) if dcc_library else 4,
+                            "unique_witness_pairs": int(dcc_proposer.witness_pairs_found),
+                        },
+                    )
+                saved_milestones.append({
+                    "target_tokens": m_target,
+                    "actual_tokens": cur_toks,
+                    "complete_groups": complete_groups,
+                    "checkpoint_dir": str(m_dir / "adapter"),
+                    "records_path": str(m_dir / "dcc_measurement_records.json"),
+                })
+                next_milestone_idx += 1
         if partial:
             break
         work_after = (meter.env_steps, meter.total_model_tokens)
@@ -3855,6 +3914,8 @@ def run_training(
             "zero_success_throughout_training": not bool(first_terminal_success_seen),
         }
         summary["fixed_d_shuffled_checkpoint"] = str(fixed_d_ckpt_dir)
+        if saved_milestones:
+            summary["saved_milestones"] = saved_milestones
         summary["zero_success_throughout_training"] = not bool(first_terminal_success_seen)
         summary["dcc_summary"] = {
             "contract_version": DCC_CONTRACT_VERSION,

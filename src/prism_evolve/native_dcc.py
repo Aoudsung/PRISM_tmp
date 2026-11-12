@@ -39,10 +39,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-DCC_CONTRACT_VERSION = "prism-dcc-v2-unified-r4"
+DCC_CONTRACT_VERSION = "prism-dcc-v2-unified-r5"
 TAIL_POLICY_VERSION = "frozen-prior-tail-v2"
-GRAMMAR_VERSION = "typed-ast-v4"
-RESPONSE_SCHEMA_VERSION = "typed-field-slots-v4"
+GRAMMAR_VERSION = "typed-ast-v5"
+RESPONSE_SCHEMA_VERSION = "typed-field-slots-v5"
+PRIOR_ADVANTAGE_WEIGHT = 0.25
+ACTION_REPEAT_PENALTY = 0.05
 DEFAULT_ENSEMBLE_SIZE = 8
 DEFAULT_MAX_PROBE_STEPS = 3
 DEFAULT_CONTINUATION_STEPS = 50
@@ -822,6 +824,15 @@ class DecisionContext:
     frozen_tail_action_vec: tuple[float, ...]
     member_index: int | None = None
     controller_mode: str = "expected_utility"
+    action_templates: dict[str, str] = field(default_factory=dict)
+
+    def template_for_action(self, action_text: str) -> str:
+        act_s = str(action_text).strip()
+        if act_s in self.action_templates:
+            return self.action_templates[act_s]
+        return PublicBenchmarkBinder.abstract_action_to_template(
+            self.benchmark, act_s, self.role_bindings
+        )
 
 
 @dataclass(frozen=True)
@@ -903,6 +914,10 @@ class MeasurementRecord:
     program_executed_cleanly: bool = True
 
     def __post_init__(self) -> None:
+        if isinstance(self.public_readout_z, Mapping):
+            self.public_readout_z = {
+                str(k): str(v) for k, v in self.public_readout_z.items() if not str(k).startswith("_")
+            }
         if not self.comparison_key:
             comp = Comparison.canonicalize(
                 goal_category=self.goal_category,
@@ -1197,9 +1212,14 @@ class PublicBenchmarkBinder:
 
         if name == "alfworld":
             goal_lower = task_instruction.lower()
+            goal_stopwords = {
+                "put", "the", "and", "in", "on", "to", "at", "by", "of", "an", "as", "or",
+                "from", "with", "look", "find", "clean", "heat", "cool", "examine", "turn",
+                "under", "some", "two", "there", "is", "are", "you",
+            }
             goal_nouns = [
-                tok for tok in re.findall(r"\b([a-z]{3,})\b", goal_lower)
-                if tok not in {"put", "the", "and", "in", "on", "to", "from", "with", "look", "find", "clean", "heat", "cool", "examine", "turn", "under", "some", "two"}
+                tok for tok in re.findall(r"\b([a-z]{2,})\b", goal_lower)
+                if tok not in goal_stopwords
             ]
             if goal_nouns:
                 bindings["target_object_type"] = goal_nouns[0]
@@ -1236,10 +1256,14 @@ class PublicBenchmarkBinder:
             return bindings
 
         if name == "webshop":
+            ws_stop = {
+                "instruction", "find", "me", "buy", "with", "and", "the", "for",
+                "price", "lower", "than", "dollars", "dollar", "item", "need", "want",
+            }
             words = [
                 w for w in re.findall(r"[a-z0-9]+", task_instruction.lower())
-                if len(w) > 2 and w not in {"instruction", "find", "buy", "with", "and", "the", "for", "price", "lower", "than", "dollars"}
-            ][:6]
+                if len(w) >= 2 and w not in ws_stop and not re.fullmatch(r"\d+(?:00)?", w)
+            ][:16]
             if words:
                 bindings["goal_query"] = " ".join(words)
             clickables = [str(c) for c in action_schema.get("available_actions", ())]
@@ -1327,9 +1351,14 @@ class PublicBenchmarkBinder:
         goal_lower = task_instruction.lower()
 
         if name == "alfworld":
+            goal_stopwords = {
+                "put", "the", "and", "in", "on", "to", "at", "by", "of", "an", "as", "or",
+                "from", "with", "look", "find", "some", "two", "clean", "heat", "cool",
+                "examine", "turn", "under", "there", "is", "are", "you",
+            }
             goal_tokens = [
-                tok for tok in re.findall(r"[a-z]{3,}", goal_lower)
-                if tok not in {"put", "the", "and", "in", "on", "to", "from", "with", "look", "find", "some", "two"}
+                tok for tok in re.findall(r"\b[a-z]{2,}\b", goal_lower)
+                if tok not in goal_stopwords
             ]
             visible_receptacles = sorted(set(re.findall(r"\b([a-z]+\s+\d+)\b", joined_obs.lower())))
             open_state = "unknown"
@@ -1343,9 +1372,18 @@ class PublicBenchmarkBinder:
                 open_state = "closed"
 
             held_item = "none"
+            treatment = "raw"
+            last_act_norm = "none"
+            tried_in_regime: list[str] = []
             for ev in events:
                 obs_l = str(getattr(ev, "observation", "")).lower()
-                act_l = str(getattr(getattr(ev, "generation", None), "text", "") or getattr(ev, "action", {}).get("text", "")).lower()
+                raw_act = str(
+                    getattr(getattr(ev, "generation", None), "text", "")
+                    or (getattr(ev, "action", {}) or {}).get("text", "")
+                    or getattr(ev, "response", "")
+                ).strip()
+                act_l = raw_act.lower()
+                prev_regime = (held_item, treatment)
                 picked = re.findall(r"(?:you pick up|you are carrying:)\s+([^\.\n]+)", obs_l)
                 if picked and "nothing" not in picked[-1]:
                     held_item = picked[-1].strip()
@@ -1353,17 +1391,21 @@ class PublicBenchmarkBinder:
                     held_item = act_l.replace("take ", "").split(" from ")[0].strip()
                 elif (act_l.startswith("put ") or act_l.startswith("move ")) and ("you put" in obs_l or "you move" in obs_l):
                     held_item = "none"
+                for tag, phrase in (
+                    ("clean", "you clean"),
+                    ("hot", "you heat"),
+                    ("cool", "you cool"),
+                    ("examined", "you turn on"),
+                ):
+                    if phrase in obs_l:
+                        treatment = tag
+                if (held_item, treatment) != prev_regime or "you open" in obs_l:
+                    tried_in_regime = []
+                elif act_l and act_l not in tried_in_regime:
+                    tried_in_regime.append(act_l)
+                if act_l:
+                    last_act_norm = act_l
 
-            treatment = "raw"
-            for tag, phrase in (
-                ("clean", "you clean"),
-                ("hot", "you heat"),
-                ("cool", "you cool"),
-                ("examined", "you turn on"),
-            ):
-                if phrase in all_obs_lower:
-                    treatment = tag
-                    break
             target_visible = (
                 "yes"
                 if (goal_tokens and any(tok in joined_obs.lower() for tok in goal_tokens[:2]))
@@ -1375,6 +1417,8 @@ class PublicBenchmarkBinder:
                 "inventory_object": held_item[:32],
                 "object_treatment_state": treatment,
                 "target_object_visible": target_visible,
+                "_last_action": last_act_norm,
+                "_regime_tried": "|".join(tried_in_regime[-16:]),
             }
 
         if name == "webshop":
@@ -1391,50 +1435,104 @@ class PublicBenchmarkBinder:
                 else "item_subpage" if "< prev" in " ".join(clickables).lower() and "buy now" not in " ".join(clickables).lower()
                 else "item_detail"
             )
-            chosen_opts = [
-                str(getattr(ev, "action", {}).get("text", "") or getattr(getattr(ev, "generation", None), "text", ""))
-                for ev in events
-                if str(getattr(ev, "action", {}).get("text", "") or getattr(getattr(ev, "generation", None), "text", "")).lower().startswith("click[")
-                and "buy now" not in str(getattr(ev, "action", {}).get("text", "") or getattr(getattr(ev, "generation", None), "text", "")).lower()
-                and not re.search(r"click\[(?:b0[0-9a-z]{8}|description|features|attributes|reviews|< prev|next >|back to search)\]", str(getattr(ev, "action", {}).get("text", "") or getattr(getattr(ev, "generation", None), "text", "")).lower())
-            ]
-            inspected = [
-                sub for sub in ("description", "features", "attributes", "reviews")
-                if any(
-                    f"click[{sub}]" in str(getattr(ev, "action", {}).get("text", "") or getattr(getattr(ev, "generation", None), "text", "")).lower()
-                    for ev in events
-                )
-            ]
+            chosen_opts: list[str] = []
+            inspected_set: list[str] = []
+            last_act_norm = "none"
+            tried_in_regime: list[str] = []
+            cur_query = ""
+            cur_item = "none"
+            for ev in events:
+                raw_act = str(
+                    (getattr(ev, "action", {}) or {}).get("text", "")
+                    or getattr(getattr(ev, "generation", None), "text", "")
+                    or getattr(ev, "response", "")
+                ).strip()
+                act_l = raw_act.lower()
+                prev_regime = (cur_query, cur_item, tuple(chosen_opts))
+                if act_l.startswith("search["):
+                    cur_query = act_l
+                    cur_item = "none"
+                    chosen_opts = []
+                    inspected_set = []
+                elif act_l == "click[back to search]":
+                    cur_item = "none"
+                    chosen_opts = []
+                    inspected_set = []
+                else:
+                    m_asin = re.match(r"^click\[(b0[0-9a-z]{8})\]$", act_l)
+                    if m_asin:
+                        cur_item = m_asin.group(1)
+                        chosen_opts = []
+                        inspected_set = []
+                    elif act_l in ("click[description]", "click[features]", "click[attributes]", "click[reviews]"):
+                        sub_name = act_l[6:-1]
+                        if sub_name not in inspected_set:
+                            inspected_set.append(sub_name)
+                    elif (
+                        act_l.startswith("click[")
+                        and "buy now" not in act_l
+                        and act_l not in ("click[< prev]", "click[next >]", "click[search]")
+                    ):
+                        if raw_act not in chosen_opts:
+                            chosen_opts.append(raw_act)
+                if (cur_query, cur_item, tuple(chosen_opts)) != prev_regime:
+                    tried_in_regime = []
+                elif act_l and act_l not in tried_in_regime:
+                    tried_in_regime.append(act_l)
+                if act_l:
+                    last_act_norm = act_l
+
             goal_words = set(re.findall(r"[a-z0-9]+", goal_lower))
             obs_words = set(re.findall(r"[a-z0-9]+", joined_obs.lower()))
             overlap = len(goal_words & obs_words) / max(1, len(goal_words))
             return {
                 "page_type": page_type,
                 "current_asin": current_asin,
-                "selected_options": ",".join(chosen_opts[-2:]) or "none",
-                "inspected_attributes": ",".join(inspected) or "none",
+                "selected_options": ",".join(chosen_opts[-3:]) or "none",
+                "inspected_attributes": ",".join(inspected_set) or "none",
                 "price_rating_match": "high" if overlap >= 0.45 else "low",
+                "_last_action": last_act_norm,
+                "_regime_tried": "|".join(tried_in_regime[-16:]),
             }
 
         tool_families = []
-        bound_ids = []
+        bound_ids: list[str] = []
         had_error = False
         artifact_state = "unchanged"
+        last_act_norm = "none"
+        tried_in_regime = []
+        for ev in events:
+            raw_act = str(
+                getattr(getattr(ev, "generation", None), "text", "")
+                or getattr(ev, "response", "")
+            ).strip()
+            obs_str = str(getattr(ev, "observation", ""))
+            prev_regime = (len(set(bound_ids)), artifact_state)
+            for m in re.findall(r'"(?:id|path|file|token|key|record_id)"\s*:\s*"([^"]{1,32})"', obs_str):
+                bound_ids.append(m)
+            step_err = "error" in obs_str.lower() or "exception" in obs_str.lower() or "invalid" in obs_str.lower()
+            if not step_err and ("success" in obs_str.lower() or "written" in obs_str.lower() or "updated" in obs_str.lower()):
+                artifact_state = "verified_write"
+            norm_a = cls.normalize_action_for_semantic_encoding(raw_act).lower()
+            if (len(set(bound_ids)), artifact_state) != prev_regime:
+                tried_in_regime = []
+            elif norm_a and norm_a not in tried_in_regime:
+                tried_in_regime.append(norm_a)
+            if norm_a:
+                last_act_norm = norm_a
         for ev in events[-4:]:
             act_text = str(getattr(ev, "generation", None).text if getattr(ev, "generation", None) else "")
             obs_str = str(getattr(ev, "observation", ""))
             tool_families.append(act_text[:32] or "call")
-            for m in re.findall(r'"(?:id|path|file|token|key|record_id)"\s*:\s*"([^"]{1,32})"', obs_str):
-                bound_ids.append(m)
             if "error" in obs_str.lower() or "exception" in obs_str.lower() or "invalid" in obs_str.lower():
                 had_error = True
-            if not had_error and ("success" in obs_str.lower() or "written" in obs_str.lower() or "updated" in obs_str.lower()):
-                artifact_state = "verified_write"
         return {
             "last_tool_family": tool_families[-1] if tool_families else "none",
             "bound_identifiers": f"count_{min(4, len(set(bound_ids)))}",
             "prerequisite_status": "error" if had_error else ("ready" if bound_ids else "pending"),
             "workspace_artifact_state": artifact_state,
+            "_last_action": last_act_norm,
+            "_regime_tried": "|".join(tried_in_regime[-16:]),
         }
 
     @classmethod
@@ -1646,7 +1744,10 @@ class PublicBenchmarkBinder:
         terminal_success: bool = False,
     ) -> int:
         """Encode 8-bin coarse summary while checking explicit positive binding values (fixes F09 'no' bug)."""
-        changed_fields = sum(1 for k, v in post_fields.items() if pre_fields.get(k, "unknown") != v)
+        changed_fields = sum(
+            1 for k, v in post_fields.items()
+            if not str(k).startswith("_") and pre_fields.get(k, "unknown") != v
+        )
         info_bit = 1 if changed_fields > 0 else 0
         entity_bound = (
             post_fields.get("inventory_object", "unknown") not in ("unknown", "none")
@@ -1795,7 +1896,7 @@ class PublicBenchmarkBinder:
         if name == "webshop" and action_schema.get("search_available"):
             query = bindings.get("goal_query", "")
             if not query and task_instruction:
-                words = [w for w in re.findall(r"[a-z0-9]+", task_instruction.lower()) if len(w) > 2][:6]
+                words = [w for w in re.findall(r"[a-z0-9]+", task_instruction.lower()) if len(w) >= 2][:16]
                 query = " ".join(words) or "product"
             if query:
                 search_act = f"search[{query}]"
@@ -1891,7 +1992,7 @@ class PublicBenchmarkBinder:
             if template.startswith("search[") and (action_schema.get("search_available") or allow_symbolic):
                 query = bindings.get("goal_query", "")
                 if not query:
-                    words = [w for w in re.findall(r"[a-z0-9]+", task_instruction.lower()) if len(w) > 2][:6]
+                    words = [w for w in re.findall(r"[a-z0-9]+", task_instruction.lower()) if len(w) >= 2][:16]
                     query = " ".join(words)
                 return f"search[{query}]" if query else None
             m_asin_slot = re.match(r"^click\[\{(candidate_asin(?:_\d+)?)\}\]$", template.strip())
@@ -2231,27 +2332,20 @@ class ControlledResponseEnsemble(nn.Module):
         step_budget_fraction: float,
         device: torch.device,
         dtype: torch.dtype = torch.float32,
-        prior_offset: float = 0.0,
     ) -> tuple[float, torch.Tensor]:
-        """Exact finite-horizon Bellman-neutral base logits for H_{phi_0}^{pi_0}(Y, C_tail | Y=1, K).
+        """Pure state-resource finite-horizon Bellman-neutral base logits for H_{phi_0}^{pi_0}(Y, C_tail | Y=1, K).
 
-        Derived analytically by unrolling the K-step geometric Markov chain induced by the single-step
-        phi_0 base law (base_term=[log(0.96), log(0.0048) + prior_offset, log(0.0352)], base_cost_logit=-5.0).
-        Barycentric projection onto `TAIL_COST_BIN_CENTERS` guarantees Q_{phi_0}^{(1)} == Q_{phi_0}^{(2)} == Q_{phi_0}^{(3)}
-        for all K >= 3 and all frozen Qwen prior log-probs `prior_offset`.
+        Depends strictly on remaining step horizon K (never on any prior root candidate action label!),
+        guaranteeing identical baseline semantics across TailExample supervision, fork-head supervision,
+        and deployment leaf evaluation, plus exact multi-step Bellman neutrality Q_{phi_0}^{(1)} == Q_{phi_0}^{(2)} == Q_{phi_0}^{(3)}.
         """
         sf = max(1e-4, float(step_budget_fraction))
         k_steps = max(0, int(round(max(0.0, float(remaining_steps_ratio)) / sf)))
         if k_steps <= 0:
             return -20.0, torch.zeros(TAIL_COST_BINS, device=device, dtype=dtype)
 
-        clamped_off = float(max(-6.0, min(6.0, prior_offset)))
-        w_live = 0.96
-        w_succ = 0.0048 * math.exp(clamped_off)
-        w_fail = 0.0352
-        z_den = w_live + w_succ + w_fail
-        p_live_0 = w_live / z_den
-        p_succ_0 = w_succ / z_den
+        p_live_0 = 0.96
+        p_succ_0 = 0.0048
         c_0 = 1.0 / (1.0 + math.exp(5.0))
 
         centers = TAIL_COST_BIN_CENTERS
@@ -2369,7 +2463,7 @@ class ControlledResponseEnsemble(nn.Module):
         }
         entity_pairs = {
             k: v for k, v in sorted(public_fields.items())
-            if str(v).lower() not in all_canon_status
+            if not str(k).startswith("_") and str(v).lower() not in all_canon_status
         }
 
         # 0..31: Frozen history representation (invariant to raw vs canonical status spelling)
@@ -2388,24 +2482,35 @@ class ControlledResponseEnsemble(nn.Module):
         )
         vec[FROZEN_HISTORY_DIM : FROZEN_HISTORY_DIM + len(act_seq)] = np.asarray(act_seq, dtype=np.float32)
 
-        # 48..63: Pre-action resource state & typed public field slots (identical in training and planning)
+        # 48..63: Pre-action resource state, public regime-idempotence indicators & typed field slots
         rem_sec = float(min(1.0, max(0.0, remaining_budget_ratio)))
         spent_sec = float(1.0 - rem_sec if spent_seconds_ratio is None else min(1.0, max(0.0, spent_seconds_ratio)))
         rem_steps = float(min(1.0, max(0.0, remaining_steps_ratio)))
-        goal_tokens = set(re.findall(r"[a-z0-9]{3,}", goal_text.lower()))
+        goal_tokens = set(re.findall(r"[a-z0-9]{2,}", goal_text.lower()))
         act_tokens = set(re.findall(r"[a-z0-9]{2,}", norm_act_text.lower()))
         entity_vals = " ".join(f"{k}:{v}" for k, v in sorted(entity_pairs.items())).lower()
         if role_bindings:
             entity_vals = entity_vals + " " + " ".join(str(v).lower() for v in role_bindings.values())
         field_tokens = set(re.findall(r"[a-z0-9_]{2,}", entity_vals))
 
+        raw_act_l = str(action_text or "").strip().lower()
+        norm_act_l = norm_act_text.strip().lower()
+        last_act_l = str(public_fields.get("_last_action", "none")).strip().lower()
+        tried_set = {
+            x.strip().lower()
+            for x in str(public_fields.get("_regime_tried", "")).split("|")
+            if x.strip()
+        }
+        is_imm_repeat = 1.0 if (raw_act_l and (raw_act_l == last_act_l or norm_act_l == last_act_l)) else 0.0
+        is_tried_regime = 1.0 if (raw_act_l and (raw_act_l in tried_set or norm_act_l in tried_set)) else 0.0
+
         base_idx = FROZEN_HISTORY_DIM + FROZEN_ACTION_DIM  # 48
         vec[base_idx + 0] = rem_sec
         vec[base_idx + 1] = spent_sec
         vec[base_idx + 2] = rem_steps
         vec[base_idx + 3] = len(goal_tokens & act_tokens) / max(1.0, float(len(goal_tokens)))
-        vec[base_idx + 4] = len(goal_tokens & field_tokens) / max(1.0, float(len(goal_tokens)))
-        vec[base_idx + 5] = len(act_tokens & field_tokens) / max(1.0, float(len(act_tokens)))
+        vec[base_idx + 4] = is_imm_repeat
+        vec[base_idx + 5] = is_tried_regime
 
         act_l = norm_act_text.strip().lower()
         vec[base_idx + 6] = 1.0 if act_l.startswith(("look", "inventory", "examine", "search[")) else 0.0
@@ -2448,7 +2553,49 @@ class ControlledResponseEnsemble(nn.Module):
             device=device,
         )
 
+    @staticmethod
+    def compute_centered_prior_advantages(raw_logprobs: Mapping[str, float]) -> dict[str, float]:
+        """Normalize full-sequence+EOS frozen action log-probs log pi_0(a | g, h) across admissible candidates
+        and center relative to candidate-prior entropy so E_{a ~ pi_0}[alpha_0(a)] == 0 identically.
+        """
+        if not raw_logprobs:
+            return {}
+        keys = list(raw_logprobs.keys())
+        vals = np.asarray([float(raw_logprobs[k]) for k in keys], dtype=np.float64)
+        finite_mask = np.isfinite(vals)
+        if not finite_mask.any():
+            return {k: 0.0 for k in keys}
+        max_v = float(vals[finite_mask].max())
+        shifted = np.where(finite_mask, vals - max_v, -50.0)
+        log_z = max_v + float(np.log(np.maximum(1e-18, np.exp(shifted).sum())))
+        log_tilde = np.where(finite_mask, vals - log_z, -50.0)
+        probs = np.exp(log_tilde)
+        probs = probs / max(1e-18, float(probs.sum()))
+        entropy_baseline = float((probs * log_tilde).sum())
+        centered = np.clip(log_tilde - entropy_baseline, -8.0, 4.0)
+        return {k: float(centered[i]) for i, k in enumerate(keys)}
+
+    @staticmethod
+    def apply_prior_advantage_to_q(
+        q_model: torch.Tensor,
+        p_y_model: torch.Tensor,
+        prior_advantage: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Combine pure response-model continuation (Q_model, P_y_model) with centered full-EOS action prior
+        alpha_0(a | g, h) in log-odds space (shared identically by fork_head_nll and evaluate_candidate_q).
+        """
+        adv = float(max(-8.0, min(4.0, prior_advantage)))
+        p_clamped = p_y_model.clamp(min=1e-6, max=1.0 - 1e-6)
+        if abs(adv) <= 1e-12:
+            return q_model.clamp(min=0.0, max=1.0), p_clamped
+        cond_time_factor = (q_model / p_clamped).clamp(min=0.0, max=1.0)
+        p_post = torch.sigmoid(torch.logit(p_clamped) + PRIOR_ADVANTAGE_WEIGHT * adv).clamp(min=1e-6, max=1.0 - 1e-6)
+        q_post = (p_post * cond_time_factor).clamp(min=0.0, max=1.0)
+        return q_post, p_post
+
     def _coerce_context(self, feat: torch.Tensor) -> torch.Tensor:
+        if feat.dim() == 2 and feat.shape[0] == self.ensemble_size and feat.shape[1] == self.context_dim:
+            return feat
         if feat.numel() == self.context_dim:
             return feat.view(self.context_dim)
         padded = torch.zeros(self.context_dim, device=feat.device, dtype=feat.dtype)
@@ -2460,15 +2607,33 @@ class ControlledResponseEnsemble(nn.Module):
         self,
         context_feat: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Compute normalized transition T_m(s'|s,c) and emission G_m(o|s',c) in a single pass."""
+        """Compute normalized transition T_m(s'|s,c_m) and emission G_m(o|s',c_m) supporting both shared `(C,)`
+        and strictly private per-member `(M, C)` contexts without cross-member averaging.
+        """
         c_vec = self._coerce_context(context_feat)
-        h_ctx = self.context_encoder(c_vec)  # (C,)
-        t_res = self.transition_residual_proj(h_ctx).view(
-            self.ensemble_size, self.state_dim, self.state_dim
-        )
-        e_res = self.emission_residual_proj(h_ctx).view(
-            self.ensemble_size, self.state_dim, self.outcome_bins
-        )
+        h_ctx = self.context_encoder(c_vec)  # (C,) or (M, C)
+        if h_ctx.dim() == 2:
+            t_w = self.transition_residual_proj.weight.view(
+                self.ensemble_size, self.state_dim, self.state_dim, self.context_dim
+            )
+            t_b = self.transition_residual_proj.bias.view(
+                self.ensemble_size, self.state_dim, self.state_dim
+            )
+            t_res = torch.einsum("mc,mijc->mij", h_ctx, t_w) + t_b
+            e_w = self.emission_residual_proj.weight.view(
+                self.ensemble_size, self.state_dim, self.outcome_bins, self.context_dim
+            )
+            e_b = self.emission_residual_proj.bias.view(
+                self.ensemble_size, self.state_dim, self.outcome_bins
+            )
+            e_res = torch.einsum("mc,msoc->mso", h_ctx, e_w) + e_b
+        else:
+            t_res = self.transition_residual_proj(h_ctx).view(
+                self.ensemble_size, self.state_dim, self.state_dim
+            )
+            e_res = self.emission_residual_proj(h_ctx).view(
+                self.ensemble_size, self.state_dim, self.outcome_bins
+            )
         T = F.softmax(self.transition_logits + t_res, dim=1)
         G = F.softmax(self.emission_logits + e_res, dim=-1)
         return T, G, h_ctx
@@ -2485,7 +2650,7 @@ class ControlledResponseEnsemble(nn.Module):
         prior_success_logit: float = 0.0,
         remaining_budget_ratio: float | torch.Tensor = 1.0,
     ) -> dict[str, torch.Tensor]:
-        """Single-pass per-member operator update, typed field-slot prediction, and transition heads (fixes F13, F22)."""
+        """Single-pass per-member operator update, typed field-slot prediction, and pure physical transition heads."""
         T, G, h_ctx = self.operator_matrices(context_feat)
         if prior_outcome_logits is not None and prior_outcome_logits.numel() == self.outcome_bins:
             prior_l = prior_outcome_logits.to(device=G.device, dtype=G.dtype).view(1, 1, self.outcome_bins)
@@ -2504,15 +2669,25 @@ class ControlledResponseEnsemble(nn.Module):
             post_belief = unnorm_post / unnorm_post.sum(dim=-1, keepdim=True).clamp(min=1e-8)
 
         # Typed field-slot distributions per member: (M, NUM_FIELD_SLOTS, NUM_SLOT_VALUES)
-        slot_logits_s = self.field_slot_proj(h_ctx).view(
-            self.ensemble_size, self.state_dim, NUM_FIELD_SLOTS, NUM_SLOT_VALUES
-        )
+        if h_ctx.dim() == 2:
+            f_w = self.field_slot_proj.weight.view(
+                self.ensemble_size, self.state_dim, NUM_FIELD_SLOTS, NUM_SLOT_VALUES, self.context_dim
+            )
+            f_b = self.field_slot_proj.bias.view(
+                self.ensemble_size, self.state_dim, NUM_FIELD_SLOTS, NUM_SLOT_VALUES
+            )
+            slot_logits_s = torch.einsum("mc,msjkc->msjk", h_ctx, f_w) + f_b
+            ctx_expanded = h_ctx
+        else:
+            slot_logits_s = self.field_slot_proj(h_ctx).view(
+                self.ensemble_size, self.state_dim, NUM_FIELD_SLOTS, NUM_SLOT_VALUES
+            )
+            ctx_expanded = h_ctx.unsqueeze(0).expand(self.ensemble_size, -1)  # (M, C)
         slot_probs_s = F.softmax(slot_logits_s, dim=-1)
         field_slot_probs = torch.einsum("ms,mskv->mkv", next_state_prior, slot_probs_s).clamp(min=1e-8)
         field_slot_probs = field_slot_probs / field_slot_probs.sum(dim=-1, keepdim=True)
 
-        # Strictly private per-member inputs: (M, S + C), never averaging belief across members (fixes F13)
-        ctx_expanded = h_ctx.unsqueeze(0).expand(self.ensemble_size, -1)  # (M, C)
+        # Strictly private per-member inputs: (M, S + C)
         member_in = torch.cat([next_state_prior, ctx_expanded], dim=-1)  # (M, S + C)
 
         term_res = torch.einsum("md,mdc->mc", member_in, self.member_termination_weight) + self.member_termination_bias
@@ -2525,10 +2700,9 @@ class ControlledResponseEnsemble(nn.Module):
         if prior_termination_logits is not None and prior_termination_logits.numel() == len(TERMINATION_CATEGORIES):
             base_term = prior_termination_logits.to(device=term_res.device, dtype=term_res.dtype).view(1, -1).expand(self.ensemble_size, -1)
         else:
-            # Coupled 3-way step outcome law: (0=live, 1=native_terminal_success, 2=native_terminal_or_budget_failure)
-            prior_off = 0.5 * float(max(-6.0, min(0.0, prior_action_logprob))) + float(prior_success_logit)
+            # Pure physical coupled 3-way step outcome law: (0=live, 1=native_terminal_success, 2=terminal_failure)
             l_live = math.log(0.96)
-            l_succ = math.log(0.0048) + prior_off
+            l_succ = math.log(0.0048)
             l_fail = torch.where(
                 rem_vec <= 0.05,
                 torch.full_like(rem_vec, 1.0),
@@ -2582,22 +2756,17 @@ class ControlledResponseEnsemble(nn.Module):
         public_fields: Mapping[str, str] | None = None,
         remaining_steps_ratio: float = 1.0,
         step_budget_fraction: float = 0.05,
-        prior_action_logprob: float = 0.0,
-        prior_success_logit: float = 0.0,
     ) -> dict[str, torch.Tensor]:
-        """Evaluate fixed-tail response distribution H_{phi,m}^{pi_0}(Y, C_tail | Y=1, b_m, z_one_hot, c_tail).
+        """Evaluate pure state-conditioned fixed-tail law H_{phi,m}^{pi_0}(Y, C_tail | Y=1, b_m, z_one_hot, c_tail).
 
-        Supports both single-assignment inputs `(M, ...)` (training NLL) and batched joint-assignment grids
-        `(M, G, ...)` (exact expectation E_Z[H(b_Z, Z)] during lookahead), using identical Bellman-neutral
-        finite-horizon base logits `(base_y_logit, base_bin_logits)`.
+        Identical baseline across TailExample direct supervision, fork-head marginal supervision, and
+        deployment leaf evaluation (never conditioned on root candidate action labels).
         """
-        prior_off = 0.5 * float(max(-6.0, min(0.0, prior_action_logprob))) + float(prior_success_logit)
         base_y_logit, base_bin_logits = self.base_tail_pi0_logits(
             remaining_steps_ratio=remaining_steps_ratio,
             step_budget_fraction=step_budget_fraction,
             device=belief.device,
             dtype=belief.dtype,
-            prior_offset=prior_off,
         )
         centers = torch.tensor(TAIL_COST_BIN_CENTERS, device=belief.device, dtype=belief.dtype)
 
@@ -2908,12 +3077,11 @@ class ControlledResponseEnsemble(nn.Module):
                     public_fields=base_fields,
                     remaining_steps_ratio=cur_rem_steps,
                     step_budget_fraction=step_frac,
-                    prior_success_logit=prior_success_logit,
                 )
                 return (
                     cur_alive * tail_out["expected_tail_utility"],
                     (cur_spent + cur_alive * tail_out["expected_cond_tail_cost"]).clamp(max=1.0),
-                    tail_out["tail_y_prob"],
+                    cur_alive * tail_out["tail_y_prob"],
                 )
 
             # Exact state-conditioned joint field-slot distribution P_m(z) = sum_s b_m(s) prod_j G_{m,s,j}(z_j)
@@ -2969,8 +3137,6 @@ class ControlledResponseEnsemble(nn.Module):
                 field_slot_probs=slot_oh_act,
                 remaining_steps_ratio=cur_rem_steps,
                 step_budget_fraction=step_frac,
-                prior_action_logprob=prior_action_logprob,
-                prior_success_logit=prior_success_logit,
             )
             exp_tail_u = (p_z_act * tail_out["expected_tail_utility"]).sum(dim=-1)
             exp_tail_c = (p_z_act * tail_out["expected_cond_tail_cost"]).sum(dim=-1)
@@ -2978,7 +3144,7 @@ class ControlledResponseEnsemble(nn.Module):
             return (
                 cur_alive * exp_tail_u,
                 (spent_clamped + cur_alive * exp_tail_c).clamp(max=1.0),
-                exp_tail_y,
+                cur_alive * exp_tail_y,
             )
 
         def _eval_call_step(
@@ -2991,8 +3157,9 @@ class ControlledResponseEnsemble(nn.Module):
             cur_bindings: Mapping[str, str],
             act_str: str,
             is_first: bool,
-        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, torch.Tensor, torch.Tensor, tuple[int, int, int, int]]:
-            rem_vec = (1.0 - cur_spent).clamp(min=0.0, max=1.0)
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, torch.Tensor, torch.Tensor, torch.Tensor, tuple[int, int, int, int]]:
+            spent_clamped = cur_spent.clamp(min=0.0, max=1.0)
+            rem_vec = (1.0 - spent_clamped).clamp(min=0.0, max=1.0)
             norm_act = PublicBenchmarkBinder.normalize_action_for_semantic_encoding(act_str, cur_bindings)
             if is_first and frozen_action_vec:
                 act_vec: Sequence[float] = frozen_action_vec
@@ -3000,37 +3167,48 @@ class ControlledResponseEnsemble(nn.Module):
                 act_vec = action_embedder(norm_act)
             else:
                 act_vec = ()
-            marg_slots = torch.einsum("ms,mskv->mkv", cur_b, cur_slot_probs_s).mean(dim=0)  # (4, 4)
-            modal_slots = tuple(int(x) for x in marg_slots.argmax(dim=-1).tolist())
-            eff_fields = PublicBenchmarkBinder.slots_to_canonical_fields(cur_fields, modal_slots)  # type: ignore[arg-type]
-            ctx = self.encode_context_vector(
+            # Per-member private context `(M, 64)`: each member retains its own spent/remaining budget and
+            # its own state-marginalized slot expectations without cross-member `mean(dim=0)` collapse!
+            marg_m = torch.einsum("ms,mskv->mkv", cur_b, cur_slot_probs_s).clamp(min=1e-8)  # (M, 4, 4)
+            marg_m = marg_m / marg_m.sum(dim=-1, keepdim=True)
+            modal_slots = tuple(int(x) for x in marg_m.mean(dim=0).argmax(dim=-1).tolist())
+            ctx_base = self.encode_context_vector(
                 goal_text=goal_text,
-                public_fields=eff_fields,
-                action_text=norm_act,
+                public_fields=cur_fields,
+                action_text=act_str,
                 remaining_budget_ratio=float(rem_vec.mean().item()),
-                spent_seconds_ratio=float(cur_spent.mean().item()),
+                spent_seconds_ratio=float(spent_clamped.mean().item()),
                 remaining_steps_ratio=cur_rem_steps,
                 role_bindings=cur_bindings,
                 typed_slots=modal_slots,  # type: ignore[arg-type]
                 frozen_context_vec=frozen_context_vec,
                 frozen_action_vec=act_vec,
-                prior_success_logit=prior_success_logit,
                 device=device,
             )
+            ctx_m = ctx_base.unsqueeze(0).expand(self.ensemble_size, -1).clone()
+            b_idx = FROZEN_HISTORY_DIM + FROZEN_ACTION_DIM
+            val_grid = torch.arange(NUM_SLOT_VALUES, device=device, dtype=ctx_m.dtype).view(1, 1, NUM_SLOT_VALUES)
+            exp_slot_m = (marg_m * val_grid).sum(dim=-1)  # (M, 4)
+            ctx_m[:, b_idx + 0] = rem_vec
+            ctx_m[:, b_idx + 1] = spent_clamped
+            ctx_m[:, b_idx + 2] = float(min(1.0, max(0.0, cur_rem_steps)))
+            ctx_m[:, b_idx + 10 : b_idx + 14] = (exp_slot_m - 1.5) / 1.5
+            ctx_m[:, b_idx + 14] = marg_m[:, 0, 3]
+            ctx_m[:, b_idx + 15] = marg_m[:, 3, 3]
+
             preds = self.step_and_predict(
                 cur_b,
-                ctx,
+                ctx_m,
                 observed_outcome_bin=None,
-                prior_action_logprob=prior_action_logprob,
-                prior_success_logit=prior_success_logit,
                 remaining_budget_ratio=rem_vec,
             )
-            next_spent = (cur_spent + preds["cost_ratio"]).clamp(min=0.0, max=1.0)
+            next_spent = (spent_clamped + preds["cost_ratio"]).clamp(min=0.0, max=1.0)
             next_rem_steps = max(0.0, cur_rem_steps - step_frac)
             p_live = preds["termination_probs"][:, 0]
             p_term_succ = preds["termination_probs"][:, 1]
             rem_after = (1.0 - next_spent).clamp(min=0.0, max=1.0)
-            step_u = cur_alive * p_term_succ * rem_after
+            step_y = cur_alive * p_term_succ
+            step_u = step_y * rem_after
             horizon_alive = 1.0 if next_rem_steps > 1e-7 else 0.0
             if controller_mode == "legacy_lcb_v3":
                 p_no_change = preds["outcome_probs"][:, :4].sum(dim=-1).clamp(min=0.0, max=1.0)
@@ -3046,6 +3224,7 @@ class ControlledResponseEnsemble(nn.Module):
                 next_alive,
                 next_rem_steps,
                 step_u,
+                step_y,
                 preds["slot_probs_per_state"],
                 next_modal_slots,  # type: ignore[return-value]
             )
@@ -3108,7 +3287,7 @@ class ControlledResponseEnsemble(nn.Module):
                 next_f.pending_return_var = head.bind_return_to or f"ret_{next_f.program_counter - 1}"
                 next_f.executed_actions.append(act_str)
 
-                nb, n_spent, n_alive, n_rem_steps, step_u, n_slots_s, next_modal_slots = _eval_call_step(
+                nb, n_spent, n_alive, n_rem_steps, step_u, step_y, n_slots_s, next_modal_slots = _eval_call_step(
                     cur_b,
                     cur_spent,
                     cur_alive,
@@ -3120,10 +3299,17 @@ class ControlledResponseEnsemble(nn.Module):
                     is_first=(calls_used == 0),
                 )
                 next_f.record_symbolic_call_return(act_str, calls_used, next_modal_slots)
+                next_f.observed_readouts["_last_action"] = act_str.strip().lower()
+                prev_tried = [
+                    x for x in str(next_f.observed_readouts.get("_regime_tried", "")).split("|") if x.strip()
+                ]
+                if act_str.strip().lower() not in prev_tried:
+                    prev_tried.append(act_str.strip().lower())
+                next_f.observed_readouts["_regime_tried"] = "|".join(prev_tried[-16:])
                 rem_u, end_cost, tail_y = _eval_ast_frame(
                     next_f, nb, n_spent, n_alive, n_rem_steps, n_slots_s, calls_used + 1
                 )
-                return step_u + rem_u, end_cost, tail_y
+                return step_u + rem_u, end_cost, step_y + tail_y
 
             if head.op == "Case":
                 slot_idx, val_idx = PublicBenchmarkBinder.condition_slot_and_value(
@@ -3175,7 +3361,7 @@ class ControlledResponseEnsemble(nn.Module):
                 u_f, c_f, y_f = _eval_ast_frame(
                     frame_false, b_false, cur_spent, cur_alive * p_false, cur_rem_steps, slots_s_false, calls_used
                 )
-                return u_t + u_f, p_true * c_t + p_false * c_f, p_true * y_t + p_false * y_f
+                return u_t + u_f, p_true * c_t + p_false * c_f, y_t + y_f
 
             next_f = sim_frame.clone()
             next_f.node_stack = list(rest)
@@ -3184,7 +3370,7 @@ class ControlledResponseEnsemble(nn.Module):
         if initial_frame is not None:
             # `initial_frame` is the post-Call-0 frame produced by `step_ast_frame`: execute Call-0 (`candidate_action`)
             # then continue `initial_frame` after binding its symbolic return handle!
-            nb0, n_spent0, n_alive0, n_rem0, step_u0, n_slots0, modal_slots0 = _eval_call_step(
+            nb0, n_spent0, n_alive0, n_rem0, step_u0, step_y0, n_slots0, modal_slots0 = _eval_call_step(
                 init_belief,
                 init_spent,
                 init_alive,
@@ -3197,10 +3383,18 @@ class ControlledResponseEnsemble(nn.Module):
             )
             cont_frame = initial_frame.clone()
             cont_frame.record_symbolic_call_return(candidate_action, 0, modal_slots0)
-            rem_u0, end_spent, tail_y_members = _eval_ast_frame(
+            cont_frame.observed_readouts["_last_action"] = candidate_action.strip().lower()
+            prev_tried0 = [
+                x for x in str(cont_frame.observed_readouts.get("_regime_tried", "")).split("|") if x.strip()
+            ]
+            if candidate_action.strip().lower() not in prev_tried0:
+                prev_tried0.append(candidate_action.strip().lower())
+            cont_frame.observed_readouts["_regime_tried"] = "|".join(prev_tried0[-16:])
+            rem_u0, end_spent, tail_y_rem = _eval_ast_frame(
                 cont_frame, nb0, n_spent0, n_alive0, n_rem0, n_slots0, 1
             )
-            q_members = step_u0 + rem_u0
+            q_model_members = step_u0 + rem_u0
+            total_y_model_members = step_y0 + tail_y_rem
         else:
             ast_seq = (
                 program.ast_nodes
@@ -3220,11 +3414,14 @@ class ControlledResponseEnsemble(nn.Module):
                 observed_readouts=dict(base_fields),
                 node_stack=list(ast_seq),
             )
-            q_members, end_spent, tail_y_members = _eval_ast_frame(
+            q_model_members, end_spent, total_y_model_members = _eval_ast_frame(
                 root_frame, init_belief, init_spent, init_alive, init_rem_steps, init_slot_probs_s, 0
             )
 
-        q_members = q_members.clamp(min=0.0, max=1.0)
+        q_model_members = q_model_members.clamp(min=0.0, max=1.0)
+        q_members, total_y_members = self.apply_prior_advantage_to_q(
+            q_model_members, total_y_model_members, float(prior_action_logprob) + float(prior_success_logit)
+        )
         q_mean_t = q_members.mean()
         q_std_t = q_members.std(unbiased=False) if self.ensemble_size > 1 else torch.zeros_like(q_mean_t)
         q_lcb_val = float((q_mean_t - 0.5 * q_std_t).clamp(min=0.0).item())
@@ -3232,6 +3429,8 @@ class ControlledResponseEnsemble(nn.Module):
         if member_index is not None:
             m_idx = int(member_index) % self.ensemble_size
             q_scalar = float(q_members[m_idx].item())
+        elif controller_mode == "prior_only_reranker":
+            q_scalar = float(prior_action_logprob)
         elif controller_mode == "legacy_lcb_v3":
             q_scalar = q_lcb_val
         else:
@@ -3239,11 +3438,13 @@ class ControlledResponseEnsemble(nn.Module):
 
         return {
             "q_mean": float(q_mean_t.item()),
+            "q_model_only_mean": float(q_model_members.mean().item()),
+            "prior_advantage": float(prior_action_logprob),
             "q_std": float(q_std_t.item()),
             "q_lcb": q_lcb_val,
             "q_selected": q_scalar,
             "q_members": [float(x) for x in q_members.detach().cpu().tolist()],
-            "predicted_terminal_success": float(tail_y_members.mean().item()),
+            "predicted_terminal_success": float(total_y_members.mean().item()),
             "predicted_cost_ratio": float(end_spent.mean().item()),
         }
 
@@ -3263,6 +3464,13 @@ class ControlledResponseEnsemble(nn.Module):
         results: list[dict[str, Any]] = []
         vec_map = precomputed_action_vecs or {}
         lp_map = precomputed_prior_logprobs or {}
+        last_act = str(decision_ctx.public_fields.get("_last_action", "")).strip().lower()
+        is_loca = decision_ctx.benchmark.split(":", 1)[0] == "loca"
+        apply_repeat_penalty = (
+            bool(last_act)
+            and last_act != "none"
+            and decision_ctx.controller_mode != "prior_only_reranker"
+        )
         for cid, c_act, c_prog, c_frame in candidates:
             norm_act = PublicBenchmarkBinder.normalize_action_for_semantic_encoding(
                 c_act, decision_ctx.role_bindings
@@ -3282,6 +3490,16 @@ class ControlledResponseEnsemble(nn.Module):
                 prior_action_logprob=cand_lp,
                 use_initial_params=use_initial_params,
             )
+            cand_cmp = (
+                PublicBenchmarkBinder.normalize_action_for_semantic_encoding(c_act).strip().lower()
+                if is_loca
+                else str(c_act).strip().lower()
+            )
+            if apply_repeat_penalty and cand_cmp == last_act:
+                q_eval["q_selected"] = float(q_eval["q_selected"]) - ACTION_REPEAT_PENALTY
+                q_eval["repetition_penalty_applied"] = -ACTION_REPEAT_PENALTY
+            else:
+                q_eval["repetition_penalty_applied"] = 0.0
             results.append(
                 {
                     "candidate_id": cid,
@@ -3300,19 +3518,27 @@ class ControlledResponseEnsemble(nn.Module):
         *,
         benchmark: str,
         goal_category: str,
+        role_bindings: Mapping[str, str] | None = None,
+        action_templates: Mapping[str, str] | None = None,
         prior_action_text: str = "",
         existing_comparison_keys: Mapping[str, set[str]] | None = None,
         current_readout_sig: str = "",
         rng: random.Random | None = None,
     ) -> dict[str, Any] | None:
-        """Select continuation pair (u, v) by ensemble decision-disagreement R_h(u, v) per paired execution cost.
-
-        R_h(u, v) = (1/M) * sum_m max(Q_m(u), Q_m(v)) - max(Q_bar(u), Q_bar(v))
-                  = 0.5 * (E_m |Delta_m| - |E_m Delta_m|).
-        When R_h == 0 (undifferentiated initialization), anchors u on the frozen LM prior proposal and
-        selects v by reusing cross-anchor canonical `comparison_key`s or role-diverse seeded sampling
-        (eliminating static lexicographic first-two selection).
+        """Select continuation pair (u, v) by ensemble decision-disagreement R_h(u, v) per paired execution cost,
+        using the exact `role_bindings` / `action_templates` from `DecisionContext` so acquisition keys match
+        stored `MeasurementRecord` and `ActionContrastProposer` keys identically.
         """
+        tmpl_cache = dict(action_templates or {})
+
+        def _tmpl_of(act_str: str) -> str:
+            s_a = str(act_str).strip()
+            if s_a not in tmpl_cache:
+                tmpl_cache[s_a] = PublicBenchmarkBinder.abstract_action_to_template(
+                    benchmark, s_a, role_bindings
+                )
+            return tmpl_cache[s_a]
+
         distinct: list[Mapping[str, Any]] = []
         seen_tmpls: set[str] = set()
         seen_acts: set[str] = set()
@@ -3325,7 +3551,7 @@ class ControlledResponseEnsemble(nn.Module):
             act = str(item.get("candidate_action", "")).strip()
             if not act or act in seen_acts:
                 continue
-            tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark, act)
+            tmpl = _tmpl_of(act)
             if tmpl in seen_tmpls and len(scored_candidates) > 2:
                 continue
             seen_acts.add(act)
@@ -3355,6 +3581,7 @@ class ControlledResponseEnsemble(nn.Module):
         best_pair: tuple[int, int] | None = None
         best_r_per_cost = -1.0
         best_r_raw = 0.0
+        max_unthresholded_r = 0.0
         existing_map = existing_comparison_keys or {}
 
         # Evaluate pairs involving competitive candidates (top-8 by q_mean + prior + previously measured keys)
@@ -3369,16 +3596,18 @@ class ControlledResponseEnsemble(nn.Module):
             qi = np.asarray(distinct[i]["q_members"], dtype=np.float64)
             q_bar_i = float(qi.mean())
             cost_i = max(0.01, float(distinct[i].get("predicted_cost_ratio", 0.05)))
-            tmpl_i = PublicBenchmarkBinder.abstract_action_to_template(benchmark, str(distinct[i]["candidate_action"]))
+            tmpl_i = _tmpl_of(str(distinct[i]["candidate_action"]))
             for j in range(len(distinct)):
                 if i == j:
                     continue
                 qj = np.asarray(distinct[j]["q_members"], dtype=np.float64)
                 q_bar_j = float(qj.mean())
                 r_val = float(np.maximum(qi, qj).mean() - max(q_bar_i, q_bar_j))
+                if r_val > max_unthresholded_r:
+                    max_unthresholded_r = r_val
                 cost_j = max(0.01, float(distinct[j].get("predicted_cost_ratio", 0.05)))
                 pair_cost = max(0.05, cost_i + cost_j)
-                tmpl_j = PublicBenchmarkBinder.abstract_action_to_template(benchmark, str(distinct[j]["candidate_action"]))
+                tmpl_j = _tmpl_of(str(distinct[j]["candidate_action"]))
                 comp = Comparison.canonicalize(
                     goal_category=goal_category,
                     u_policy_id=tmpl_i,
@@ -3397,7 +3626,7 @@ class ControlledResponseEnsemble(nn.Module):
             # Below meaningful disagreement threshold: anchor u on frozen LM prior proposal (index 0 if valid)
             u_idx = 0 if (prior_action_text and str(distinct[0]["candidate_action"]).strip() == prior_action_text.strip()) else best_u_idx
             u_act = str(distinct[u_idx]["candidate_action"])
-            u_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark, u_act)
+            u_tmpl = _tmpl_of(u_act)
             u_verb = u_act.split()[0].split("[")[0].lower() if u_act else ""
 
             # 1) Reuse a canonical comparison_key already measured at a distinct public readout z' != z
@@ -3409,7 +3638,7 @@ class ControlledResponseEnsemble(nn.Module):
                     continue
                 all_other_v.append(j)
                 v_act = str(distinct[j]["candidate_action"])
-                v_tmpl = PublicBenchmarkBinder.abstract_action_to_template(benchmark, v_act)
+                v_tmpl = _tmpl_of(v_act)
                 comp = Comparison.canonicalize(goal_category=goal_category, u_policy_id=u_tmpl, v_policy_id=v_tmpl)
                 seen_sigs = existing_map.get(comp.comparison_key, set())
                 if seen_sigs and current_readout_sig not in seen_sigs:
@@ -3432,10 +3661,19 @@ class ControlledResponseEnsemble(nn.Module):
             best_r_raw = 0.0
 
         idx_u, idx_v = best_pair
+        chosen_u_act = str(distinct[idx_u]["candidate_action"])
+        chosen_v_act = str(distinct[idx_v]["candidate_action"])
+        chosen_comp = Comparison.canonicalize(
+            goal_category=goal_category,
+            u_policy_id=_tmpl_of(chosen_u_act),
+            v_policy_id=_tmpl_of(chosen_v_act),
+        )
         return {
             "u_entry": distinct[idx_u],
             "v_entry": distinct[idx_v],
+            "comparison": chosen_comp,
             "disagreement_r": float(best_r_raw),
+            "max_raw_disagreement_r": float(max_unthresholded_r),
             "selection_mode": selection_mode,
             "num_distinct_candidates": len(distinct),
         }
@@ -3555,6 +3793,12 @@ class ControlledResponseEnsemble(nn.Module):
                 )
                 ep_outcome_info[ep_key] = (bool(tex.observed_y), tex.frozen_tail_action_vec, sf_tb)
 
+        ep_pi0_step_counts: dict[str, int] = {}
+        for tr_c in transitions:
+            ep_c = str(tr_c.episode_id or "")
+            if tr_c.controller_id == TAIL_POLICY_VERSION and ep_c:
+                ep_pi0_step_counts[ep_c] = ep_pi0_step_counts.get(ep_c, 0) + 1
+
         seen_branch_heads: set[str] = set()
         fork_head_nll = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
         fork_heads_supervised = 0
@@ -3631,15 +3875,20 @@ class ControlledResponseEnsemble(nn.Module):
 
             total_member_nll = total_member_nll + (resp_nll + slot_nll + term_nll + cost_nll)
 
-            # 4. Exact 1-step marginal continuation likelihood on fork-head steps `(u -> pi_0, v -> pi_0)`:
+            # 4. Exact 1-step marginal continuation likelihood on every pi_0-followed transition `(a_t -> pi_0)`:
             #    P_m(Y_branch | b_t, a_t, do(pi_0)) = p_term_succ(a_t) + p_live(a_t) * E_Z[P_m^{pi_0}(Y=1 | b_m(.|Z), Z)]
+            #    Paired fork-head interventions `(u, v)` carry unit weight 1.0; subsequent on-policy tail steps
+            #    carry episode-normalized weight `1 / max(1, N_ep - 1)` so every stagnant or successful tail step
+            #    trains action-conditioned continuation without inflating episode sample count.
             ep_id_str = str(tr.episode_id or "")
             if (
                 tr.controller_id == TAIL_POLICY_VERSION
-                and ep_id_str not in seen_branch_heads
                 and (ep_id_str in ep_outcome_info or (term_done and tr.native_outcome is not None))
             ):
+                is_fork_head = ep_id_str not in seen_branch_heads
                 seen_branch_heads.add(ep_id_str)
+                n_ep_steps = ep_pi0_step_counts.get(ep_id_str, 1)
+                cont_weight = 1.0 if is_fork_head else (1.0 / float(max(1, n_ep_steps - 1)))
                 if ep_id_str in ep_outcome_info:
                     y_branch_bool, t_act_vec, sf_val = ep_outcome_info[ep_id_str]
                 else:
@@ -3702,18 +3951,22 @@ class ControlledResponseEnsemble(nn.Module):
                         field_slot_probs=oh_b,
                         remaining_steps_ratio=next_rem_s,
                         step_budget_fraction=sf_val,
-                        prior_action_logprob=float(tr.prior_action_logprob),
                     )
                     marg_tail_y = (pz_g * t_out_h["tail_y_prob"]).sum(dim=-1)
-                    p_branch_y = (p_succ_h + p_live_h * marg_tail_y).clamp(min=1e-6, max=1.0 - 1e-6)
+                    p_branch_y_model = (p_succ_h + p_live_h * marg_tail_y).clamp(min=1e-6, max=1.0 - 1e-6)
                 else:
-                    p_branch_y = p_succ_h.clamp(min=1e-6, max=1.0 - 1e-6)
+                    p_branch_y_model = p_succ_h.clamp(min=1e-6, max=1.0 - 1e-6)
+
+                _, p_branch_y = self.apply_prior_advantage_to_q(
+                    p_branch_y_model, p_branch_y_model, float(tr.prior_action_logprob)
+                )
 
                 y_br_t = 1.0 if y_branch_bool else 0.0
-                fork_head_nll = fork_head_nll - (
+                fork_head_nll = fork_head_nll - cont_weight * (
                     y_br_t * torch.log(p_branch_y) + (1.0 - y_br_t) * torch.log(1.0 - p_branch_y)
                 )
-                fork_heads_supervised += 1
+                if is_fork_head:
+                    fork_heads_supervised += 1
 
         # 5. Supervise fixed-tail head H_{phi,m}^{pi_0}(Y, C_tail | Y=1) normalized 1:1 per episode
         tail_member_nll = torch.zeros(self.ensemble_size, device=device, dtype=torch.float32)
@@ -4145,32 +4398,46 @@ class ActionContrastProposer:
             if candidates_checked >= self.max_candidate_checks:
                 break
             if self.proposer_mode == "conditional_gain":
-                # Continuous conditional selection gain Gamma(f; u, v) = sum_z p(z) max(0, E[d|z]) - max(0, E[d])
+                # Exact binary Case(Z_f == z*: true_branch, false_branch) selection gain Gamma_binary(f, z*; u, v)
+                # evaluated on the identical observed population D_{u,v,f} = {r in D_{u,v} : Z_f(r) != "unknown"}.
                 if len(comp_records) < 2:
                     continue
-                d_vals = [float(label_view.get(r.record_id, 0.0)) for r in comp_records]
-                base_gain = max(0.0, float(sum(d_vals)) / float(len(d_vals)))
                 all_f_keys = list(dict.fromkeys(k for r in comp_records for k in r.public_readout_z.keys()))
                 best_f = ""
                 best_gamma = 0.0
                 best_pos_z = ""
+                best_true_is_u = True
                 for fk in all_f_keys:
-                    by_z: dict[str, list[float]] = {}
-                    for r, dv in zip(comp_records, d_vals):
+                    obs_pairs: list[tuple[str, float]] = []
+                    for r in comp_records:
                         raw_z = r.public_readout_z.get(fk, "unknown")
                         if raw_z == "unknown":
                             continue
                         cz = PublicBenchmarkBinder.canonical_slot_predicate_value(fk, raw_z)
-                        by_z.setdefault(cz, []).append(dv)
-                    if len(by_z) < 2:
+                        obs_pairs.append((cz, float(label_view.get(r.record_id, 0.0))))
+                    if len(obs_pairs) < 2:
                         continue
-                    n_obs = sum(len(vs) for vs in by_z.values())
-                    cond_val = sum((len(vs) / float(n_obs)) * max(0.0, sum(vs) / float(len(vs))) for vs in by_z.values())
-                    gamma = cond_val - base_gain
-                    if gamma > best_gamma + 1e-6:
-                        best_gamma = gamma
-                        best_f = fk
-                        best_pos_z = max(by_z.items(), key=lambda kv: sum(kv[1]) / float(len(kv[1])))[0]
+                    n_obs = float(len(obs_pairs))
+                    base_gain_f = max(0.0, sum(dv for _, dv in obs_pairs) / n_obs)
+                    unique_zs = list(dict.fromkeys(cz for cz, _ in obs_pairs))
+                    if len(unique_zs) < 2:
+                        continue
+                    for z_cand in unique_zs:
+                        eq_vals = [dv for cz, dv in obs_pairs if cz == z_cand]
+                        neq_vals = [dv for cz, dv in obs_pairs if cz != z_cand]
+                        if not eq_vals or not neq_vals:
+                            continue
+                        mean_eq = sum(eq_vals) / float(len(eq_vals))
+                        mean_neq = sum(neq_vals) / float(len(neq_vals))
+                        p_eq = float(len(eq_vals)) / n_obs
+                        p_neq = float(len(neq_vals)) / n_obs
+                        bin_gain = p_eq * max(0.0, mean_eq) + p_neq * max(0.0, mean_neq)
+                        gamma_bin = bin_gain - base_gain_f
+                        if gamma_bin > best_gamma + 1e-6:
+                            best_gamma = gamma_bin
+                            best_f = fk
+                            best_pos_z = z_cand
+                            best_true_is_u = bool(mean_eq > 0.0)
                 if best_gamma <= 1e-6 or not best_f:
                     continue
                 pos_records = [r for r in comp_records if float(label_view.get(r.record_id, 0.0)) > 0.0]
@@ -4181,6 +4448,7 @@ class ActionContrastProposer:
                 best_f = ""
                 best_gamma = 0.0
                 best_pos_z = ""
+                best_true_is_u = True
                 pos_records = [rec for rec in comp_records if label_view.get(rec.record_id, 0.0) > 0.01]
                 neg_records = [rec for rec in comp_records if label_view.get(rec.record_id, 0.0) < -0.01]
                 if not pos_records or not neg_records:
@@ -4226,8 +4494,12 @@ class ActionContrastProposer:
                         if (cond_f and raw_cond_v)
                         else ""
                     )
-                    true_branch_tmpl = r1.u_policy_id if d1_view > 0 else r1.v_policy_id
-                    false_branch_tmpl = r1.v_policy_id if d1_view > 0 else r1.u_policy_id
+                    if self.proposer_mode == "conditional_gain":
+                        true_branch_tmpl = r1.u_policy_id if best_true_is_u else r1.v_policy_id
+                        false_branch_tmpl = r1.v_policy_id if best_true_is_u else r1.u_policy_id
+                    else:
+                        true_branch_tmpl = r1.u_policy_id if d1_view > 0 else r1.v_policy_id
+                        false_branch_tmpl = r1.v_policy_id if d1_view > 0 else r1.u_policy_id
                     use_case = bool(cond_f and cond_v and true_branch_tmpl != false_branch_tmpl)
 
                     # 1. Full original trace program candidate with canonical Case(z: u, v) branches

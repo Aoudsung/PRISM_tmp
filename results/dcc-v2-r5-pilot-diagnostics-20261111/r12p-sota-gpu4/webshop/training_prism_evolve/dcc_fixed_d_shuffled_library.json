@@ -1,0 +1,378 @@
+{
+  "benchmark": "webshop",
+  "max_programs": 32,
+  "starter_ids": [
+    "97eac41014c2",
+    "f749f98bf440",
+    "1d0b27662c10",
+    "e7e44f0a1ccd"
+  ],
+  "programs": [
+    {
+      "program_id": "97eac41014c2",
+      "benchmark": "webshop",
+      "step_templates": [
+        "search[{goal_query}]"
+      ],
+      "readout_fields": [
+        "page_type",
+        "price_rating_match"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 1.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "search[{goal_query}]",
+          "typed_arguments": {
+            "goal_query": "$goal_query"
+          },
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "page_type",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "price_rating_match",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0"
+      ],
+      "formal_params": [
+        "goal_query"
+      ],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "page_type",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "price_rating_match",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    },
+    {
+      "program_id": "f749f98bf440",
+      "benchmark": "webshop",
+      "step_templates": [
+        "click[{candidate_asin}]"
+      ],
+      "readout_fields": [
+        "current_asin",
+        "selected_options"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 1.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "click[{candidate_asin}]",
+          "typed_arguments": {
+            "candidate_asin": "$candidate_asin"
+          },
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "current_asin",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "selected_options",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0"
+      ],
+      "formal_params": [
+        "candidate_asin"
+      ],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "current_asin",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "selected_options",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    },
+    {
+      "program_id": "1d0b27662c10",
+      "benchmark": "webshop",
+      "step_templates": [
+        "click[attributes]",
+        "click[< prev]"
+      ],
+      "readout_fields": [
+        "current_asin",
+        "inspected_attributes"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 2.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "click[attributes]",
+          "typed_arguments": {},
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "current_asin",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Call",
+          "tool_or_action": "click[< prev]",
+          "typed_arguments": {},
+          "bind_return_to": "ret_1",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_1",
+          "public_field_path": "inspected_attributes",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0",
+        "ret_1"
+      ],
+      "formal_params": [],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "current_asin",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 1,
+          "variable_name": "ret_1",
+          "field_path": "inspected_attributes",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    },
+    {
+      "program_id": "e7e44f0a1ccd",
+      "benchmark": "webshop",
+      "step_templates": [
+        "click[description]",
+        "click[< prev]"
+      ],
+      "readout_fields": [
+        "current_asin",
+        "inspected_attributes"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 2.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "click[description]",
+          "typed_arguments": {},
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "current_asin",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Call",
+          "tool_or_action": "click[< prev]",
+          "typed_arguments": {},
+          "bind_return_to": "ret_1",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_1",
+          "public_field_path": "inspected_attributes",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0",
+        "ret_1"
+      ],
+      "formal_params": [],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "current_asin",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 1,
+          "variable_name": "ret_1",
+          "field_path": "inspected_attributes",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    }
+  ]
+}

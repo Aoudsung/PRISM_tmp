@@ -1,0 +1,1015 @@
+{
+  "resolved_manifest": {
+    "git_commit": "unknown",
+    "dcc_contract_version": "prism-dcc-v2-unified-r5",
+    "host": "mgt01",
+    "cuda_visible_devices": "4",
+    "backbone": "Qwen/Qwen2.5-7B-Instruct",
+    "model_path": "/apps/users/adminuser/models/Qwen2.5-7B-Instruct",
+    "seed": 42,
+    "train_groups": 8,
+    "eval_tasks": 12,
+    "methods": [
+      "frozen_base",
+      "prism_evolve"
+    ]
+  },
+  "stage1_r5_checks": {
+    "phi0_bellman_neutrality": {
+      "depth_1": 0.07114631682634354,
+      "depth_2": 0.07114633172750473,
+      "depth_3": 0.07114633917808533,
+      "max_spread": 2.2351741790771484e-08
+    },
+    "single_prefill_kv_crop_check": {
+      "candidates": [
+        "search[home office furniture sets dining room living room color blue gray shape round size ft in]",
+        "click[search]"
+      ],
+      "goal_query_bound": "home office furniture sets dining room living room color blue gray shape round size ft in",
+      "raw_logprobs_fresh": {
+        "search[home office furniture sets dining room living room color blue gray shape round size ft in]": -6.99159,
+        "click[search]": -0.01816
+      },
+      "raw_logprobs_reused": {
+        "search[home office furniture sets dining room living room color blue gray shape round size ft in]": -6.99159,
+        "click[search]": -0.01816
+      },
+      "centered_advantages": {
+        "search[home office furniture sets dining room living room color blue gray shape round size ft in]": -6.96691,
+        "click[search]": 0.00652
+      },
+      "max_abs_logprob_diff": 0.0,
+      "fresh_charged_tokens": 490,
+      "reused_suffix_only_charged_tokens": 25,
+      "prompt_tokens_len": 466
+    }
+  },
+  "benchmarks": {
+    "webshop": {
+      "training_usage": {
+        "limits": {
+          "max_env_steps": 3200,
+          "max_model_tokens": 3600000,
+          "max_wall_seconds": 3600.0
+        },
+        "env_steps": 123,
+        "replayed_env_steps": 19,
+        "input_tokens": 376833,
+        "native_api_calls": 0,
+        "successful_native_api_calls": 0,
+        "replayed_api_calls": 0,
+        "output_tokens": 967,
+        "forward_tokens": 11154,
+        "total_model_tokens": 388954,
+        "model_seconds": 100.29412105493248,
+        "environment_seconds": 5.658967251889408,
+        "restore_seconds": 0.8447447884827852,
+        "snapshot_saves": 8,
+        "snapshot_restores": 8,
+        "snapshot_save_seconds": 0.10742822289466858,
+        "gradient_steps": 32,
+        "update_seconds": 4.813514071516693,
+        "wall_seconds": 132.47211254760623,
+        "calls_by_role": {
+          "actor.action": 89,
+          "dcc.candidate_suffix_prior": 27
+        }
+      },
+      "dcc_summary": {
+        "contract_version": "prism-dcc-v2-unified-r5",
+        "frozen_language_backbone": true,
+        "ensemble_size": 8,
+        "final_mechanism_weights": [
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125
+        ],
+        "library_size": 4,
+        "grow_calls": 8,
+        "unique_witness_pairs": 0,
+        "cumulative_witness_visits": 0,
+        "witness_pairs_found": 0,
+        "proposed_counts": {
+          "witness_full": 0,
+          "witness_delete": 0,
+          "witness_concat": 0,
+          "prior_fallback": 0
+        },
+        "shuffle_witness_labels": false,
+        "zero_success_throughout_training": true
+      },
+      "train_diagnostics": {
+        "blocks_completed": 8,
+        "first_3_losses": [],
+        "last_3_losses": [],
+        "nonzero_d_real_blocks": 0,
+        "fork_selection_mode_counts": {
+          "prior_uniform_support_sample": 7,
+          "prior_cross_anchor_key_reuse": 1
+        },
+        "distinct_comparison_keys": 7,
+        "reused_comparison_keys": 1,
+        "branch_success_pairs": [
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ]
+        ]
+      },
+      "eval_comparison": {
+        "frozen_base": {
+          "method": "frozen_base",
+          "tasks": 12,
+          "successes": 1,
+          "success_rate": 0.08333333333333333,
+          "mean_utility_u_b": 0.08234629953124871,
+          "mean_elapsed_seconds": 11.391581553577756,
+          "mean_env_steps": 10.5,
+          "total_model_tokens": 519068,
+          "consecutive_repeat_steps": 15,
+          "dcc_steps_total": 0,
+          "prior_action_overrides": 0,
+          "program_attributed_steps": 0
+        },
+        "prism_evolve": {
+          "method": "prism_evolve",
+          "tasks": 12,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_utility_u_b": 0.0,
+          "mean_elapsed_seconds": 20.873386565673474,
+          "mean_env_steps": 11.666666666666666,
+          "total_model_tokens": 684194,
+          "consecutive_repeat_steps": 17,
+          "dcc_steps_total": 140,
+          "prior_action_overrides": 18,
+          "program_attributed_steps": 11
+        }
+      },
+      "paired_outcomes": {
+        "frozen_base": [
+          [
+            "webshop/500",
+            0,
+            0.0,
+            14,
+            [
+              "click[search]",
+              "search[home office furniture sets dining room living room color blue gray item shape round size 5 ft 3 in x 7 ft 5 in price < 70.00]",
+              "click[next >]",
+              "click[next >]",
+              "click[b09c8fz9ys]"
+            ]
+          ],
+          [
+            "webshop/501",
+            0,
+            0.0,
+            14,
+            [
+              "click[search]",
+              "search[eco friendly throw blankets fleece throw color: fish scale1goo8111 size: 49x79in price: <70.00]",
+              "click[next >]",
+              "click[b09km7x1g4]",
+              "click[description]"
+            ]
+          ],
+          [
+            "webshop/502",
+            0,
+            0.0,
+            4,
+            [
+              "search[slim fit men's henleys short sleeve color:158- purple size:xx-large price:<30.00]",
+              "click[b09r9ycm6r]",
+              "click[xx-large]",
+              "click[buy now]"
+            ]
+          ],
+          [
+            "webshop/503",
+            0,
+            0.0,
+            6,
+            [
+              "click[search]",
+              "search[loose fit women's tops tees & blouses short sleeve long sleeve color: a1-blue size: xx-large price < 50.00]",
+              "click[next >]",
+              "click[b09q67h373]",
+              "click[xx-large]"
+            ]
+          ],
+          [
+            "webshop/504",
+            0,
+            0.0,
+            15,
+            [
+              "click[search]",
+              "search[machine wash men's dress shirts polyester heathers heathers cotton cotton heather fit type: men size: large price < 50.00]",
+              "click[next >]",
+              "click[b09qqp3356]",
+              "click[description]"
+            ]
+          ],
+          [
+            "webshop/505",
+            0,
+            0.0,
+            11,
+            [
+              "click[search]",
+              "click[search]",
+              "search[high density space saving sofa tables living room color: gs2900 size: small]",
+              "click[next >]",
+              "click[next >]"
+            ]
+          ],
+          [
+            "webshop/506",
+            0,
+            0.0,
+            9,
+            [
+              "search[wash cold, machine wash men's shirts with polyester heathers, heathers cotton, cotton heather, needle sleeve, classic fit navy, men large, price < 40.00]",
+              "click[back to search]",
+              "search[wash cold, machine wash men's shirts with polyester heathers, heathers cotton, cotton heather, needle sleeve, classic fit navy, men large, price < 40.00]",
+              "click[next >]",
+              "click[next >]"
+            ]
+          ],
+          [
+            "webshop/507",
+            0,
+            0.0,
+            15,
+            [
+              "click[search]",
+              "search[slim fit loose fit men's tuxedo shirts long sleeve short sleeve contrast color classic fit teen girls color: a-blue size: large price < 40.00]",
+              "click[next >]",
+              "click[b09klqllt2]",
+              "click[description]"
+            ]
+          ],
+          [
+            "webshop/508",
+            0,
+            0.0,
+            15,
+            [
+              "click[search]",
+              "search[wash cold, machine wash men's shirts with polyester heathers, heathers cotton, cotton heather, needle sleeve, classic fit royal blue, men, size small, price < 40.00]",
+              "click[next >]",
+              "click[next >]",
+              "click[b09nnmv9ln]"
+            ]
+          ],
+          [
+            "webshop/509",
+            0,
+            0.0,
+            6,
+            [
+              "search[machine wash men's pants drawstring closure elastic waist polyester spandex navy xx-large price<30]",
+              "click[next >]",
+              "click[next >]",
+              "click[b09qcp4579]",
+              "click[xx-large]"
+            ]
+          ],
+          [
+            "webshop/510",
+            0,
+            0.0,
+            9,
+            [
+              "click[search]",
+              "search[hand wash machine wash women's dresses quality polyester long sleeve color: black size: small price: < 60.00]",
+              "click[next >]",
+              "click[next >]",
+              "click[back to search]"
+            ]
+          ],
+          [
+            "webshop/511",
+            1,
+            0.9882,
+            8,
+            [
+              "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]",
+              "click[b09p8d2q1q]",
+              "click[description]",
+              "click[back to search]",
+              "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]"
+            ]
+          ]
+        ],
+        "prism_evolve": [
+          [
+            "webshop/500",
+            0,
+            0.0,
+            15,
+            [
+              "click[search]",
+              "search[home office furniture sets dining room living room color blue gray item shape round size 5 ft 3 in x 7 ft 5 in price < 70.00]",
+              "click[next >]",
+              "click[next >]",
+              "click[b09c8fz9ys]"
+            ]
+          ],
+          [
+            "webshop/501",
+            0,
+            0.0,
+            15,
+            [
+              "click[search]",
+              "search[eco friendly throw blankets fleece throw color: fish scale1goo8111 size: 49x79in price: <70.00]",
+              "click[next >]",
+              "click[b09km7x1g4]",
+              "click[description]"
+            ]
+          ],
+          [
+            "webshop/502",
+            0,
+            0.0,
+            4,
+            [
+              "search[slim fit men's henleys short sleeve color:158- purple size:xx-large price:<30.00]",
+              "click[b09r9ycm6r]",
+              "click[xx-large]",
+              "click[buy now]"
+            ]
+          ],
+          [
+            "webshop/503",
+            0,
+            0.0,
+            13,
+            [
+              "click[search]",
+              "search[loose fit women's tops tees & blouses short sleeve long sleeve color: a1-blue size: xx-large price < 50.00]",
+              "click[next >]",
+              "click[next >]",
+              "click[next >]"
+            ]
+          ],
+          [
+            "webshop/504",
+            0,
+            0.0,
+            8,
+            [
+              "click[search]",
+              "search[machine wash men's dress shirts polyester heathers heathers cotton cotton heather fit type: men size: large price < 50.00]",
+              "click[next >]",
+              "click[next >]",
+              "click[next >]"
+            ]
+          ],
+          [
+            "webshop/505",
+            0,
+            0.0,
+            15,
+            [
+              "click[search]",
+              "search[high density space saving sofa tables living room color gs2900 size small]",
+              "click[next >]",
+              "click[b09dg92ljl]",
+              "click[description]"
+            ]
+          ],
+          [
+            "webshop/506",
+            0,
+            0.0,
+            7,
+            [
+              "click[search]",
+              "search[wash cold machine wash men's shirts polyester heathers heathers cotton cotton heather needle sleeve classic fit color: navy fit type: men size: large price: < 40.00]",
+              "click[next >]",
+              "click[next >]",
+              "click[b07fd13lp1]"
+            ]
+          ],
+          [
+            "webshop/507",
+            0,
+            0.0,
+            15,
+            [
+              "click[search]",
+              "search[slim fit loose fit men's tuxedo shirts long sleeve short sleeve contrast color classic fit teen girls color: a-blue size: large price < 40.00]",
+              "click[next >]",
+              "click[next >]",
+              "click[next >]"
+            ]
+          ],
+          [
+            "webshop/508",
+            0,
+            0.0,
+            8,
+            [
+              "click[search]",
+              "search[wash cold, machine wash men's shirts polyester heathers, heathers cotton, cotton heather, needle sleeve, classic fit royal blue men size small price < 40]",
+              "click[next >]",
+              "click[next >]",
+              "click[b09m63b87v]"
+            ]
+          ],
+          [
+            "webshop/509",
+            0,
+            0.0,
+            10,
+            [
+              "search[machine wash men's pants drawstring closure elastic waist polyester spandex navy xx-large price<30]",
+              "click[next >]",
+              "click[b09hy9xb8p]",
+              "click[description]",
+              "click[back to search]"
+            ]
+          ],
+          [
+            "webshop/510",
+            0,
+            0.0,
+            15,
+            [
+              "click[search]",
+              "search[hand wash machine wash women's dresses quality polyester long sleeve color: black size: small price: < 60.00]",
+              "click[next >]",
+              "click[next >]",
+              "click[next >]"
+            ]
+          ],
+          [
+            "webshop/511",
+            0,
+            0.0,
+            15,
+            [
+              "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]",
+              "click[b09p8d2q1q]",
+              "click[description]",
+              "click[back to search]",
+              "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]"
+            ]
+          ]
+        ]
+      }
+    },
+    "alfworld": {
+      "training_usage": {
+        "limits": {
+          "max_env_steps": 3200,
+          "max_model_tokens": 3600000,
+          "max_wall_seconds": 3600.0
+        },
+        "env_steps": 319,
+        "replayed_env_steps": 37,
+        "input_tokens": 1802098,
+        "native_api_calls": 0,
+        "successful_native_api_calls": 0,
+        "replayed_api_calls": 0,
+        "output_tokens": 1708,
+        "forward_tokens": 30578,
+        "total_model_tokens": 1834384,
+        "model_seconds": 390.13969622924924,
+        "environment_seconds": 26.005586951971054,
+        "restore_seconds": 10.451631776057184,
+        "snapshot_saves": 8,
+        "snapshot_restores": 8,
+        "snapshot_save_seconds": 0.024020525626838207,
+        "gradient_steps": 32,
+        "update_seconds": 12.701210816390812,
+        "wall_seconds": 476.155022315681,
+        "calls_by_role": {
+          "actor.action": 266,
+          "dcc.candidate_suffix_prior": 45
+        }
+      },
+      "dcc_summary": {
+        "contract_version": "prism-dcc-v2-unified-r5",
+        "frozen_language_backbone": true,
+        "ensemble_size": 8,
+        "final_mechanism_weights": [
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125
+        ],
+        "library_size": 4,
+        "grow_calls": 8,
+        "unique_witness_pairs": 0,
+        "cumulative_witness_visits": 0,
+        "witness_pairs_found": 0,
+        "proposed_counts": {
+          "witness_full": 0,
+          "witness_delete": 0,
+          "witness_concat": 0,
+          "prior_fallback": 0
+        },
+        "shuffle_witness_labels": false,
+        "zero_success_throughout_training": false
+      },
+      "train_diagnostics": {
+        "blocks_completed": 8,
+        "first_3_losses": [],
+        "last_3_losses": [],
+        "nonzero_d_real_blocks": 1,
+        "fork_selection_mode_counts": {
+          "prior_role_diverse_sample": 5,
+          "prior_cross_anchor_key_reuse": 3
+        },
+        "distinct_comparison_keys": 5,
+        "reused_comparison_keys": 1,
+        "branch_success_pairs": [
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            true
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ]
+        ]
+      },
+      "eval_comparison": {
+        "frozen_base": {
+          "method": "frozen_base",
+          "tasks": 12,
+          "successes": 2,
+          "success_rate": 0.16666666666666666,
+          "mean_utility_u_b": 0.1660614189328367,
+          "mean_elapsed_seconds": 22.76812116879349,
+          "mean_env_steps": 19.583333333333332,
+          "total_model_tokens": 1261088,
+          "consecutive_repeat_steps": 42,
+          "dcc_steps_total": 0,
+          "prior_action_overrides": 0,
+          "program_attributed_steps": 0
+        },
+        "prism_evolve": {
+          "method": "prism_evolve",
+          "tasks": 12,
+          "successes": 1,
+          "success_rate": 0.08333333333333333,
+          "mean_utility_u_b": 0.08230347444225723,
+          "mean_elapsed_seconds": 47.32411603668394,
+          "mean_env_steps": 20.666666666666668,
+          "total_model_tokens": 1388534,
+          "consecutive_repeat_steps": 171,
+          "dcc_steps_total": 248,
+          "prior_action_overrides": 24,
+          "program_attributed_steps": 20
+        }
+      },
+      "paired_outcomes": {
+        "frozen_base": [
+          [
+            "valid_seen/look_at_obj_in_light-AlarmClock-None-DeskLamp-323/trial_T20190909_044715_250790/game.tw-pddl",
+            0,
+            0.0,
+            20,
+            [
+              "go to desk 1",
+              "use desklamp 1",
+              "look",
+              "examine desk 1",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Bowl-None-DeskLamp-301/trial_T20190909_150719_492274/game.tw-pddl",
+            0,
+            0.0,
+            19,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Bowl-None-DeskLamp-316/trial_T20190908_230702_962704/game.tw-pddl",
+            1,
+            0.9979,
+            3,
+            [
+              "go to desk 1",
+              "take bowl 1 from desk 1",
+              "use desklamp 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Box-None-DeskLamp-205/trial_T20190907_074425_330493/game.tw-pddl",
+            0,
+            0.0,
+            24,
+            [
+              "go to sidetable 1",
+              "examine sidetable 1",
+              "look",
+              "go to sidetable 2",
+              "examine sidetable 2"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-302/trial_T20190907_154618_526741/game.tw-pddl",
+            0,
+            0.0,
+            22,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "look",
+              "go to bed 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-314/trial_T20190907_114323_767231/game.tw-pddl",
+            0,
+            0.0,
+            25,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "look",
+              "go to bed 1",
+              "examine bed 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-320/trial_T20190907_224451_655673/game.tw-pddl",
+            0,
+            0.0,
+            25,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "look",
+              "go to desk 2",
+              "examine desk 2"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-KeyChain-None-DeskLamp-327/trial_T20190906_202601_548273/game.tw-pddl",
+            0,
+            0.0,
+            23,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "take book 1 from desk 1",
+              "examine book 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Laptop-None-DeskLamp-328/trial_T20190908_201550_622420/game.tw-pddl",
+            0,
+            0.0,
+            24,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "use desklamp 1",
+              "look",
+              "go to drawer 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-302/trial_T20190909_150916_682139/game.tw-pddl",
+            0,
+            0.0,
+            23,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "look",
+              "go to bed 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-323/trial_T20190908_053153_077977/game.tw-pddl",
+            0,
+            0.0,
+            21,
+            [
+              "go to bed 1",
+              "go to bed 2",
+              "take pillow 1 from bed 2",
+              "examine pillow 1",
+              "move pillow 1 to bed 2"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Statue-None-DeskLamp-216/trial_T20190909_193045_208933/game.tw-pddl",
+            1,
+            0.9948,
+            6,
+            [
+              "go to sidetable 1",
+              "examine sidetable 1",
+              "examine sidetable 1",
+              "use desklamp 1",
+              "examine sidetable 1"
+            ]
+          ]
+        ],
+        "prism_evolve": [
+          [
+            "valid_seen/look_at_obj_in_light-AlarmClock-None-DeskLamp-323/trial_T20190909_044715_250790/game.tw-pddl",
+            0,
+            0.0,
+            19,
+            [
+              "go to desk 1",
+              "use desklamp 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Bowl-None-DeskLamp-301/trial_T20190909_150719_492274/game.tw-pddl",
+            0,
+            0.0,
+            19,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Bowl-None-DeskLamp-316/trial_T20190908_230702_962704/game.tw-pddl",
+            0,
+            0.0,
+            22,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Box-None-DeskLamp-205/trial_T20190907_074425_330493/game.tw-pddl",
+            0,
+            0.0,
+            24,
+            [
+              "go to sidetable 1",
+              "examine sidetable 1",
+              "examine sidetable 1",
+              "examine sidetable 1",
+              "examine sidetable 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-302/trial_T20190907_154618_526741/game.tw-pddl",
+            0,
+            0.0,
+            21,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-314/trial_T20190907_114323_767231/game.tw-pddl",
+            0,
+            0.0,
+            25,
+            [
+              "go to desk 1",
+              "use desklamp 1",
+              "look",
+              "examine desk 1",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-CD-None-DeskLamp-320/trial_T20190907_224451_655673/game.tw-pddl",
+            0,
+            0.0,
+            25,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "look",
+              "examine desk 1",
+              "take cd 1 from desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-KeyChain-None-DeskLamp-327/trial_T20190906_202601_548273/game.tw-pddl",
+            0,
+            0.0,
+            23,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Laptop-None-DeskLamp-328/trial_T20190908_201550_622420/game.tw-pddl",
+            0,
+            0.0,
+            22,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "use desklamp 1",
+              "look",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-302/trial_T20190909_150916_682139/game.tw-pddl",
+            0,
+            0.0,
+            22,
+            [
+              "go to desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-323/trial_T20190908_053153_077977/game.tw-pddl",
+            0,
+            0.0,
+            20,
+            [
+              "go to desk 1",
+              "use desklamp 1",
+              "examine desk 1",
+              "examine desk 1",
+              "examine desk 1"
+            ]
+          ],
+          [
+            "valid_seen/look_at_obj_in_light-Statue-None-DeskLamp-216/trial_T20190909_193045_208933/game.tw-pddl",
+            1,
+            0.9876,
+            6,
+            [
+              "go to sidetable 1",
+              "examine sidetable 1",
+              "examine sidetable 1",
+              "use desklamp 1",
+              "examine sidetable 1"
+            ]
+          ]
+        ]
+      }
+    },
+    "loca": {
+      "complete_groups": 1,
+      "gradient_steps": 4,
+      "training_usage": {
+        "limits": {
+          "max_env_steps": 200,
+          "max_model_tokens": 600000,
+          "max_wall_seconds": 1200.0
+        },
+        "env_steps": 9,
+        "replayed_env_steps": 0,
+        "input_tokens": 169378,
+        "native_api_calls": 9,
+        "successful_native_api_calls": 4,
+        "replayed_api_calls": 0,
+        "output_tokens": 408,
+        "forward_tokens": 22497,
+        "total_model_tokens": 192283,
+        "model_seconds": 60.8427580781281,
+        "environment_seconds": 19.411011206917465,
+        "restore_seconds": 1.8620085157454014,
+        "snapshot_saves": 1,
+        "snapshot_restores": 1,
+        "snapshot_save_seconds": 1.8429712858051062,
+        "gradient_steps": 4,
+        "update_seconds": 0.4381953189149499,
+        "wall_seconds": 172.65193908754736,
+        "calls_by_role": {
+          "dcc.candidate_suffix_prior": 2,
+          "actor.action": 7
+        }
+      },
+      "eval_comparison": {
+        "frozen_base": {
+          "method": "frozen_base",
+          "tasks": 2,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_utility_u_b": 0.0,
+          "mean_elapsed_seconds": 35.43525078473613,
+          "mean_env_steps": 5.0,
+          "total_model_tokens": 223076,
+          "consecutive_repeat_steps": 5,
+          "dcc_steps_total": 0,
+          "prior_action_overrides": 0,
+          "program_attributed_steps": 0
+        },
+        "prism_evolve": {
+          "method": "prism_evolve",
+          "tasks": 2,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_utility_u_b": 0.0,
+          "mean_elapsed_seconds": 101.88786094728857,
+          "mean_env_steps": 5.0,
+          "total_model_tokens": 256607,
+          "consecutive_repeat_steps": 8,
+          "dcc_steps_total": 10,
+          "prior_action_overrides": 9,
+          "program_attributed_steps": 0
+        }
+      }
+    }
+  }
+}

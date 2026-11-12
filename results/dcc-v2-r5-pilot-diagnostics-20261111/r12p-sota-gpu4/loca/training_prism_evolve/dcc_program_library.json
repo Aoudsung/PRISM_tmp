@@ -1,0 +1,272 @@
+{
+  "benchmark": "loca",
+  "max_programs": 32,
+  "starter_ids": [
+    "ba52662c7f5c",
+    "2c35b051b854",
+    "c634fa8ca9a9"
+  ],
+  "programs": [
+    {
+      "program_id": "ba52662c7f5c",
+      "benchmark": "loca",
+      "step_templates": [
+        "inspect_schema:{primary_read_tool}"
+      ],
+      "readout_fields": [
+        "last_tool_family",
+        "prerequisite_status"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 1.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "inspect_schema:{primary_read_tool}",
+          "typed_arguments": {
+            "primary_read_tool": "$primary_read_tool"
+          },
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "last_tool_family",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "prerequisite_status",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0"
+      ],
+      "formal_params": [
+        "primary_read_tool"
+      ],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "last_tool_family",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "prerequisite_status",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    },
+    {
+      "program_id": "2c35b051b854",
+      "benchmark": "loca",
+      "step_templates": [
+        "read_public_resource:{primary_read_tool}"
+      ],
+      "readout_fields": [
+        "bound_identifiers",
+        "prerequisite_status"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 1.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "read_public_resource:{primary_read_tool}",
+          "typed_arguments": {
+            "primary_read_tool": "$primary_read_tool"
+          },
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "bound_identifiers",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "prerequisite_status",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0"
+      ],
+      "formal_params": [
+        "primary_read_tool"
+      ],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "bound_identifiers",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "prerequisite_status",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    },
+    {
+      "program_id": "c634fa8ca9a9",
+      "benchmark": "loca",
+      "step_templates": [
+        "verify_workspace:{secondary_read_tool}"
+      ],
+      "readout_fields": [
+        "bound_identifiers",
+        "workspace_artifact_state"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 1.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "verify_workspace:{secondary_read_tool}",
+          "typed_arguments": {
+            "secondary_read_tool": "$secondary_read_tool"
+          },
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "bound_identifiers",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "workspace_artifact_state",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0"
+      ],
+      "formal_params": [
+        "secondary_read_tool"
+      ],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "bound_identifiers",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "workspace_artifact_state",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    }
+  ]
+}

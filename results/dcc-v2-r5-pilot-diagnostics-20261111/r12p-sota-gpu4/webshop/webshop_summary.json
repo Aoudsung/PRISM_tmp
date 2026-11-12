@@ -1,0 +1,451 @@
+{
+  "training_usage": {
+    "limits": {
+      "max_env_steps": 3200,
+      "max_model_tokens": 3600000,
+      "max_wall_seconds": 3600.0
+    },
+    "env_steps": 123,
+    "replayed_env_steps": 19,
+    "input_tokens": 376833,
+    "native_api_calls": 0,
+    "successful_native_api_calls": 0,
+    "replayed_api_calls": 0,
+    "output_tokens": 967,
+    "forward_tokens": 11154,
+    "total_model_tokens": 388954,
+    "model_seconds": 100.29412105493248,
+    "environment_seconds": 5.658967251889408,
+    "restore_seconds": 0.8447447884827852,
+    "snapshot_saves": 8,
+    "snapshot_restores": 8,
+    "snapshot_save_seconds": 0.10742822289466858,
+    "gradient_steps": 32,
+    "update_seconds": 4.813514071516693,
+    "wall_seconds": 132.47211254760623,
+    "calls_by_role": {
+      "actor.action": 89,
+      "dcc.candidate_suffix_prior": 27
+    }
+  },
+  "dcc_summary": {
+    "contract_version": "prism-dcc-v2-unified-r5",
+    "frozen_language_backbone": true,
+    "ensemble_size": 8,
+    "final_mechanism_weights": [
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125
+    ],
+    "library_size": 4,
+    "grow_calls": 8,
+    "unique_witness_pairs": 0,
+    "cumulative_witness_visits": 0,
+    "witness_pairs_found": 0,
+    "proposed_counts": {
+      "witness_full": 0,
+      "witness_delete": 0,
+      "witness_concat": 0,
+      "prior_fallback": 0
+    },
+    "shuffle_witness_labels": false,
+    "zero_success_throughout_training": true
+  },
+  "train_diagnostics": {
+    "blocks_completed": 8,
+    "first_3_losses": [],
+    "last_3_losses": [],
+    "nonzero_d_real_blocks": 0,
+    "fork_selection_mode_counts": {
+      "prior_uniform_support_sample": 7,
+      "prior_cross_anchor_key_reuse": 1
+    },
+    "distinct_comparison_keys": 7,
+    "reused_comparison_keys": 1,
+    "branch_success_pairs": [
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ],
+      [
+        false,
+        false
+      ]
+    ]
+  },
+  "eval_comparison": {
+    "frozen_base": {
+      "method": "frozen_base",
+      "tasks": 12,
+      "successes": 1,
+      "success_rate": 0.08333333333333333,
+      "mean_utility_u_b": 0.08234629953124871,
+      "mean_elapsed_seconds": 11.391581553577756,
+      "mean_env_steps": 10.5,
+      "total_model_tokens": 519068,
+      "consecutive_repeat_steps": 15,
+      "dcc_steps_total": 0,
+      "prior_action_overrides": 0,
+      "program_attributed_steps": 0
+    },
+    "prism_evolve": {
+      "method": "prism_evolve",
+      "tasks": 12,
+      "successes": 0,
+      "success_rate": 0.0,
+      "mean_utility_u_b": 0.0,
+      "mean_elapsed_seconds": 20.873386565673474,
+      "mean_env_steps": 11.666666666666666,
+      "total_model_tokens": 684194,
+      "consecutive_repeat_steps": 17,
+      "dcc_steps_total": 140,
+      "prior_action_overrides": 18,
+      "program_attributed_steps": 11
+    }
+  },
+  "paired_outcomes": {
+    "frozen_base": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        14,
+        [
+          "click[search]",
+          "search[home office furniture sets dining room living room color blue gray item shape round size 5 ft 3 in x 7 ft 5 in price < 70.00]",
+          "click[next >]",
+          "click[next >]",
+          "click[b09c8fz9ys]"
+        ]
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        14,
+        [
+          "click[search]",
+          "search[eco friendly throw blankets fleece throw color: fish scale1goo8111 size: 49x79in price: <70.00]",
+          "click[next >]",
+          "click[b09km7x1g4]",
+          "click[description]"
+        ]
+      ],
+      [
+        "webshop/502",
+        0,
+        0.0,
+        4,
+        [
+          "search[slim fit men's henleys short sleeve color:158- purple size:xx-large price:<30.00]",
+          "click[b09r9ycm6r]",
+          "click[xx-large]",
+          "click[buy now]"
+        ]
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        6,
+        [
+          "click[search]",
+          "search[loose fit women's tops tees & blouses short sleeve long sleeve color: a1-blue size: xx-large price < 50.00]",
+          "click[next >]",
+          "click[b09q67h373]",
+          "click[xx-large]"
+        ]
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        15,
+        [
+          "click[search]",
+          "search[machine wash men's dress shirts polyester heathers heathers cotton cotton heather fit type: men size: large price < 50.00]",
+          "click[next >]",
+          "click[b09qqp3356]",
+          "click[description]"
+        ]
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        11,
+        [
+          "click[search]",
+          "click[search]",
+          "search[high density space saving sofa tables living room color: gs2900 size: small]",
+          "click[next >]",
+          "click[next >]"
+        ]
+      ],
+      [
+        "webshop/506",
+        0,
+        0.0,
+        9,
+        [
+          "search[wash cold, machine wash men's shirts with polyester heathers, heathers cotton, cotton heather, needle sleeve, classic fit navy, men large, price < 40.00]",
+          "click[back to search]",
+          "search[wash cold, machine wash men's shirts with polyester heathers, heathers cotton, cotton heather, needle sleeve, classic fit navy, men large, price < 40.00]",
+          "click[next >]",
+          "click[next >]"
+        ]
+      ],
+      [
+        "webshop/507",
+        0,
+        0.0,
+        15,
+        [
+          "click[search]",
+          "search[slim fit loose fit men's tuxedo shirts long sleeve short sleeve contrast color classic fit teen girls color: a-blue size: large price < 40.00]",
+          "click[next >]",
+          "click[b09klqllt2]",
+          "click[description]"
+        ]
+      ],
+      [
+        "webshop/508",
+        0,
+        0.0,
+        15,
+        [
+          "click[search]",
+          "search[wash cold, machine wash men's shirts with polyester heathers, heathers cotton, cotton heather, needle sleeve, classic fit royal blue, men, size small, price < 40.00]",
+          "click[next >]",
+          "click[next >]",
+          "click[b09nnmv9ln]"
+        ]
+      ],
+      [
+        "webshop/509",
+        0,
+        0.0,
+        6,
+        [
+          "search[machine wash men's pants drawstring closure elastic waist polyester spandex navy xx-large price<30]",
+          "click[next >]",
+          "click[next >]",
+          "click[b09qcp4579]",
+          "click[xx-large]"
+        ]
+      ],
+      [
+        "webshop/510",
+        0,
+        0.0,
+        9,
+        [
+          "click[search]",
+          "search[hand wash machine wash women's dresses quality polyester long sleeve color: black size: small price: < 60.00]",
+          "click[next >]",
+          "click[next >]",
+          "click[back to search]"
+        ]
+      ],
+      [
+        "webshop/511",
+        1,
+        0.9882,
+        8,
+        [
+          "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]",
+          "click[b09p8d2q1q]",
+          "click[description]",
+          "click[back to search]",
+          "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]"
+        ]
+      ]
+    ],
+    "prism_evolve": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        15,
+        [
+          "click[search]",
+          "search[home office furniture sets dining room living room color blue gray item shape round size 5 ft 3 in x 7 ft 5 in price < 70.00]",
+          "click[next >]",
+          "click[next >]",
+          "click[b09c8fz9ys]"
+        ]
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        15,
+        [
+          "click[search]",
+          "search[eco friendly throw blankets fleece throw color: fish scale1goo8111 size: 49x79in price: <70.00]",
+          "click[next >]",
+          "click[b09km7x1g4]",
+          "click[description]"
+        ]
+      ],
+      [
+        "webshop/502",
+        0,
+        0.0,
+        4,
+        [
+          "search[slim fit men's henleys short sleeve color:158- purple size:xx-large price:<30.00]",
+          "click[b09r9ycm6r]",
+          "click[xx-large]",
+          "click[buy now]"
+        ]
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        13,
+        [
+          "click[search]",
+          "search[loose fit women's tops tees & blouses short sleeve long sleeve color: a1-blue size: xx-large price < 50.00]",
+          "click[next >]",
+          "click[next >]",
+          "click[next >]"
+        ]
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        8,
+        [
+          "click[search]",
+          "search[machine wash men's dress shirts polyester heathers heathers cotton cotton heather fit type: men size: large price < 50.00]",
+          "click[next >]",
+          "click[next >]",
+          "click[next >]"
+        ]
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        15,
+        [
+          "click[search]",
+          "search[high density space saving sofa tables living room color gs2900 size small]",
+          "click[next >]",
+          "click[b09dg92ljl]",
+          "click[description]"
+        ]
+      ],
+      [
+        "webshop/506",
+        0,
+        0.0,
+        7,
+        [
+          "click[search]",
+          "search[wash cold machine wash men's shirts polyester heathers heathers cotton cotton heather needle sleeve classic fit color: navy fit type: men size: large price: < 40.00]",
+          "click[next >]",
+          "click[next >]",
+          "click[b07fd13lp1]"
+        ]
+      ],
+      [
+        "webshop/507",
+        0,
+        0.0,
+        15,
+        [
+          "click[search]",
+          "search[slim fit loose fit men's tuxedo shirts long sleeve short sleeve contrast color classic fit teen girls color: a-blue size: large price < 40.00]",
+          "click[next >]",
+          "click[next >]",
+          "click[next >]"
+        ]
+      ],
+      [
+        "webshop/508",
+        0,
+        0.0,
+        8,
+        [
+          "click[search]",
+          "search[wash cold, machine wash men's shirts polyester heathers, heathers cotton, cotton heather, needle sleeve, classic fit royal blue men size small price < 40]",
+          "click[next >]",
+          "click[next >]",
+          "click[b09m63b87v]"
+        ]
+      ],
+      [
+        "webshop/509",
+        0,
+        0.0,
+        10,
+        [
+          "search[machine wash men's pants drawstring closure elastic waist polyester spandex navy xx-large price<30]",
+          "click[next >]",
+          "click[b09hy9xb8p]",
+          "click[description]",
+          "click[back to search]"
+        ]
+      ],
+      [
+        "webshop/510",
+        0,
+        0.0,
+        15,
+        [
+          "click[search]",
+          "search[hand wash machine wash women's dresses quality polyester long sleeve color: black size: small price: < 60.00]",
+          "click[next >]",
+          "click[next >]",
+          "click[next >]"
+        ]
+      ],
+      [
+        "webshop/511",
+        0,
+        0.0,
+        15,
+        [
+          "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]",
+          "click[b09p8d2q1q]",
+          "click[description]",
+          "click[back to search]",
+          "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]"
+        ]
+      ]
+    ]
+  }
+}

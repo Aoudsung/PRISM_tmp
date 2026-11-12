@@ -1,0 +1,1980 @@
+{
+  "round2_acquisition_comparison": {
+    "lexicographic_1upd": {
+      "training_usage": {
+        "limits": {
+          "max_env_steps": 1600,
+          "max_model_tokens": 1800000,
+          "max_wall_seconds": 2400.0
+        },
+        "env_steps": 121,
+        "replayed_env_steps": 14,
+        "input_tokens": 444767,
+        "native_api_calls": 0,
+        "successful_native_api_calls": 0,
+        "replayed_api_calls": 0,
+        "output_tokens": 1204,
+        "forward_tokens": 32632,
+        "total_model_tokens": 478603,
+        "model_seconds": 112.2895457400009,
+        "environment_seconds": 5.098932629451156,
+        "restore_seconds": 0.6581608178094029,
+        "snapshot_saves": 6,
+        "snapshot_restores": 6,
+        "snapshot_save_seconds": 0.0935819810256362,
+        "gradient_steps": 6,
+        "update_seconds": 0.814741600304842,
+        "wall_seconds": 138.12617261800915,
+        "calls_by_role": {
+          "actor.action": 90,
+          "dcc.candidate_suffix_prior": 26
+        }
+      },
+      "dcc_summary": {
+        "contract_version": "prism-dcc-v2-unified-r4",
+        "frozen_language_backbone": true,
+        "ensemble_size": 8,
+        "final_mechanism_weights": [
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125
+        ],
+        "library_size": 4,
+        "grow_calls": 6,
+        "unique_witness_pairs": 0,
+        "cumulative_witness_visits": 0,
+        "witness_pairs_found": 0,
+        "proposed_counts": {
+          "witness_full": 0,
+          "witness_delete": 0,
+          "witness_concat": 0,
+          "prior_fallback": 0
+        },
+        "shuffle_witness_labels": false,
+        "zero_success_throughout_training": true,
+        "mechanism_ablations": {
+          "diagnostic_scope": "internal_model_scoring_diagnostic_only; native_trajectory_cells_required_for_performance_claims",
+          "benchmark": "webshop",
+          "seed": 42,
+          "complete_dcc_v2": {
+            "cell": "phi_T_Xi_T",
+            "library_size": 4,
+            "grow_calls": 6,
+            "unique_witness_pairs": 0,
+            "cumulative_witness_visits": 0,
+            "max_unified_q": 0.058144185692071915,
+            "max_evsi_per_cost": 3.725290298461914e-09,
+            "max_dual_control_j": 0.058144181966781616,
+            "max_feedback_use_value_i": 3.725290298461914e-09
+          },
+          "dcc_no_program_growth": {
+            "cell": "phi_T_Xi_0",
+            "library_size": 4,
+            "max_unified_q": 0.058144185692071915,
+            "max_evsi_per_cost": 3.725290298461914e-09,
+            "max_dual_control_j": 0.058144181966781616,
+            "max_feedback_use_value_i": 3.725290298461914e-09
+          },
+          "dcc_reset_parameters": {
+            "cell": "phi_0_Xi_T",
+            "library_size": 4,
+            "max_unified_q": 0.06285575032234192,
+            "max_evsi_per_cost": 0.0,
+            "max_dual_control_j": 0.06285575032234192,
+            "max_feedback_use_value_i": 0.0
+          },
+          "dcc_k0_planner": {
+            "cell": "phi_0_Xi_0",
+            "library_size": 4,
+            "max_unified_q": 0.06285575032234192,
+            "max_evsi_per_cost": 0.0,
+            "max_dual_control_j": 0.06285575032234192,
+            "max_feedback_use_value_i": 0.0
+          },
+          "dcc_fixed_d_shuffled": {
+            "library_size": 4,
+            "grow_calls": 6,
+            "unique_witness_pairs": 0,
+            "cumulative_witness_visits": 0,
+            "witness_pairs_found": 0,
+            "max_unified_q": 0.058144185692071915,
+            "max_evsi_per_cost": 3.725290298461914e-09,
+            "max_dual_control_j": 0.058144181966781616,
+            "max_feedback_use_value_i": 3.725290298461914e-09,
+            "checkpoint": "/apps/users/adminuser/prism-exact-reproduction/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-pilot-20261111-r11p-v4-gpu7/webshop/training_lex_1upd/fixed_d_shuffled_adapter"
+          },
+          "dcc_label_shuffled": {
+            "library_size": 4,
+            "grow_calls": 6,
+            "unique_witness_pairs": 0,
+            "cumulative_witness_visits": 0,
+            "witness_pairs_found": 0,
+            "max_evsi_per_cost": 3.725290298461914e-09,
+            "max_dual_control_j": 0.058144181966781616,
+            "max_feedback_use_value_i": 3.725290298461914e-09
+          },
+          "pre_first_success_checkpoint": "/apps/users/adminuser/prism-exact-reproduction/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-pilot-20261111-r11p-v4-gpu7/webshop/training_lex_1upd/pre_first_success_adapter",
+          "zero_success_throughout_training": true
+        }
+      },
+      "block_diagnostics": {
+        "blocks_completed": 6,
+        "d_real_values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "nonzero_d_real_blocks": 0,
+        "gt_001_d_real_blocks": 0,
+        "d_model_preupdate_values": [
+          0.003519,
+          -0.004297,
+          0.000427,
+          -0.004613,
+          -0.017324,
+          -0.022297
+        ],
+        "d_model_postupdate_values": [
+          0.003484,
+          -0.004244,
+          0.00042,
+          -0.004537,
+          -0.016998,
+          -0.02184
+        ],
+        "fork_disagreement_r_values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "fork_selection_modes": [
+          "lexicographic",
+          "lexicographic",
+          "lexicographic",
+          "lexicographic",
+          "lexicographic",
+          "lexicographic"
+        ],
+        "distinct_comparison_keys": 4,
+        "reused_comparison_keys": 2,
+        "factual_branch_successes": [
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ]
+        ],
+        "side_updates_total": 6,
+        "side_update_seconds_total": 0.8391
+      }
+    },
+    "decision_disagreement_4upd": {
+      "training_usage": {
+        "limits": {
+          "max_env_steps": 1600,
+          "max_model_tokens": 1800000,
+          "max_wall_seconds": 2400.0
+        },
+        "env_steps": 97,
+        "replayed_env_steps": 14,
+        "input_tokens": 315810,
+        "native_api_calls": 0,
+        "successful_native_api_calls": 0,
+        "replayed_api_calls": 0,
+        "output_tokens": 919,
+        "forward_tokens": 33095,
+        "total_model_tokens": 349824,
+        "model_seconds": 88.57849313039333,
+        "environment_seconds": 4.293257142417133,
+        "restore_seconds": 0.8966222265735269,
+        "snapshot_saves": 6,
+        "snapshot_restores": 6,
+        "snapshot_save_seconds": 0.07507026568055153,
+        "gradient_steps": 24,
+        "update_seconds": 2.5821448788046837,
+        "wall_seconds": 104.95473318081349,
+        "calls_by_role": {
+          "actor.action": 72,
+          "dcc.candidate_suffix_prior": 32
+        }
+      },
+      "dcc_summary": {
+        "contract_version": "prism-dcc-v2-unified-r4",
+        "frozen_language_backbone": true,
+        "ensemble_size": 8,
+        "final_mechanism_weights": [
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125,
+          0.125
+        ],
+        "library_size": 4,
+        "grow_calls": 6,
+        "unique_witness_pairs": 0,
+        "cumulative_witness_visits": 0,
+        "witness_pairs_found": 0,
+        "proposed_counts": {
+          "witness_full": 0,
+          "witness_delete": 0,
+          "witness_concat": 0,
+          "prior_fallback": 0
+        },
+        "shuffle_witness_labels": false,
+        "zero_success_throughout_training": true,
+        "mechanism_ablations": {
+          "diagnostic_scope": "internal_model_scoring_diagnostic_only; native_trajectory_cells_required_for_performance_claims",
+          "benchmark": "webshop",
+          "seed": 42,
+          "complete_dcc_v2": {
+            "cell": "phi_T_Xi_T",
+            "library_size": 4,
+            "grow_calls": 6,
+            "unique_witness_pairs": 0,
+            "cumulative_witness_visits": 0,
+            "max_unified_q": 0.03134287893772125,
+            "max_evsi_per_cost": 3.725290298461914e-09,
+            "max_dual_control_j": 0.03134288266301155,
+            "max_feedback_use_value_i": 3.725290298461914e-09
+          },
+          "dcc_no_program_growth": {
+            "cell": "phi_T_Xi_0",
+            "library_size": 4,
+            "max_unified_q": 0.03134287893772125,
+            "max_evsi_per_cost": 3.725290298461914e-09,
+            "max_dual_control_j": 0.03134288266301155,
+            "max_feedback_use_value_i": 3.725290298461914e-09
+          },
+          "dcc_reset_parameters": {
+            "cell": "phi_0_Xi_T",
+            "library_size": 4,
+            "max_unified_q": 0.06285575032234192,
+            "max_evsi_per_cost": 0.0,
+            "max_dual_control_j": 0.06285575032234192,
+            "max_feedback_use_value_i": 0.0
+          },
+          "dcc_k0_planner": {
+            "cell": "phi_0_Xi_0",
+            "library_size": 4,
+            "max_unified_q": 0.06285575032234192,
+            "max_evsi_per_cost": 0.0,
+            "max_dual_control_j": 0.06285575032234192,
+            "max_feedback_use_value_i": 0.0
+          },
+          "dcc_fixed_d_shuffled": {
+            "library_size": 4,
+            "grow_calls": 6,
+            "unique_witness_pairs": 0,
+            "cumulative_witness_visits": 0,
+            "witness_pairs_found": 0,
+            "max_unified_q": 0.03134287893772125,
+            "max_evsi_per_cost": 3.725290298461914e-09,
+            "max_dual_control_j": 0.03134288266301155,
+            "max_feedback_use_value_i": 3.725290298461914e-09,
+            "checkpoint": "/apps/users/adminuser/prism-exact-reproduction/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-pilot-20261111-r11p-v4-gpu7/webshop/training_prism_evolve/fixed_d_shuffled_adapter"
+          },
+          "dcc_label_shuffled": {
+            "library_size": 4,
+            "grow_calls": 6,
+            "unique_witness_pairs": 0,
+            "cumulative_witness_visits": 0,
+            "witness_pairs_found": 0,
+            "max_evsi_per_cost": 3.725290298461914e-09,
+            "max_dual_control_j": 0.03134288266301155,
+            "max_feedback_use_value_i": 3.725290298461914e-09
+          },
+          "pre_first_success_checkpoint": "/apps/users/adminuser/prism-exact-reproduction/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-pilot-20261111-r11p-v4-gpu7/webshop/training_prism_evolve/pre_first_success_adapter",
+          "zero_success_throughout_training": true
+        }
+      },
+      "block_diagnostics": {
+        "blocks_completed": 6,
+        "d_real_values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          -0.0
+        ],
+        "nonzero_d_real_blocks": 0,
+        "gt_001_d_real_blocks": 0,
+        "d_model_preupdate_values": [
+          0.019298,
+          0.003677,
+          0.004459,
+          0.016346,
+          0.020027,
+          -0.012895
+        ],
+        "d_model_postupdate_values": [
+          0.018435,
+          0.003385,
+          0.00394,
+          0.013969,
+          0.016086,
+          -0.009858
+        ],
+        "fork_disagreement_r_values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "fork_selection_modes": [
+          "prior_uniform_support_sample",
+          "prior_uniform_support_sample",
+          "prior_uniform_support_sample",
+          "prior_uniform_support_sample",
+          "prior_uniform_support_sample",
+          "prior_uniform_support_sample"
+        ],
+        "distinct_comparison_keys": 6,
+        "reused_comparison_keys": 0,
+        "factual_branch_successes": [
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ],
+          [
+            false,
+            false
+          ]
+        ],
+        "side_updates_total": 24,
+        "side_update_seconds_total": 2.6226
+      }
+    }
+  },
+  "round3_fixed_d_proposers": {
+    "conditional_gain_true_d": {
+      "proposer_mode": "conditional_gain",
+      "shuffle_labels": false,
+      "library_size": 4,
+      "added_programs": [],
+      "unique_witness_pairs": 0,
+      "permutable_groups": 0
+    },
+    "conditional_gain_shuffled_d": {
+      "proposer_mode": "conditional_gain",
+      "shuffle_labels": true,
+      "library_size": 4,
+      "added_programs": [],
+      "unique_witness_pairs": 0,
+      "permutable_groups": 0
+    }
+  },
+  "eval_comparison": {
+    "frozen_base": {
+      "method": "frozen_base",
+      "tasks": 6,
+      "successes": 0,
+      "success_rate": 0.0,
+      "mean_utility_u_b": 0.0,
+      "mean_elapsed_seconds": 10.669640757453939,
+      "mean_env_steps": 10.666666666666666,
+      "total_model_tokens": 259582,
+      "dcc_steps_total": 0,
+      "prior_action_overrides": 0,
+      "program_attributed_steps": 0,
+      "action_change_examples": []
+    },
+    "dcc_k0_planner": {
+      "method": "dcc_k0_planner",
+      "tasks": 6,
+      "successes": 1,
+      "success_rate": 0.16666666666666666,
+      "mean_utility_u_b": 0.1630743465745925,
+      "mean_elapsed_seconds": 31.880455018486828,
+      "mean_env_steps": 11.833333333333334,
+      "total_model_tokens": 309296,
+      "dcc_steps_total": 71,
+      "prior_action_overrides": 6,
+      "program_attributed_steps": 5,
+      "action_change_examples": [
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09m6vxd6w]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.04019540175795555,
+          "selected_q_mean": 0.04193597286939621
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 5,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search],click[blue]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.03422263264656067,
+          "selected_q_mean": 0.03582743555307388
+        },
+        {
+          "task_id": "webshop/501",
+          "task_index": 1,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08wkmhtgh",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[buy now]",
+          "executed_action": "click[fish scale1goo8111]",
+          "selected_program_id": "native_atomic:260afe0e7aed",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.00782819278538227,
+          "selected_q_mean": 0.00792310107499361
+        },
+        {
+          "task_id": "webshop/503",
+          "task_index": 3,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b085wqkrrj",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[b09q67h373]",
+          "executed_action": "click[b09kp78g37]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.03986291587352753,
+          "selected_q_mean": 0.04196156933903694
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 4,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b0924pklq4",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09dg92ljl]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.03473326936364174,
+          "selected_q_mean": 0.04068753868341446
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b07g4hjr5v",
+            "selected_options": "click[search],click[small]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09688c4xm]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.0072704185731709,
+          "selected_q_mean": 0.008770482614636421
+        }
+      ]
+    },
+    "prism_evolve_lex_1upd": {
+      "method": "prism_evolve_lex_1upd",
+      "tasks": 6,
+      "successes": 1,
+      "success_rate": 0.16666666666666666,
+      "mean_utility_u_b": 0.1640987005871203,
+      "mean_elapsed_seconds": 28.501521192025393,
+      "mean_env_steps": 11.833333333333334,
+      "total_model_tokens": 306146,
+      "dcc_steps_total": 71,
+      "prior_action_overrides": 8,
+      "program_attributed_steps": 12,
+      "action_change_examples": [
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09m6vxd6w]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.036432355642318726,
+          "selected_q_mean": 0.03802860528230667
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 5,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search],click[blue]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.031026693060994148,
+          "selected_q_mean": 0.03256748616695404
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 10,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue | gray]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.017778757959604263,
+          "selected_q_mean": 0.017866842448711395
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 14,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[reviews]",
+          "executed_action": "click[5 ft 3 in x 7 ft 5 in]",
+          "selected_program_id": "native_atomic:4d3261a2bb42",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.002671303227543831,
+          "selected_q_mean": 0.004156799055635929
+        },
+        {
+          "task_id": "webshop/501",
+          "task_index": 1,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08wkmhtgh",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[buy now]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.00737104844301939,
+          "selected_q_mean": 0.007608211133629084
+        },
+        {
+          "task_id": "webshop/503",
+          "task_index": 3,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b085wqkrrj",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[b09q67h373]",
+          "executed_action": "click[b09kp78g37]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.03629555553197861,
+          "selected_q_mean": 0.03821748495101929
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 4,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b0924pklq4",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09dg92ljl]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.03053714707493782,
+          "selected_q_mean": 0.03726150840520859
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b07g4hjr5v",
+            "selected_options": "click[search],click[small]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09688c4xm]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.006885259412229061,
+          "selected_q_mean": 0.008193014189600945
+        }
+      ]
+    },
+    "dcc_no_program_growth": {
+      "method": "dcc_no_program_growth",
+      "tasks": 6,
+      "successes": 1,
+      "success_rate": 0.16666666666666666,
+      "mean_utility_u_b": 0.16414391161330666,
+      "mean_elapsed_seconds": 28.518337323330343,
+      "mean_env_steps": 11.833333333333334,
+      "total_model_tokens": 306146,
+      "dcc_steps_total": 71,
+      "prior_action_overrides": 8,
+      "program_attributed_steps": 8,
+      "action_change_examples": [
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09m6vxd6w]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.016183434054255486,
+          "selected_q_mean": 0.017042681574821472
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 5,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search],click[blue]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue]",
+          "executed_action": "click[description]",
+          "selected_program_id": "native_atomic:71a805fca5d6",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.013930770568549633,
+          "selected_q_mean": 0.01453719474375248
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 10,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue | gray]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.008566012606024742,
+          "selected_q_mean": 0.008821023628115654
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 14,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[reviews]",
+          "executed_action": "click[5 ft 3 in x 7 ft 5 in]",
+          "selected_program_id": "native_atomic:4d3261a2bb42",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.0018583397613838315,
+          "selected_q_mean": 0.002911364659667015
+        },
+        {
+          "task_id": "webshop/501",
+          "task_index": 1,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08wkmhtgh",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[buy now]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.004151367582380772,
+          "selected_q_mean": 0.004940511658787727
+        },
+        {
+          "task_id": "webshop/503",
+          "task_index": 3,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b085wqkrrj",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[b09q67h373]",
+          "executed_action": "click[b09kp78g37]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.016237476840615273,
+          "selected_q_mean": 0.017137935385107994
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 4,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b0924pklq4",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09dg92ljl]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.013762551359832287,
+          "selected_q_mean": 0.016954299062490463
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b07g4hjr5v",
+            "selected_options": "click[search],click[small]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09688c4xm]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.0038991097826510668,
+          "selected_q_mean": 0.004651229362934828
+        }
+      ]
+    },
+    "dcc_reset_parameters": {
+      "method": "dcc_reset_parameters",
+      "tasks": 6,
+      "successes": 1,
+      "success_rate": 0.16666666666666666,
+      "mean_utility_u_b": 0.16411849670758885,
+      "mean_elapsed_seconds": 28.518444180488586,
+      "mean_env_steps": 11.833333333333334,
+      "total_model_tokens": 307423,
+      "dcc_steps_total": 71,
+      "prior_action_overrides": 6,
+      "program_attributed_steps": 6,
+      "action_change_examples": [
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09m6vxd6w]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.04019872099161148,
+          "selected_q_mean": 0.04193943738937378
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 5,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search],click[blue]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.03422816842794418,
+          "selected_q_mean": 0.03583323210477829
+        },
+        {
+          "task_id": "webshop/501",
+          "task_index": 1,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08wkmhtgh",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[buy now]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.007899878546595573,
+          "selected_q_mean": 0.007916079834103584
+        },
+        {
+          "task_id": "webshop/503",
+          "task_index": 3,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b085wqkrrj",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[b09q67h373]",
+          "executed_action": "click[b09kp78g37]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.039905983954668045,
+          "selected_q_mean": 0.04200690612196922
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 4,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b0924pklq4",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09dg92ljl]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.033590614795684814,
+          "selected_q_mean": 0.040946196764707565
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b07g4hjr5v",
+            "selected_options": "click[search],click[small]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09688c4xm]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.0073714908212423325,
+          "selected_q_mean": 0.008772308006882668
+        }
+      ]
+    },
+    "prism_evolve": {
+      "method": "prism_evolve",
+      "tasks": 6,
+      "successes": 1,
+      "success_rate": 0.16666666666666666,
+      "mean_utility_u_b": 0.16413088670776535,
+      "mean_elapsed_seconds": 28.46036545249323,
+      "mean_env_steps": 11.833333333333334,
+      "total_model_tokens": 306146,
+      "dcc_steps_total": 71,
+      "prior_action_overrides": 8,
+      "program_attributed_steps": 8,
+      "action_change_examples": [
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09m6vxd6w]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.016182858496904373,
+          "selected_q_mean": 0.01704207807779312
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 5,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search],click[blue]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue]",
+          "executed_action": "click[description]",
+          "selected_program_id": "native_atomic:71a805fca5d6",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.01392960362136364,
+          "selected_q_mean": 0.014535974711179733
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 10,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue | gray]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.00856356043368578,
+          "selected_q_mean": 0.008818506263196468
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 14,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[reviews]",
+          "executed_action": "click[5 ft 3 in x 7 ft 5 in]",
+          "selected_program_id": "native_atomic:4d3261a2bb42",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.00185764255002141,
+          "selected_q_mean": 0.002910270821303129
+        },
+        {
+          "task_id": "webshop/501",
+          "task_index": 1,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08wkmhtgh",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[buy now]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.004152989014983177,
+          "selected_q_mean": 0.004942455794662237
+        },
+        {
+          "task_id": "webshop/503",
+          "task_index": 3,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b085wqkrrj",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[b09q67h373]",
+          "executed_action": "click[b09kp78g37]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.016236014664173126,
+          "selected_q_mean": 0.017136387526988983
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 4,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b0924pklq4",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09dg92ljl]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.013767053373157978,
+          "selected_q_mean": 0.01695982739329338
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b07g4hjr5v",
+            "selected_options": "click[search],click[small]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09688c4xm]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.0039001416880637407,
+          "selected_q_mean": 0.004652457311749458
+        }
+      ]
+    },
+    "dcc_fixed_d_shuffled": {
+      "method": "dcc_fixed_d_shuffled",
+      "tasks": 6,
+      "successes": 1,
+      "success_rate": 0.16666666666666666,
+      "mean_utility_u_b": 0.1640480901634631,
+      "mean_elapsed_seconds": 28.482864008905988,
+      "mean_env_steps": 11.833333333333334,
+      "total_model_tokens": 306046,
+      "dcc_steps_total": 71,
+      "prior_action_overrides": 8,
+      "program_attributed_steps": 8,
+      "action_change_examples": [
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09m6vxd6w]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.01618480682373047,
+          "selected_q_mean": 0.017044123262166977
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 5,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search],click[blue]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue]",
+          "executed_action": "click[description]",
+          "selected_program_id": "native_atomic:71a805fca5d6",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.013932237401604652,
+          "selected_q_mean": 0.014538727700710297
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 10,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue | gray]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.008568400517106056,
+          "selected_q_mean": 0.008823473006486893
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[b07fkgqkz1]",
+          "executed_action": "click[next >]",
+          "selected_program_id": "native_atomic:fc6f3ef9028d",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.0043948376551270485,
+          "selected_q_mean": 0.00441213371232152
+        },
+        {
+          "task_id": "webshop/501",
+          "task_index": 1,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08wkmhtgh",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[buy now]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.004151784814894199,
+          "selected_q_mean": 0.004941012244671583
+        },
+        {
+          "task_id": "webshop/503",
+          "task_index": 3,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b085wqkrrj",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[b09q67h373]",
+          "executed_action": "click[b09kp78g37]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.01623682491481304,
+          "selected_q_mean": 0.01713724248111248
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 4,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b0924pklq4",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09dg92ljl]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.01376763079315424,
+          "selected_q_mean": 0.016960538923740387
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b07g4hjr5v",
+            "selected_options": "click[search],click[small]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09688c4xm]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.003900629933923483,
+          "selected_q_mean": 0.004653039388358593
+        }
+      ]
+    },
+    "dcc_conditional_gain": {
+      "method": "dcc_conditional_gain",
+      "tasks": 6,
+      "successes": 1,
+      "success_rate": 0.16666666666666666,
+      "mean_utility_u_b": 0.16414391161330666,
+      "mean_elapsed_seconds": 28.518337323330343,
+      "mean_env_steps": 11.833333333333334,
+      "total_model_tokens": 306146,
+      "dcc_steps_total": 71,
+      "prior_action_overrides": 8,
+      "program_attributed_steps": 8,
+      "action_change_examples": [
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09m6vxd6w]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.016183434054255486,
+          "selected_q_mean": 0.017042681574821472
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 5,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search],click[blue]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue]",
+          "executed_action": "click[description]",
+          "selected_program_id": "native_atomic:71a805fca5d6",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.013930770568549633,
+          "selected_q_mean": 0.01453719474375248
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 10,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue | gray]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.008566012606024742,
+          "selected_q_mean": 0.008821023628115654
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 14,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[reviews]",
+          "executed_action": "click[5 ft 3 in x 7 ft 5 in]",
+          "selected_program_id": "native_atomic:4d3261a2bb42",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.0018583397613838315,
+          "selected_q_mean": 0.002911364659667015
+        },
+        {
+          "task_id": "webshop/501",
+          "task_index": 1,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08wkmhtgh",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[buy now]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.004151367582380772,
+          "selected_q_mean": 0.004940511658787727
+        },
+        {
+          "task_id": "webshop/503",
+          "task_index": 3,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b085wqkrrj",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[b09q67h373]",
+          "executed_action": "click[b09kp78g37]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.016237476840615273,
+          "selected_q_mean": 0.017137935385107994
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 4,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b0924pklq4",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09dg92ljl]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.013762551359832287,
+          "selected_q_mean": 0.016954299062490463
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b07g4hjr5v",
+            "selected_options": "click[search],click[small]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09688c4xm]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.0038991097826510668,
+          "selected_q_mean": 0.004651229362934828
+        }
+      ],
+      "identity_alias_of": "dcc_no_program_growth (Xi_Gamma == Xi_0)"
+    },
+    "dcc_conditional_gain_shuffled": {
+      "method": "dcc_conditional_gain_shuffled",
+      "tasks": 6,
+      "successes": 1,
+      "success_rate": 0.16666666666666666,
+      "mean_utility_u_b": 0.16414391161330666,
+      "mean_elapsed_seconds": 28.518337323330343,
+      "mean_env_steps": 11.833333333333334,
+      "total_model_tokens": 306146,
+      "dcc_steps_total": 71,
+      "prior_action_overrides": 8,
+      "program_attributed_steps": 8,
+      "action_change_examples": [
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09m6vxd6w]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.016183434054255486,
+          "selected_q_mean": 0.017042681574821472
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 5,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08qvdnjc7",
+            "selected_options": "click[search],click[blue]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue]",
+          "executed_action": "click[description]",
+          "selected_program_id": "native_atomic:71a805fca5d6",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.013930770568549633,
+          "selected_q_mean": 0.01453719474375248
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 10,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[blue | gray]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.008566012606024742,
+          "selected_q_mean": 0.008821023628115654
+        },
+        {
+          "task_id": "webshop/500",
+          "task_index": 0,
+          "step_index": 14,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b09pj5zxgh",
+            "selected_options": "click[blue],click[5 ft 3 in x 7 ft 5 in]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[reviews]",
+          "executed_action": "click[5 ft 3 in x 7 ft 5 in]",
+          "selected_program_id": "native_atomic:4d3261a2bb42",
+          "selected_program_origin": "native_atomic",
+          "prior_q_mean": 0.0018583397613838315,
+          "selected_q_mean": 0.002911364659667015
+        },
+        {
+          "task_id": "webshop/501",
+          "task_index": 1,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "item_detail",
+            "current_asin": "b08wkmhtgh",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[buy now]",
+          "executed_action": "click[description]",
+          "selected_program_id": "e7e44f0a1ccd",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.004151367582380772,
+          "selected_q_mean": 0.004940511658787727
+        },
+        {
+          "task_id": "webshop/503",
+          "task_index": 3,
+          "step_index": 3,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b085wqkrrj",
+            "selected_options": "click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[b09q67h373]",
+          "executed_action": "click[b09kp78g37]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.016237476840615273,
+          "selected_q_mean": 0.017137935385107994
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 4,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b0924pklq4",
+            "selected_options": "click[search],click[search]",
+            "inspected_attributes": "none",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09dg92ljl]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.013762551359832287,
+          "selected_q_mean": 0.016954299062490463
+        },
+        {
+          "task_id": "webshop/505",
+          "task_index": 5,
+          "step_index": 13,
+          "public_fields": {
+            "page_type": "search_results",
+            "current_asin": "b07g4hjr5v",
+            "selected_options": "click[search],click[small]",
+            "inspected_attributes": "description",
+            "price_rating_match": "high"
+          },
+          "prior_action": "click[next >]",
+          "executed_action": "click[b09688c4xm]",
+          "selected_program_id": "f749f98bf440",
+          "selected_program_origin": "starter",
+          "prior_q_mean": 0.0038991097826510668,
+          "selected_q_mean": 0.004651229362934828
+        }
+      ],
+      "identity_alias_of": "dcc_no_program_growth (Xi_Gamma_shuf == Xi_0)"
+    }
+  },
+  "paired_task_outcomes": {
+    "frozen_base": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        14
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        14
+      ],
+      [
+        "webshop/502",
+        0,
+        0.0,
+        4
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        6
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        11
+      ]
+    ],
+    "dcc_k0_planner": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/502",
+        1,
+        0.9784,
+        5
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        6
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        15
+      ]
+    ],
+    "prism_evolve_lex_1upd": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/502",
+        1,
+        0.9846,
+        5
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        6
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        15
+      ]
+    ],
+    "dcc_no_program_growth": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/502",
+        1,
+        0.9849,
+        5
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        6
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        15
+      ]
+    ],
+    "dcc_reset_parameters": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/502",
+        1,
+        0.9847,
+        5
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        6
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        15
+      ]
+    ],
+    "prism_evolve": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/502",
+        1,
+        0.9848,
+        5
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        6
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        15
+      ]
+    ],
+    "dcc_fixed_d_shuffled": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/502",
+        1,
+        0.9843,
+        5
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        6
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        15
+      ]
+    ],
+    "dcc_conditional_gain": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/502",
+        1,
+        0.9849,
+        5
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        6
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        15
+      ]
+    ],
+    "dcc_conditional_gain_shuffled": [
+      [
+        "webshop/500",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/501",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/502",
+        1,
+        0.9849,
+        5
+      ],
+      [
+        "webshop/503",
+        0,
+        0.0,
+        6
+      ],
+      [
+        "webshop/504",
+        0,
+        0.0,
+        15
+      ],
+      [
+        "webshop/505",
+        0,
+        0.0,
+        15
+      ]
+    ]
+  }
+}

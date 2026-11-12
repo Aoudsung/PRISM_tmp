@@ -1,0 +1,441 @@
+{
+  "protocol_version": "native-r3",
+  "method": "prism_evolve",
+  "seed": 42,
+  "task_outcome_reward": "U_B=Y*max(0,1-C/B)",
+  "objective": "native_utility_plus_registered_method_specific_advantage",
+  "reference_visibility": "train_only",
+  "branch_anchor": "first_public_feasible_frontier",
+  "actor_contract": "prism-native-text-v1",
+  "configuration": {
+    "protocol_version": "native-v1",
+    "action_contract_version": "prism-native-text-v1",
+    "experiment_id": "prism-native-pos-benchmarks-20261108",
+    "site_id": "host_a",
+    "workload_plan": [
+      {
+        "site_id": "host_a",
+        "backbone": "meta-llama/Llama-3.1-8B-Instruct",
+        "seed": 42,
+        "benchmarks": [
+          "alfworld",
+          "webshop",
+          "loca"
+        ],
+        "gpu": 3
+      },
+      {
+        "site_id": "host_a",
+        "backbone": "meta-llama/Llama-3.1-8B-Instruct",
+        "seed": 43,
+        "benchmarks": [
+          "alfworld",
+          "webshop",
+          "loca"
+        ],
+        "gpu": 4
+      },
+      {
+        "site_id": "host_a",
+        "backbone": "meta-llama/Llama-3.1-8B-Instruct",
+        "seed": 44,
+        "benchmarks": [
+          "alfworld",
+          "webshop",
+          "loca"
+        ],
+        "gpu": 2
+      },
+      {
+        "site_id": "host_b",
+        "backbone": "Qwen/Qwen2.5-7B-Instruct",
+        "seed": 42,
+        "benchmarks": [
+          "alfworld",
+          "webshop",
+          "loca"
+        ],
+        "gpu": 0
+      },
+      {
+        "site_id": "host_b",
+        "backbone": "Qwen/Qwen2.5-7B-Instruct",
+        "seed": 43,
+        "benchmarks": [
+          "alfworld",
+          "webshop",
+          "loca"
+        ],
+        "gpu": 1
+      },
+      {
+        "site_id": "host_b",
+        "backbone": "Qwen/Qwen2.5-7B-Instruct",
+        "seed": 44,
+        "benchmarks": [
+          "alfworld",
+          "webshop",
+          "loca"
+        ],
+        "gpu": 2
+      }
+    ],
+    "global_backbone_ids": [
+      "Qwen/Qwen2.5-7B-Instruct",
+      "meta-llama/Llama-3.1-8B-Instruct"
+    ],
+    "defer_global_statistics": true,
+    "coordination": {
+      "enabled": true,
+      "protocol": "native-cohort-claims-v1",
+      "session_id": "prism-native-pos-benchmarks-20261108",
+      "registry_root": "/apps/users/adminuser/prism-exact-reproduction/coordination"
+    },
+    "execution_policy": {
+      "unit_tests": false,
+      "standalone_validation": false,
+      "formal_only": true
+    },
+    "execution_host": "mgt01",
+    "project_root": "/apps/users/adminuser/prism-exact-reproduction",
+    "python_executable": "/apps/users/adminuser/prism-exact-reproduction/.venv-prism-native/bin/python",
+    "external_root": "/apps/users/adminuser/prism-exact-external",
+    "appworld_data_root": "/apps/users/adminuser/prism-exact-external/appworld-root",
+    "planbench_repo_root": "/apps/users/adminuser/prism-exact-external/pbxl-repo",
+    "alfworld_data_root": "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/alfworld",
+    "alfworld_python_executable": "/apps/users/adminuser/prism-exact-external/venv-pos/bin/python",
+    "webshop_repo_root": "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/webshop",
+    "webshop_python_executable": "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/venv-webshop/bin/python",
+    "webshop_use_small": true,
+    "webshop_human_goals": false,
+    "loca_pos_repo_root": "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/pos-source",
+    "loca_python_executable": "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/venv-loca/bin/python",
+    "loca_runtime_paths": [
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/venv-loca/bin",
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/node24/bin",
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/npm/node_modules/.bin",
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/uv-bin"
+    ],
+    "loca_runtime_roots": [
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/venv-loca",
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/python311",
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/python312",
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/node24",
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/npm",
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/uv-tools",
+      "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/uv-bin"
+    ],
+    "loca_bwrap_executable": "bwrap",
+    "loca_vm": {
+      "enabled": true,
+      "qemu_dir": "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/qemu",
+      "vm_dir": "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/loca-vm",
+      "boot_snapshot_tag": "boot_ready",
+      "memory_mb": 2048,
+      "smp": 2
+    },
+    "loca_environment_length": "8k",
+    "loca_train_seeds": [
+      10001,
+      10002,
+      10003,
+      10004,
+      10005,
+      10006,
+      10007,
+      10008,
+      10009,
+      10010,
+      10011,
+      10012,
+      10013,
+      10014,
+      10015,
+      10016,
+      10017,
+      10018,
+      10019,
+      10020
+    ],
+    "loca_dev_seeds": [
+      20001,
+      20002,
+      20003,
+      20004,
+      20005
+    ],
+    "loca_test_seeds": [
+      42,
+      123,
+      456,
+      789,
+      2024
+    ],
+    "output_root": "outputs/prism_evolve_pos_benchmarks",
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "split_seed": 20261105,
+    "backbones": [
+      {
+        "id": "meta-llama/Llama-3.1-8B-Instruct",
+        "slug": "llama31_8b",
+        "model_path": "/apps/users/cxw/Document/CodeSpace/Selfs/WrongLessonBench/models/Meta-Llama-3.1-8B-Instruct",
+        "params_b": 8
+      }
+    ],
+    "execution_backbones": [
+      {
+        "id": "Qwen/Qwen2.5-7B-Instruct",
+        "slug": "qwen25_7b",
+        "model_path": "/apps/users/adminuser/models/Qwen2.5-7B-Instruct",
+        "params_b": 7.6
+      }
+    ],
+    "benchmarks": [
+      "alfworld",
+      "webshop",
+      "loca"
+    ],
+    "benchmark_episode_steps": {
+      "alfworld": 50,
+      "webshop": 15,
+      "loca": 100
+    },
+    "benchmark_max_new_tokens": {
+      "alfworld": 512,
+      "webshop": 512,
+      "loca": 4096
+    },
+    "appworld_test_splits": [
+      "test_normal",
+      "test_challenge"
+    ],
+    "methods": [
+      "frozen_base",
+      "prism_evolve",
+      "gigpo",
+      "step_dpo",
+      "infopo",
+      "arew",
+      "t3",
+      "worldevolver",
+      "pos",
+      "envprobe_simple",
+      "envprobe_judge",
+      "ablation_unweighted",
+      "unstratified_2branch"
+    ],
+    "main_methods": [
+      "frozen_base",
+      "prism_evolve",
+      "gigpo",
+      "step_dpo",
+      "infopo",
+      "arew",
+      "t3",
+      "worldevolver",
+      "pos",
+      "envprobe_simple",
+      "envprobe_judge"
+    ],
+    "mechanism_backbone": "Qwen/Qwen2.5-7B-Instruct",
+    "ablation_methods": [
+      "ablation_unweighted",
+      "unstratified_2branch"
+    ],
+    "checkpoint_selection": "budget_terminal",
+    "feedback_diagnostic": {
+      "enabled": true,
+      "backbone": "Qwen/Qwen2.5-7B-Instruct",
+      "num_tasks": 24,
+      "selection_seed": 20261105,
+      "checkpoints": [
+        "initial",
+        "final"
+      ],
+      "claim": "change_in_feedback_use_on_fixed_initial_policy_anchors"
+    },
+    "training_budget": {
+      "max_env_steps": 12000,
+      "max_model_tokens": 8000000,
+      "max_wall_seconds": 14400
+    },
+    "training_objective": "U_B=Y*max(0,1-C/B)",
+    "dev_budget": {
+      "max_env_steps": 17100,
+      "max_model_tokens": 48000000,
+      "max_wall_seconds": 43200
+    },
+    "formal_feedback_budget": {
+      "max_env_steps": 9600,
+      "max_model_tokens": 25165824,
+      "max_wall_seconds": 172800
+    },
+    "episode_max_steps": 6,
+    "episode_max_model_tokens": 131072,
+    "episode_max_wall_seconds": 600.0,
+    "max_new_tokens": 512,
+    "max_json_retries": 0,
+    "max_context_tokens": 32768,
+    "evaluation_greedy": false,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "activation_offload_cpu": true,
+    "activation_offload_min_bytes": 1048576,
+    "lora_rank": 16,
+    "lora_alpha": 32.0,
+    "num_stages": 3,
+    "groups_per_update": 1,
+    "learning_rate": 1e-06,
+    "weight_decay": 0.0,
+    "grad_clip_norm": 1.0,
+    "ppo_epochs": 1,
+    "ppo_clip": 0.2,
+    "ppo_dual_clip": 3.0,
+    "reference_kl_coef": 0.01,
+    "split_steps": [
+      0
+    ],
+    "gigpo_group_size": 8,
+    "gigpo_gamma": 0.95,
+    "gigpo_step_weight": 1.0,
+    "gigpo_mode": "mean_norm",
+    "gigpo_episode_normalization": "official_step_weighted",
+    "infopo_group_size": 5,
+    "infopo_advantage_variant": "official_token_nonzero",
+    "intrinsic_weight": 0.1,
+    "intrinsic_gate_temperature": 0.05,
+    "intrinsic_decay_rate": 0.0,
+    "arew_group_size": 3,
+    "arew_variant": "official_tau2_as_only",
+    "arew_bonus_scale": 0.1,
+    "arew_bonus_mode": "minority_fixed",
+    "arew_judge": false,
+    "t3_group_size": 5,
+    "t3_no_progress_window": 3,
+    "t3_min_turn": 6,
+    "t3_hard_tolerance": 2,
+    "step_dpo_beta": 0.4,
+    "step_dpo_candidates": 4,
+    "step_dpo_annotation_max_tokens": 512,
+    "worldevolver": {
+      "sf_confidence_pct": 50,
+      "top_k": 5,
+      "batch_k": 1,
+      "memory_token_budget": 2048,
+      "wm_max_tokens": 1000,
+      "memory_size": 100,
+      "max_think_iters": 3,
+      "selection": "fixed_pre_registered",
+      "memory_initialization": "empty",
+      "train_memory": "none",
+      "test_memory": "online_prequential"
+    },
+    "pos": {
+      "belief_max_tokens": 4096,
+      "sentinel_max_tokens": 512,
+      "progress_max_tokens": 512
+    },
+    "pos_by_benchmark": {
+      "alfworld": {
+        "belief_max_tokens": 4096,
+        "sentinel_max_tokens": 512,
+        "progress_max_tokens": 512
+      },
+      "webshop": {
+        "belief_max_tokens": 4096,
+        "sentinel_max_tokens": 512,
+        "progress_max_tokens": 512
+      },
+      "loca": {
+        "belief_max_tokens": 4096,
+        "sentinel_max_tokens": 512,
+        "progress_max_tokens": 512
+      }
+    },
+    "envprobe": {
+      "probe_budget": 25,
+      "actor_max_tokens": 1500
+    },
+    "official_repos": {
+      "gigpo": "/apps/users/adminuser/prism-exact-external/gigpo-official",
+      "infopo": "/apps/users/adminuser/prism-exact-external/infopo-official",
+      "arew": "/apps/users/adminuser/prism-exact-external/arew-official",
+      "t3": "/apps/users/adminuser/prism-exact-external/arew-official",
+      "step_dpo": "/apps/users/adminuser/prism-exact-external/step-dpo-official",
+      "worldevolver": "/apps/users/adminuser/prism-exact-external/worldevolver-official",
+      "pos": "/apps/users/adminuser/prism-exact-external/native-text-data-20261108/pos-source",
+      "envprobe_simple": "/apps/users/adminuser/prism-exact-external/envprobe-official",
+      "envprobe_judge": "/apps/users/adminuser/prism-exact-external/envprobe-official"
+    },
+    "scheduler": {
+      "allowed_gpu_ids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "max_workers": 8,
+      "poll_seconds": 15,
+      "cpu_threads_per_lane": 4,
+      "share_occupied_gpus": true,
+      "memory_fraction": 0.6
+    },
+    "statistics": {
+      "reference_method": "prism_evolve",
+      "seed": 20261105,
+      "num_bootstrap": 10000,
+      "num_permutations": 20000,
+      "alpha": 0.05
+    },
+    "benchmark": "loca",
+    "backbone": "Qwen/Qwen2.5-7B-Instruct",
+    "model_id": "Qwen/Qwen2.5-7B-Instruct",
+    "max_steps": 6,
+    "max_train_groups": 1,
+    "dcc_max_probe_steps": 2,
+    "dcc_continuation_steps": 6,
+    "dcc_full_tail_rollout": true,
+    "dcc_proposal_budget": 2,
+    "dcc_learning_rate": 0.001,
+    "dcc_controller_mode": "expected_utility",
+    "dcc_fork_acquisition": "decision_disagreement",
+    "dcc_cluster_updates_per_block": 4,
+    "dcc_proposer_mode": "conditional_gain",
+    "dcc_quantize_prompt_wall_seconds": true
+  },
+  "implementation_variants": {
+    "gigpo_episode_normalization": "official_step_weighted",
+    "gigpo_anchor": "complete_public_history_without_budget_message",
+    "infopo_advantage": "official_token_nonzero",
+    "infopo_scoring": "full_vocabulary_same_next_action",
+    "arew": "official_tau2_as_only",
+    "arew_channels": [
+      "AS"
+    ],
+    "arew_labels": "positive=state_change_or_new_public_business_evidence_or_success;negative=hard_error;otherwise=abstain",
+    "arew_bonus": "minority_fixed",
+    "arew_paper_margin_reduction": "trajectory_mean_of_signed_step_means_of_summed_token_logp_unclipped",
+    "t3_progress": "public_business_content_increment",
+    "step_dpo_sampling": "frozen_reference_public_prefix_only",
+    "ppo_reduction": "token_mean",
+    "zero_advantage_reference_kl": "retained"
+  },
+  "training_budget": {
+    "max_env_steps": 200,
+    "max_model_tokens": 600000,
+    "max_wall_seconds": 1200.0
+  },
+  "checkpoint_selection": "final_after_fixed_training_run",
+  "intermediate_evaluations": false,
+  "intermediate_success_gates": false,
+  "kernel_provenance": {}
+}

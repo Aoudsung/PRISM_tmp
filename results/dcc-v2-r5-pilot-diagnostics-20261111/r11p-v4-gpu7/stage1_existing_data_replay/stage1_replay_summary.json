@@ -1,0 +1,147 @@
+{
+  "alias_single_snapshot_replay": {
+    "historical_step1_wall_seconds": [
+      "{\"remaining_environment_steps\":24,\"remaining_model_tokens\":130500,\"remaining_wall_seconds\":599.5213235439733}",
+      "{\"remaining_environment_steps\":24,\"remaining_model_tokens\":130500,\"remaining_wall_seconds\":599.5210129944608}"
+    ],
+    "raw_float_prompt_tokens_identical": false,
+    "quantized_snapshot_phi_T_aliases": {
+      "prism_evolve": {
+        "action": "examine desk 1",
+        "prompt_ids_hash": 6906646377211084842,
+        "selected_q_mean": 0.06357990950345993,
+        "candidates_evaluated": 22
+      },
+      "dcc_no_program_growth": {
+        "action": "examine desk 1",
+        "prompt_ids_hash": 6906646377211084842,
+        "selected_q_mean": 0.06357990950345993,
+        "candidates_evaluated": 22
+      },
+      "dcc_fixed_d_shuffled": {
+        "action": "examine desk 1",
+        "prompt_ids_hash": 6906646377211084842,
+        "selected_q_mean": 0.06357990950345993,
+        "candidates_evaluated": 22
+      }
+    },
+    "phi_T_aliases_strictly_identical": true,
+    "quantized_snapshot_phi_0_aliases": {
+      "dcc_k0_planner": {
+        "action": "examine desk 1",
+        "selected_q_mean": 0.06747132539749146
+      },
+      "dcc_reset_parameters": {
+        "action": "examine desk 1",
+        "selected_q_mean": 0.06747132539749146
+      }
+    },
+    "phi_0_aliases_strictly_identical": true
+  },
+  "paid_cluster_nll_replay": {
+    "webshop": {
+      "single_step_1upd": {
+        "total_side_updates": 4,
+        "step0_gradients": {
+          "step": 0,
+          "loss": 4.03807,
+          "grad_readout": 0.38951,
+          "grad_upstream": 0.0
+        },
+        "step1_gradients": {
+          "step": 1,
+          "loss": 3.86911,
+          "grad_readout": 0.282057,
+          "grad_upstream": 0.082468
+        },
+        "final_step_gradients": {
+          "step": 3,
+          "loss": 3.78587,
+          "grad_readout": 0.314581,
+          "grad_upstream": 0.220789
+        },
+        "mean_cluster_nll_after": 3.79635,
+        "post_update_q_mean": 0.03791,
+        "post_update_q_member_std": 0.000888,
+        "latent_emission_std": 1e-05
+      },
+      "cluster_replay_4upd": {
+        "total_side_updates": 16,
+        "step0_gradients": {
+          "step": 0,
+          "loss": 4.03807,
+          "grad_readout": 0.453285,
+          "grad_upstream": 0.0
+        },
+        "step1_gradients": {
+          "step": 1,
+          "loss": 3.97822,
+          "grad_readout": 0.447418,
+          "grad_upstream": 0.16641
+        },
+        "final_step_gradients": {
+          "step": 15,
+          "loss": 2.91648,
+          "grad_readout": 0.449188,
+          "grad_upstream": 0.659469
+        },
+        "mean_cluster_nll_after": 2.85296,
+        "post_update_q_mean": 0.02628,
+        "post_update_q_member_std": 0.005889,
+        "latent_emission_std": 0.000214
+      }
+    },
+    "alfworld": {
+      "single_step_1upd": {
+        "total_side_updates": 4,
+        "step0_gradients": {
+          "step": 0,
+          "loss": 3.63639,
+          "grad_readout": 0.28271,
+          "grad_upstream": 0.0
+        },
+        "step1_gradients": {
+          "step": 1,
+          "loss": 3.59539,
+          "grad_readout": 0.298041,
+          "grad_upstream": 0.110325
+        },
+        "final_step_gradients": {
+          "step": 3,
+          "loss": 3.52179,
+          "grad_readout": 0.349471,
+          "grad_upstream": 0.216279
+        },
+        "mean_cluster_nll_after": 3.43118,
+        "post_update_q_mean": 0.05252,
+        "post_update_q_member_std": 0.000874,
+        "latent_emission_std": 5e-06
+      },
+      "cluster_replay_4upd": {
+        "total_side_updates": 16,
+        "step0_gradients": {
+          "step": 0,
+          "loss": 3.63639,
+          "grad_readout": 0.320756,
+          "grad_upstream": 0.0
+        },
+        "step1_gradients": {
+          "step": 1,
+          "loss": 3.57888,
+          "grad_readout": 0.317064,
+          "grad_upstream": 0.137957
+        },
+        "final_step_gradients": {
+          "step": 15,
+          "loss": 2.58148,
+          "grad_readout": 0.573926,
+          "grad_upstream": 0.819949
+        },
+        "mean_cluster_nll_after": 2.2002,
+        "post_update_q_mean": 0.03243,
+        "post_update_q_member_std": 0.005463,
+        "latent_emission_std": 0.000139
+      }
+    }
+  }
+}

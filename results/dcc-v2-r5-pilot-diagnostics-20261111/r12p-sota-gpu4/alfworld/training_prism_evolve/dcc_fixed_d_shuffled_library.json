@@ -1,0 +1,352 @@
+{
+  "benchmark": "alfworld",
+  "max_programs": 32,
+  "starter_ids": [
+    "5afc3e700d89",
+    "b7171c2b70bd",
+    "2a05292caff6",
+    "cf9895795b60"
+  ],
+  "programs": [
+    {
+      "program_id": "5afc3e700d89",
+      "benchmark": "alfworld",
+      "step_templates": [
+        "look"
+      ],
+      "readout_fields": [
+        "room_receptacles",
+        "target_object_visible"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 1.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "look",
+          "typed_arguments": {},
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "room_receptacles",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "target_object_visible",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0"
+      ],
+      "formal_params": [],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "room_receptacles",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "target_object_visible",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    },
+    {
+      "program_id": "b7171c2b70bd",
+      "benchmark": "alfworld",
+      "step_templates": [
+        "inventory"
+      ],
+      "readout_fields": [
+        "inventory_object",
+        "object_treatment_state"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 1.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "inventory",
+          "typed_arguments": {},
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "inventory_object",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "object_treatment_state",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0"
+      ],
+      "formal_params": [],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "inventory_object",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "object_treatment_state",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    },
+    {
+      "program_id": "2a05292caff6",
+      "benchmark": "alfworld",
+      "step_templates": [
+        "open {target_receptacle}"
+      ],
+      "readout_fields": [
+        "open_receptacle_state",
+        "target_object_visible"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 1.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "open {target_receptacle}",
+          "typed_arguments": {
+            "target_receptacle": "$target_receptacle"
+          },
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "open_receptacle_state",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "target_object_visible",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0"
+      ],
+      "formal_params": [
+        "target_receptacle"
+      ],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "open_receptacle_state",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "target_object_visible",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    },
+    {
+      "program_id": "cf9895795b60",
+      "benchmark": "alfworld",
+      "step_templates": [
+        "examine {target_receptacle}"
+      ],
+      "readout_fields": [
+        "open_receptacle_state",
+        "object_treatment_state"
+      ],
+      "origin": "starter",
+      "parent_ids": [],
+      "expected_cost": 1.0,
+      "ast_nodes": [
+        {
+          "op": "Call",
+          "tool_or_action": "examine {target_receptacle}",
+          "typed_arguments": {
+            "target_receptacle": "$target_receptacle"
+          },
+          "bind_return_to": "ret_0",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "open_receptacle_state",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Read",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "ret_0",
+          "public_field_path": "object_treatment_state",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        },
+        {
+          "op": "Stop",
+          "tool_or_action": "",
+          "typed_arguments": {},
+          "bind_return_to": "",
+          "variable": "",
+          "public_field_path": "",
+          "children": [],
+          "condition_field": "",
+          "condition_equals": ""
+        }
+      ],
+      "variable_scope": [
+        "ret_0"
+      ],
+      "formal_params": [
+        "target_receptacle"
+      ],
+      "role_bindings": {},
+      "def_use_edges": [
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "open_receptacle_state",
+          "consumer_step": null
+        },
+        {
+          "producer_step": 0,
+          "variable_name": "ret_0",
+          "field_path": "object_treatment_state",
+          "consumer_step": null
+        }
+      ],
+      "case_condition_field": "",
+      "case_condition_value": "",
+      "case_true_template": "",
+      "case_false_template": ""
+    }
+  ]
+}

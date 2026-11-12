@@ -1,0 +1,465 @@
+[
+  {
+    "record_id": "103d2067bc8d",
+    "benchmark": "alfworld",
+    "task_id": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-301/trial_T20190907_174127_043461/game.tw-pddl",
+    "goal_category": "Inspect",
+    "anchor_signature": "fd574dfa8723",
+    "program_id": "cf9895795b60",
+    "step_templates": [
+      "examine {target_receptacle}"
+    ],
+    "readout_fields": [
+      "open_receptacle_state",
+      "object_treatment_state"
+    ],
+    "public_readout_z": {
+      "room_receptacles": "alarmclock 1,bed 1,bowl 1,cd 1",
+      "open_receptacle_state": "unknown",
+      "inventory_object": "none",
+      "object_treatment_state": "raw",
+      "target_object_visible": "yes"
+    },
+    "z_parity_bit": 0,
+    "continuation_pair_key": "examine {target_receptacle}__vs__take {pencil_1} from {target_receptacle}",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 17,
+    "v_cost": 18,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 3,
+    "surprise": 3.6581759452819824,
+    "rebound_trace_templates": [
+      "go to {target_receptacle}",
+      "examine {target_receptacle}"
+    ],
+    "rebound_trace_fields": [
+      "inventory_object",
+      "object_treatment_state",
+      "room_receptacles",
+      "target_object_visible"
+    ],
+    "post_q_checkpoint_id": "bc7b59a3c851",
+    "u_policy_id": "examine {target_receptacle}",
+    "v_policy_id": "take {pencil_1} from {target_receptacle}",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-301/trial_T20190907_174127_043461/game.tw-pddl:factual_u:2:19",
+    "counterfactual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-301/trial_T20190907_174127_043461/game.tw-pddl:counterfactual_v:2:20",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.06162900384515524,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "Inspect::examine {target_receptacle}__vs__take {pencil_1} from {target_receptacle}::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "97bb61f4db7c",
+    "benchmark": "alfworld",
+    "task_id": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-301/trial_T20190907_174142_375532/game.tw-pddl",
+    "goal_category": "Inspect",
+    "anchor_signature": "3bd48071802e",
+    "program_id": "cf9895795b60",
+    "step_templates": [
+      "examine {target_receptacle}"
+    ],
+    "readout_fields": [
+      "open_receptacle_state",
+      "object_treatment_state"
+    ],
+    "public_readout_z": {
+      "room_receptacles": "alarmclock 1,bed 1,bowl 1,cellphone 1",
+      "open_receptacle_state": "unknown",
+      "inventory_object": "none",
+      "object_treatment_state": "raw",
+      "target_object_visible": "yes"
+    },
+    "z_parity_bit": 1,
+    "continuation_pair_key": "examine {target_receptacle}__vs__go to {garbagecan_1}",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 14,
+    "v_cost": 15,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 3,
+    "surprise": 3.606462001800537,
+    "rebound_trace_templates": [
+      "examine {target_receptacle}",
+      "examine {target_receptacle}",
+      "examine {target_receptacle}"
+    ],
+    "rebound_trace_fields": [
+      "inventory_object",
+      "object_treatment_state",
+      "room_receptacles",
+      "target_object_visible"
+    ],
+    "post_q_checkpoint_id": "c26363b54491",
+    "u_policy_id": "examine {target_receptacle}",
+    "v_policy_id": "go to {garbagecan_1}",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-301/trial_T20190907_174142_375532/game.tw-pddl:factual_u:4:18",
+    "counterfactual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-301/trial_T20190907_174142_375532/game.tw-pddl:counterfactual_v:4:19",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.05592315085232258,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "Inspect::examine {target_receptacle}__vs__go to {garbagecan_1}::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "5edb7b53d456",
+    "benchmark": "alfworld",
+    "task_id": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-301/trial_T20190907_174157_650656/game.tw-pddl",
+    "goal_category": "Inspect",
+    "anchor_signature": "62d69eae156d",
+    "program_id": "cf9895795b60",
+    "step_templates": [
+      "examine {target_receptacle}"
+    ],
+    "readout_fields": [
+      "open_receptacle_state",
+      "object_treatment_state"
+    ],
+    "public_readout_z": {
+      "room_receptacles": "alarmclock 1,bed 1,bowl 1,cd 1",
+      "open_receptacle_state": "unknown",
+      "inventory_object": "none",
+      "object_treatment_state": "raw",
+      "target_object_visible": "yes"
+    },
+    "z_parity_bit": 0,
+    "continuation_pair_key": "examine {target_receptacle}__vs__go to {garbagecan_1}",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 13,
+    "v_cost": 14,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 3,
+    "surprise": 3.3952865600585938,
+    "rebound_trace_templates": [
+      "examine {target_receptacle}",
+      "examine {target_receptacle}",
+      "examine {target_receptacle}"
+    ],
+    "rebound_trace_fields": [
+      "inventory_object",
+      "object_treatment_state",
+      "room_receptacles",
+      "target_object_visible"
+    ],
+    "post_q_checkpoint_id": "3f08b37bfdbd",
+    "u_policy_id": "examine {target_receptacle}",
+    "v_policy_id": "go to {garbagecan_1}",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-301/trial_T20190907_174157_650656/game.tw-pddl:factual_u:4:17",
+    "counterfactual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-301/trial_T20190907_174157_650656/game.tw-pddl:counterfactual_v:4:18",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.050210343673825264,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "Inspect::examine {target_receptacle}__vs__go to {garbagecan_1}::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "6e806ba4ca99",
+    "benchmark": "alfworld",
+    "task_id": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-302/trial_T20190908_192756_298295/game.tw-pddl",
+    "goal_category": "Inspect",
+    "anchor_signature": "d4d3999a373f",
+    "program_id": "cf9895795b60",
+    "step_templates": [
+      "examine {target_receptacle}"
+    ],
+    "readout_fields": [
+      "open_receptacle_state",
+      "object_treatment_state"
+    ],
+    "public_readout_z": {
+      "room_receptacles": "alarmclock 2,alarmclock 3,bed 1,book 1",
+      "open_receptacle_state": "unknown",
+      "inventory_object": "none",
+      "object_treatment_state": "raw",
+      "target_object_visible": "yes"
+    },
+    "z_parity_bit": 0,
+    "continuation_pair_key": "examine {target_receptacle}__vs__go to {garbagecan_1}",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 15,
+    "v_cost": 17,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 3,
+    "surprise": 3.0231776237487793,
+    "rebound_trace_templates": [
+      "examine {target_receptacle}",
+      "examine {target_receptacle}",
+      "examine {target_receptacle}"
+    ],
+    "rebound_trace_fields": [
+      "inventory_object",
+      "object_treatment_state",
+      "room_receptacles",
+      "target_object_visible"
+    ],
+    "post_q_checkpoint_id": "d7b229b68aaa",
+    "u_policy_id": "examine {target_receptacle}",
+    "v_policy_id": "go to {garbagecan_1}",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-302/trial_T20190908_192756_298295/game.tw-pddl:factual_u:5:20",
+    "counterfactual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-302/trial_T20190908_192756_298295/game.tw-pddl:counterfactual_v:5:22",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.04399009421467781,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "Inspect::examine {target_receptacle}__vs__go to {garbagecan_1}::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "ab3e0807ec21",
+    "benchmark": "alfworld",
+    "task_id": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-302/trial_T20190908_192808_880740/game.tw-pddl",
+    "goal_category": "Inspect",
+    "anchor_signature": "3c9d90071afd",
+    "program_id": "cf9895795b60",
+    "step_templates": [
+      "examine {target_receptacle}"
+    ],
+    "readout_fields": [
+      "open_receptacle_state",
+      "object_treatment_state"
+    ],
+    "public_readout_z": {
+      "room_receptacles": "alarmclock 1,bed 1,bowl 2,bowl 3",
+      "open_receptacle_state": "unknown",
+      "inventory_object": "none",
+      "object_treatment_state": "raw",
+      "target_object_visible": "yes"
+    },
+    "z_parity_bit": 1,
+    "continuation_pair_key": "examine {target_receptacle}__vs__go to {garbagecan_1}",
+    "u_score": 0.0,
+    "v_score": 0.968074854950731,
+    "u_cost": 16,
+    "v_cost": 13,
+    "u_done": false,
+    "v_done": true,
+    "action_diff_d": -0.968074854950731,
+    "outcome_bin": 3,
+    "surprise": 9.445085525512695,
+    "rebound_trace_templates": [
+      "examine {target_receptacle}",
+      "examine {target_receptacle}",
+      "examine {target_receptacle}"
+    ],
+    "rebound_trace_fields": [
+      "inventory_object",
+      "object_treatment_state",
+      "room_receptacles",
+      "target_object_visible"
+    ],
+    "post_q_checkpoint_id": "4d5eb8291266",
+    "u_policy_id": "examine {target_receptacle}",
+    "v_policy_id": "go to {garbagecan_1}",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-302/trial_T20190908_192808_880740/game.tw-pddl:factual_u:4:20",
+    "counterfactual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-302/trial_T20190908_192808_880740/game.tw-pddl:counterfactual_v:4:17",
+    "u_native_outcome": false,
+    "v_native_outcome": true,
+    "d_real": -0.968074854950731,
+    "d_model": 0.039284330792725086,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "Inspect::examine {target_receptacle}__vs__go to {garbagecan_1}::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "08a4e2268271",
+    "benchmark": "alfworld",
+    "task_id": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-302/trial_T20190908_192820_480968/game.tw-pddl",
+    "goal_category": "Inspect",
+    "anchor_signature": "c2b4d1e464b2",
+    "program_id": "cf9895795b60",
+    "step_templates": [
+      "examine {target_receptacle}"
+    ],
+    "readout_fields": [
+      "open_receptacle_state",
+      "object_treatment_state"
+    ],
+    "public_readout_z": {
+      "room_receptacles": "bed 1,desk 1,drawer 1,drawer 2",
+      "open_receptacle_state": "unknown",
+      "inventory_object": "none",
+      "object_treatment_state": "raw",
+      "target_object_visible": "no"
+    },
+    "z_parity_bit": 1,
+    "continuation_pair_key": "examine {target_receptacle}__vs__go to {receptacle_1}",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 19,
+    "v_cost": 19,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 1,
+    "surprise": 3.380002021789551,
+    "rebound_trace_templates": [
+      "examine {target_receptacle}",
+      "examine {target_receptacle}",
+      "examine {target_receptacle}"
+    ],
+    "rebound_trace_fields": [
+      "inventory_object",
+      "object_treatment_state",
+      "room_receptacles",
+      "target_object_visible"
+    ],
+    "post_q_checkpoint_id": "efec1e84920d",
+    "u_policy_id": "examine {target_receptacle}",
+    "v_policy_id": "go to {receptacle_1}",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-302/trial_T20190908_192820_480968/game.tw-pddl:factual_u:5:24",
+    "counterfactual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-302/trial_T20190908_192820_480968/game.tw-pddl:counterfactual_v:5:24",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.0351808276027441,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "Inspect::examine {target_receptacle}__vs__go to {receptacle_1}::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "b5fe5df93d75",
+    "benchmark": "alfworld",
+    "task_id": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-303/trial_T20190908_144933_600228/game.tw-pddl",
+    "goal_category": "Inspect",
+    "anchor_signature": "ba6ea47d75f3",
+    "program_id": "cf9895795b60",
+    "step_templates": [
+      "examine {target_receptacle}"
+    ],
+    "readout_fields": [
+      "open_receptacle_state",
+      "object_treatment_state"
+    ],
+    "public_readout_z": {
+      "room_receptacles": "alarmclock 1,bed 1,cd 2,desk 1",
+      "open_receptacle_state": "unknown",
+      "inventory_object": "none",
+      "object_treatment_state": "examined",
+      "target_object_visible": "yes"
+    },
+    "z_parity_bit": 0,
+    "continuation_pair_key": "examine {source_receptacle}__vs__go to {shelf_3}",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 13,
+    "v_cost": 13,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 3,
+    "surprise": 2.2837657928466797,
+    "rebound_trace_templates": [
+      "examine {source_receptacle}",
+      "examine {source_receptacle}",
+      "examine {source_receptacle}"
+    ],
+    "rebound_trace_fields": [
+      "inventory_object",
+      "object_treatment_state",
+      "room_receptacles",
+      "target_object_visible"
+    ],
+    "post_q_checkpoint_id": "3ec17c6d8f01",
+    "u_policy_id": "examine {source_receptacle}",
+    "v_policy_id": "go to {shelf_3}",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-303/trial_T20190908_144933_600228/game.tw-pddl:factual_u:7:20",
+    "counterfactual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-303/trial_T20190908_144933_600228/game.tw-pddl:counterfactual_v:7:20",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.03063160367310047,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "Inspect::examine {source_receptacle}__vs__go to {shelf_3}::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "252a44d04ddc",
+    "benchmark": "alfworld",
+    "task_id": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-303/trial_T20190908_144950_175895/game.tw-pddl",
+    "goal_category": "Inspect",
+    "anchor_signature": "8101e1886764",
+    "program_id": "cf9895795b60",
+    "step_templates": [
+      "examine {target_receptacle}"
+    ],
+    "readout_fields": [
+      "open_receptacle_state",
+      "object_treatment_state"
+    ],
+    "public_readout_z": {
+      "room_receptacles": "bed 1,desk 1,desklamp 1,drawer 1",
+      "open_receptacle_state": "unknown",
+      "inventory_object": "none",
+      "object_treatment_state": "examined",
+      "target_object_visible": "yes"
+    },
+    "z_parity_bit": 1,
+    "continuation_pair_key": "examine {receptacle_2}__vs__go to {shelf_2}",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 14,
+    "v_cost": 15,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 3,
+    "surprise": 1.9244565963745117,
+    "rebound_trace_templates": [
+      "examine {receptacle_2}",
+      "examine {receptacle_2}",
+      "examine {receptacle_2}"
+    ],
+    "rebound_trace_fields": [
+      "inventory_object",
+      "object_treatment_state",
+      "room_receptacles",
+      "target_object_visible"
+    ],
+    "post_q_checkpoint_id": "b0bf3549c77f",
+    "u_policy_id": "examine {receptacle_2}",
+    "v_policy_id": "go to {shelf_2}",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-303/trial_T20190908_144950_175895/game.tw-pddl:factual_u:6:20",
+    "counterfactual_tail_ref": "train/look_at_obj_in_light-AlarmClock-None-DeskLamp-303/trial_T20190908_144950_175895/game.tw-pddl:counterfactual_v:6:21",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.030402728356420994,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "Inspect::examine {receptacle_2}__vs__go to {shelf_2}::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  }
+]

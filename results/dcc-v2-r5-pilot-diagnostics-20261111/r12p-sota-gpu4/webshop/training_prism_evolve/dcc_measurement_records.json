@@ -1,0 +1,460 @@
+[
+  {
+    "record_id": "01fd6adeb3bd",
+    "benchmark": "webshop",
+    "task_id": "webshop/1500",
+    "goal_category": "fashion",
+    "anchor_signature": "749527936eef",
+    "program_id": "97eac41014c2",
+    "step_templates": [
+      "search[{goal_query}]"
+    ],
+    "readout_fields": [
+      "page_type",
+      "price_rating_match"
+    ],
+    "public_readout_z": {
+      "page_type": "search_results",
+      "current_asin": "b09pyskd7h",
+      "selected_options": "none",
+      "inspected_attributes": "none",
+      "price_rating_match": "high"
+    },
+    "z_parity_bit": 0,
+    "continuation_pair_key": "click[next >]__vs__click[{candidate_asin_3}]",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 7,
+    "v_cost": 3,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 7,
+    "surprise": 4.1719560623168945,
+    "rebound_trace_templates": [
+      "click[search]",
+      "search[{goal_query}]"
+    ],
+    "rebound_trace_fields": [
+      "current_asin",
+      "inspected_attributes",
+      "page_type",
+      "price_rating_match"
+    ],
+    "post_q_checkpoint_id": "69f65e86e2d1",
+    "u_policy_id": "click[next >]",
+    "v_policy_id": "click[{candidate_asin_3}]",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "webshop/1500:factual_u:2:9",
+    "counterfactual_tail_ref": "webshop/1500:counterfactual_v:2:5",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.04131746385246515,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "fashion::click[next >]__vs__click[{candidate_asin_3}]::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "f93c9e47e8c2",
+    "benchmark": "webshop",
+    "task_id": "webshop/1501",
+    "goal_category": "fashion",
+    "anchor_signature": "8107513066f3",
+    "program_id": "97eac41014c2",
+    "step_templates": [
+      "search[{goal_query}]"
+    ],
+    "readout_fields": [
+      "page_type",
+      "price_rating_match"
+    ],
+    "public_readout_z": {
+      "page_type": "search_results",
+      "current_asin": "b01hqtwl6s",
+      "selected_options": "none",
+      "inspected_attributes": "none",
+      "price_rating_match": "high"
+    },
+    "z_parity_bit": 1,
+    "continuation_pair_key": "click[{candidate_asin_1}]__vs__click[{candidate_asin_2}]",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 8,
+    "v_cost": 3,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 7,
+    "surprise": 4.0054707527160645,
+    "rebound_trace_templates": [
+      "search[{goal_query}]"
+    ],
+    "rebound_trace_fields": [
+      "current_asin",
+      "inspected_attributes",
+      "page_type",
+      "price_rating_match"
+    ],
+    "post_q_checkpoint_id": "92ee72b2e1e0",
+    "u_policy_id": "click[{candidate_asin_1}]",
+    "v_policy_id": "click[{candidate_asin_2}]",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "webshop/1501:factual_u:1:9",
+    "counterfactual_tail_ref": "webshop/1501:counterfactual_v:1:4",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.04094381723552942,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "fashion::click[{candidate_asin_1}]__vs__click[{candidate_asin_2}]::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "c389942f598e",
+    "benchmark": "webshop",
+    "task_id": "webshop/1502",
+    "goal_category": "fashion",
+    "anchor_signature": "3b11aca8c77a",
+    "program_id": "f749f98bf440",
+    "step_templates": [
+      "click[{candidate_asin}]"
+    ],
+    "readout_fields": [
+      "current_asin",
+      "selected_options"
+    ],
+    "public_readout_z": {
+      "page_type": "item_detail",
+      "current_asin": "b08hf132pn",
+      "selected_options": "none",
+      "inspected_attributes": "none",
+      "price_rating_match": "high"
+    },
+    "z_parity_bit": 0,
+    "continuation_pair_key": "click[medium]__vs__click[women]",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 2,
+    "v_cost": 3,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 7,
+    "surprise": 4.11881160736084,
+    "rebound_trace_templates": [
+      "click[search]",
+      "search[{goal_query}]",
+      "click[{candidate_asin_6l}]"
+    ],
+    "rebound_trace_fields": [
+      "current_asin",
+      "inspected_attributes",
+      "page_type",
+      "price_rating_match"
+    ],
+    "post_q_checkpoint_id": "e63e7e760975",
+    "u_policy_id": "click[medium]",
+    "v_policy_id": "click[women]",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "webshop/1502:factual_u:3:5",
+    "counterfactual_tail_ref": "webshop/1502:counterfactual_v:3:6",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.007288321852684021,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "fashion::click[medium]__vs__click[women]::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "bcd10050ad5e",
+    "benchmark": "webshop",
+    "task_id": "webshop/1503",
+    "goal_category": "fashion",
+    "anchor_signature": "b9335cd32c48",
+    "program_id": "f749f98bf440",
+    "step_templates": [
+      "click[{candidate_asin}]"
+    ],
+    "readout_fields": [
+      "current_asin",
+      "selected_options"
+    ],
+    "public_readout_z": {
+      "page_type": "item_detail",
+      "current_asin": "b085s5p7wb",
+      "selected_options": "none",
+      "inspected_attributes": "none",
+      "price_rating_match": "high"
+    },
+    "z_parity_bit": 0,
+    "continuation_pair_key": "click[blue]__vs__click[medium]",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 3,
+    "v_cost": 2,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 7,
+    "surprise": 3.516730546951294,
+    "rebound_trace_templates": [
+      "search[{goal_query}]",
+      "click[next >]",
+      "click[{candidate_asin_z6}]"
+    ],
+    "rebound_trace_fields": [
+      "current_asin",
+      "inspected_attributes",
+      "page_type",
+      "price_rating_match"
+    ],
+    "post_q_checkpoint_id": "254f9fbbfad9",
+    "u_policy_id": "click[blue]",
+    "v_policy_id": "click[medium]",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "webshop/1503:factual_u:4:7",
+    "counterfactual_tail_ref": "webshop/1503:counterfactual_v:4:6",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.025055809877812862,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "fashion::click[blue]__vs__click[medium]::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "9f2b28375e90",
+    "benchmark": "webshop",
+    "task_id": "webshop/1504",
+    "goal_category": "garden",
+    "anchor_signature": "8107513066f3",
+    "program_id": "97eac41014c2",
+    "step_templates": [
+      "search[{goal_query}]"
+    ],
+    "readout_fields": [
+      "page_type",
+      "price_rating_match"
+    ],
+    "public_readout_z": {
+      "page_type": "search_results",
+      "current_asin": "b084q7c6tx",
+      "selected_options": "none",
+      "inspected_attributes": "none",
+      "price_rating_match": "high"
+    },
+    "z_parity_bit": 1,
+    "continuation_pair_key": "click[next >]__vs__click[{candidate_asin_tx}]",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 14,
+    "v_cost": 2,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 7,
+    "surprise": 3.3381733894348145,
+    "rebound_trace_templates": [
+      "search[{goal_query}]"
+    ],
+    "rebound_trace_fields": [
+      "current_asin",
+      "inspected_attributes",
+      "page_type",
+      "price_rating_match"
+    ],
+    "post_q_checkpoint_id": "c25a851997cc",
+    "u_policy_id": "click[next >]",
+    "v_policy_id": "click[{candidate_asin_tx}]",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "webshop/1504:factual_u:1:15",
+    "counterfactual_tail_ref": "webshop/1504:counterfactual_v:1:3",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.031092143151909113,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "garden::click[next >]__vs__click[{candidate_asin_tx}]::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "926ae41564b2",
+    "benchmark": "webshop",
+    "task_id": "webshop/1505",
+    "goal_category": "fashion",
+    "anchor_signature": "0857a0beadc0",
+    "program_id": "fallback:97eac41014c2",
+    "step_templates": [
+      "search[{goal_query}]"
+    ],
+    "readout_fields": [
+      "page_type",
+      "price_rating_match"
+    ],
+    "public_readout_z": {
+      "page_type": "item_subpage",
+      "current_asin": "b08k7ldm7q",
+      "selected_options": "none",
+      "inspected_attributes": "description",
+      "price_rating_match": "high"
+    },
+    "z_parity_bit": 0,
+    "continuation_pair_key": "click[< prev]__vs__click[back to search]",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 2,
+    "v_cost": 12,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": -0.0,
+    "outcome_bin": 3,
+    "surprise": 2.677488327026367,
+    "rebound_trace_templates": [
+      "search[{goal_query}]",
+      "click[{candidate_asin_yn}]",
+      "click[description]"
+    ],
+    "rebound_trace_fields": [
+      "current_asin",
+      "inspected_attributes",
+      "page_type",
+      "price_rating_match"
+    ],
+    "post_q_checkpoint_id": "dbef3f6d19bd",
+    "u_policy_id": "click[< prev]",
+    "v_policy_id": "click[back to search]",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "webshop/1505:factual_u:3:15",
+    "counterfactual_tail_ref": "webshop/1505:counterfactual_v:3:5",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": -0.0,
+    "d_model": -0.020309031708166003,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "fashion::click[< prev]__vs__click[back to search]::frozen-prior-tail-v2",
+    "program_executed_cleanly": false
+  },
+  {
+    "record_id": "43758daa92d8",
+    "benchmark": "webshop",
+    "task_id": "webshop/1506",
+    "goal_category": "fashion",
+    "anchor_signature": "dc1a1ba4be8c",
+    "program_id": "f749f98bf440",
+    "step_templates": [
+      "click[{candidate_asin}]"
+    ],
+    "readout_fields": [
+      "current_asin",
+      "selected_options"
+    ],
+    "public_readout_z": {
+      "page_type": "item_detail",
+      "current_asin": "b09m63b87v",
+      "selected_options": "none",
+      "inspected_attributes": "none",
+      "price_rating_match": "high"
+    },
+    "z_parity_bit": 1,
+    "continuation_pair_key": "click[a-blue]__vs__click[description]",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 2,
+    "v_cost": 6,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": -0.0,
+    "outcome_bin": 7,
+    "surprise": 2.564464569091797,
+    "rebound_trace_templates": [
+      "search[{goal_query}]",
+      "click[next >]",
+      "click[{candidate_asin_ln}]"
+    ],
+    "rebound_trace_fields": [
+      "current_asin",
+      "inspected_attributes",
+      "page_type",
+      "price_rating_match"
+    ],
+    "post_q_checkpoint_id": "3edc51bee18f",
+    "u_policy_id": "click[a-blue]",
+    "v_policy_id": "click[description]",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "webshop/1506:factual_u:3:9",
+    "counterfactual_tail_ref": "webshop/1506:counterfactual_v:3:5",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": -0.0,
+    "d_model": -0.015713865868747234,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "fashion::click[a-blue]__vs__click[description]::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  },
+  {
+    "record_id": "7bb48e66c807",
+    "benchmark": "webshop",
+    "task_id": "webshop/1507",
+    "goal_category": "fashion",
+    "anchor_signature": "749527936eef",
+    "program_id": "97eac41014c2",
+    "step_templates": [
+      "search[{goal_query}]"
+    ],
+    "readout_fields": [
+      "page_type",
+      "price_rating_match"
+    ],
+    "public_readout_z": {
+      "page_type": "search_results",
+      "current_asin": "b09s3bn15c",
+      "selected_options": "none",
+      "inspected_attributes": "none",
+      "price_rating_match": "high"
+    },
+    "z_parity_bit": 1,
+    "continuation_pair_key": "click[next >]__vs__click[{candidate_asin_3}]",
+    "u_score": 0.0,
+    "v_score": 0.0,
+    "u_cost": 13,
+    "v_cost": 3,
+    "u_done": false,
+    "v_done": false,
+    "action_diff_d": 0.0,
+    "outcome_bin": 7,
+    "surprise": 2.291532039642334,
+    "rebound_trace_templates": [
+      "click[search]",
+      "search[{goal_query}]"
+    ],
+    "rebound_trace_fields": [
+      "current_asin",
+      "inspected_attributes",
+      "page_type",
+      "price_rating_match"
+    ],
+    "post_q_checkpoint_id": "8e1691608b33",
+    "u_policy_id": "click[next >]",
+    "v_policy_id": "click[{candidate_asin_3}]",
+    "tail_policy_version": "frozen-prior-tail-v2",
+    "factual_tail_ref": "webshop/1507:factual_u:2:15",
+    "counterfactual_tail_ref": "webshop/1507:counterfactual_v:2:5",
+    "u_native_outcome": false,
+    "v_native_outcome": false,
+    "d_real": 0.0,
+    "d_model": 0.012432857416570187,
+    "d_source": "observed_native_terminal",
+    "role_bindings": {},
+    "comparison_key": "fashion::click[next >]__vs__click[{candidate_asin_3}]::frozen-prior-tail-v2",
+    "program_executed_cleanly": true
+  }
+]

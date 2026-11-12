@@ -1142,13 +1142,15 @@ class NativeCausalPolicy(nn.Module):
     def _generate_native_text(
         self, messages: Sequence[Mapping[str, Any]], schema: Mapping[str, Any], *,
         mode: str, greedy: bool, role: str, max_new_tokens: int | None,
+        retain_kv_cache: bool = False,
     ) -> NativeGeneration:
         from .native_text_actions import TEXT_ACTOR_CONTRACT, text_available_modes
         public_schema = deepcopy(dict(schema))
         contract = self._text_decoder_engine().native_contract(public_schema, mode)
         prompt = self._text_action_messages(messages, public_schema, mode)
         generation = self.complete(prompt, role=role, max_new_tokens=max_new_tokens,
-                                   greedy=greedy, program_contract=contract)
+                                   greedy=greedy, program_contract=contract,
+                                   retain_kv_cache=retain_kv_cache)
         complete = generation.metadata["program_complete"]
         action = (parse_native_action(generation.text, mode=mode, action_schema=public_schema)
                   if complete else
@@ -1181,6 +1183,7 @@ class NativeCausalPolicy(nn.Module):
     def _generate_program(
         self, messages: Sequence[Mapping[str, Any]], action_schema: Mapping[str, Any], *,
         mode: str | None, greedy: bool, role: str, max_new_tokens: int | None,
+        retain_kv_cache: bool = False,
     ) -> NativeGeneration:
         from .native_program import PROGRAM_VERSION, available_modes, program_schema
         context = deepcopy(action_schema["program_context"])
@@ -1199,7 +1202,8 @@ class NativeCausalPolicy(nn.Module):
         prompt = (self._native_action_messages(messages, schema) if mode is None
                   else self._action_messages(messages, schema, mode))
         generation = self.complete(prompt, role=role, max_new_tokens=limit,
-                                   greedy=greedy, program_contract=contract)
+                                   greedy=greedy, program_contract=contract,
+                                   retain_kv_cache=retain_kv_cache)
         metadata = dict(generation.metadata, actor_contract=PROGRAM_VERSION,
                         actor_gated=mode is not None, raw_program_text=generation.text,
                         action_schema=schema, native_action_schema=schema,
@@ -1485,6 +1489,7 @@ class NativeCausalPolicy(nn.Module):
         self, messages: Sequence[Mapping[str, Any]], role: str = "actor", *,
         max_new_tokens: int | None = None, temperature: float | None = None,
         greedy: bool = False, program_contract: Mapping[str, Any] | None = None,
+        retain_kv_cache: bool = False,
     ) -> NativeGeneration:
         """Generate exact response tokens and record the physical model request."""
         from transformers import GenerationConfig, LogitsProcessorList, StoppingCriteria, StoppingCriteriaList
@@ -1585,6 +1590,12 @@ class NativeCausalPolicy(nn.Module):
             if not torch.isfinite(sampled_scores).all():
                 raise FloatingPointError("An emitted response token has non-finite sampling log probability.")
             sampling_log_probs = sampled_scores.cpu().tolist()
+            if retain_kv_cache:
+                self._retained_kv_cache = getattr(output, "past_key_values", None)
+                self._retained_prompt_ids = tuple(prompt_ids)
+            else:
+                self._retained_kv_cache = None
+                self._retained_prompt_ids = ()
         self._synchronize()
         elapsed = max(0.0, monotonic_seconds() - started)
         program_metadata = {}
@@ -1669,12 +1680,13 @@ class NativeCausalPolicy(nn.Module):
         """Extract 32-dim shared semantic representation from the frozen Qwen input embedding matrix."""
         from .native_dcc import FROZEN_HISTORY_DIM, _canonical_json
 
-        cache_key = f"{goal_text}||{_canonical_json(dict(public_fields))}"
+        clean_fields = {k: v for k, v in public_fields.items() if not str(k).startswith("_")}
+        cache_key = f"{goal_text}||{_canonical_json(clean_fields)}"
         if getattr(self, "_dcc_context_cache_key", None) == cache_key and getattr(self, "_dcc_context_cache_vec", ()):
             return self._dcc_context_cache_vec
 
         emb_layer = self.model.get_input_embeddings()
-        text = f"Goal: {goal_text}\nObserved: {_canonical_json(dict(public_fields))}"
+        text = f"Goal: {goal_text}\nObserved: {_canonical_json(clean_fields)}"
         tok_ids = self.tokenizer.encode(text, add_special_tokens=False)[:256]
         if not tok_ids or emb_layer is None:
             from .native_dcc import ControlledResponseEnsemble
@@ -1751,15 +1763,25 @@ class NativeCausalPolicy(nn.Module):
         action_texts: Sequence[str],
         *,
         prompt_ids: Sequence[int] | None = None,
-        prefill_already_charged: bool = False,
+        return_raw_logprobs: bool = False,
         role: str = "dcc.candidate_suffix_prior",
     ) -> dict[str, float]:
-        """Compute exact length-normalized frozen Qwen log-probabilities l_0(a | g, h) via shared KV prefill.
+        """Compute exact full-sequence + EOS frozen Qwen log-probabilities log pi_0(a | g, h) and centered
+        candidate advantages alpha_0(a | g, h) via physical KV-cache reuse (`DynamicCache.crop`).
 
-        Prefills the decision prompt once under `frozen_reference()` and evaluates candidate action suffixes
-        in small batches against the cached KV state, charging only incremental suffix tokens when prefill
-        was already metered in `prior_generation`.
+        Eliminates 32-token truncation, missing EOS, duplicate prompt prefills, and `deepcopy` allocations:
+          - If `self._retained_kv_cache` matches `p_ids` from the step's `prior_generation`, physically crops
+            that cache in-place (`crop(P - 1)`) with zero prompt recomputation and charges strictly the physical
+            candidate forward tokens `sum(|a| + 1)`.
+          - Otherwise prefills `p_ids[:-1]` once and honestly charges `(P - 1) + sum(|a| + 1)` physical tokens.
         """
+        from .native_dcc import ControlledResponseEnsemble
+
+        retained_kv = getattr(self, "_retained_kv_cache", None)
+        retained_pids = getattr(self, "_retained_prompt_ids", ())
+        self._retained_kv_cache = None
+        self._retained_prompt_ids = ()
+
         unique_acts = [a for a in dict.fromkeys(str(x).strip() for x in action_texts) if a]
         if not unique_acts:
             return {}
@@ -1773,22 +1795,36 @@ class NativeCausalPolicy(nn.Module):
         else:
             p_ids = self._tokenize_messages(self._native_action_messages(messages, action_schema))
 
-        if len(p_ids) + 32 > self.max_context_tokens:
-            p_ids = p_ids[-(self.max_context_tokens - 32) :]
+        max_act_cap = min(256, max(32, int(self.max_new_tokens)))
+        if len(p_ids) + max_act_cap + 2 > self.max_context_tokens:
+            p_ids = p_ids[-(self.max_context_tokens - max_act_cap - 2) :]
+            retained_kv = None
 
+        eos_id = int(self.eos_token_ids[0]) if self.eos_token_ids else None
         tokenized: list[tuple[str, list[int]]] = []
-        suffix_tokens = 0
+        cand_forward_tokens = 0
         for act in unique_acts:
-            t_ids = list(self.tokenizer.encode(act, add_special_tokens=False)[:32])
+            t_ids = list(self.tokenizer.encode(act, add_special_tokens=False)[:max_act_cap])
+            if eos_id is not None and (not t_ids or t_ids[-1] not in self.eos_token_ids):
+                t_ids.append(eos_id)
             if t_ids:
                 tokenized.append((act, t_ids))
-                suffix_tokens += max(0, len(t_ids) - 1)
+                cand_forward_tokens += len(t_ids)
         if not tokenized:
-            return {a: -6.0 for a in unique_acts}
+            return {a: 0.0 for a in unique_acts}
 
-        charged_tokens = suffix_tokens + (0 if prefill_already_charged else len(p_ids))
+        p_len = len(p_ids)
+        can_reuse_kv = (
+            retained_kv is not None
+            and tuple(retained_pids) == p_ids
+            and p_len >= 2
+            and hasattr(retained_kv, "crop")
+        )
+        prefill_tokens = 0 if can_reuse_kv else max(0, p_len - 1)
+        charged_tokens = prefill_tokens + cand_forward_tokens
         if self.meter and charged_tokens > 0:
             if self.meter.remaining_model_tokens < charged_tokens:
+                del retained_kv
                 return {a: 0.0 for a in unique_acts}
             self.meter.ensure_forward(charged_tokens, role)
 
@@ -1796,57 +1832,86 @@ class NativeCausalPolicy(nn.Module):
         cuda_rng = torch.cuda.get_rng_state(self.device) if torch.cuda.is_available() else None
         self._synchronize()
         started = monotonic_seconds()
-        lp_out: dict[str, float] = {}
+        raw_lp_out: dict[str, float] = {}
+        kv_work = retained_kv if can_reuse_kv else None
         try:
             with self.frozen_reference(), self._model_mode(), torch.no_grad():
-                prompt_t = torch.tensor([p_ids], dtype=torch.long, device=self.device)
-                prefill = self.model(
-                    input_ids=prompt_t,
-                    attention_mask=torch.ones_like(prompt_t),
-                    use_cache=True,
-                )
-                first_lp = F.log_softmax(prefill.logits[0, -1, :].float(), dim=-1)
-                base_cache = prefill.past_key_values
+                if p_len < 2:
+                    full_prompt = torch.tensor([p_ids], dtype=torch.long, device=self.device)
+                    p_out = self.model(input_ids=full_prompt, use_cache=False)
+                    lp0 = F.log_softmax(p_out.logits[0, -1, :].float(), dim=-1)
+                    for act, t_ids in tokenized:
+                        raw_lp_out[act] = float(lp0[t_ids[0]].item())
+                else:
+                    if kv_work is None:
+                        prefix_t = torch.tensor([p_ids[:-1]], dtype=torch.long, device=self.device)
+                        prefill = self.model(
+                            input_ids=prefix_t,
+                            attention_mask=torch.ones_like(prefix_t),
+                            use_cache=True,
+                        )
+                        kv_work = prefill.past_key_values
+                        del prefill
 
-                multi_items: list[tuple[str, list[int]]] = []
-                for act, t_ids in tokenized:
-                    if len(t_ids) == 1:
-                        lp_out[act] = float(first_lp[t_ids[0]].item())
-                    else:
-                        multi_items.append((act, t_ids))
-
-                pad_id = int(self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0)
-                p_len = len(p_ids)
-                chunk_size = 1 if p_len > 4096 else (2 if p_len > 2048 else 8)
-                for start_i in range(0, len(multi_items), chunk_size):
-                    chunk = multi_items[start_i : start_i + chunk_size]
-                    b_sz = len(chunk)
-                    max_suf = max(len(t_ids) - 1 for _, t_ids in chunk)
-                    suf_mat = torch.full((b_sz, max_suf), pad_id, dtype=torch.long, device=self.device)
-                    for b_i, (_, t_ids) in enumerate(chunk):
-                        s_len = len(t_ids) - 1
-                        suf_mat[b_i, :s_len] = torch.tensor(t_ids[:-1], dtype=torch.long, device=self.device)
-                    chunk_cache = deepcopy(base_cache)
-                    if b_sz > 1:
-                        chunk_cache.batch_repeat_interleave(b_sz)
-                    attn_mask = torch.ones((b_sz, p_len + max_suf), dtype=torch.long, device=self.device)
-                    cache_pos = torch.arange(p_len, p_len + max_suf, dtype=torch.long, device=self.device)
-                    suf_res = self.model(
-                        input_ids=suf_mat,
-                        attention_mask=attn_mask,
-                        past_key_values=chunk_cache,
-                        cache_position=cache_pos,
-                        use_cache=False,
+                    is_open_search = bool(action_schema.get("search_available", False))
+                    is_json_tool = bool(
+                        action_schema.get("native_action_schemas_by_mode") or not action_schema.get("classic_text")
                     )
-                    suf_lps = F.log_softmax(suf_res.logits.float(), dim=-1)
-                    for b_i, (act, t_ids) in enumerate(chunk):
-                        tot_lp = float(first_lp[t_ids[0]].item())
-                        for k_pos in range(1, len(t_ids)):
-                            tot_lp += float(suf_lps[b_i, k_pos - 1, t_ids[k_pos]].item())
-                        lp_out[act] = tot_lp / float(len(t_ids))
-                    del chunk_cache, suf_res, suf_lps
-                del prefill, base_cache
+                    last_prompt_tok = int(p_ids[-1])
+                    base_prefix_len = p_len - 1
+                    for act, t_ids in tokenized:
+                        kv_work.crop(base_prefix_len)
+                        step_seq = [last_prompt_tok, *t_ids[:-1]]
+                        step_in = torch.tensor([step_seq], dtype=torch.long, device=self.device)
+                        attn = torch.ones((1, base_prefix_len + len(step_seq)), dtype=torch.long, device=self.device)
+                        cpos = torch.arange(
+                            base_prefix_len, base_prefix_len + len(step_seq), dtype=torch.long, device=self.device
+                        )
+                        suf_res = self.model(
+                            input_ids=step_in,
+                            attention_mask=attn,
+                            past_key_values=kv_work,
+                            cache_position=cpos,
+                            use_cache=True,
+                        )
+                        suf_lps = F.log_softmax(suf_res.logits[0].float(), dim=-1)
+                        tok_lps = [float(suf_lps[k_pos, target_tok].item()) for k_pos, target_tok in enumerate(t_ids)]
+                        if is_open_search and act.lower().startswith("search["):
+                            op_len = min(
+                                len(tok_lps),
+                                max(1, len(self.tokenizer.encode(act[: act.find("[") + 1], add_special_tokens=False))),
+                            )
+                            op_sum = sum(tok_lps[:op_len])
+                            arg_lps = tok_lps[op_len:]
+                            tot_lp = op_sum + (sum(arg_lps) / float(len(arg_lps)) if arg_lps else 0.0)
+                        elif is_json_tool and act.startswith("{"):
+                            m_nf = re.match(r'^\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:', act)
+                            if m_nf:
+                                op_len = min(
+                                    len(tok_lps),
+                                    max(1, len(self.tokenizer.encode(m_nf.group(0), add_special_tokens=False))),
+                                )
+                                op_sum = sum(tok_lps[:op_len])
+                                arg_lps = tok_lps[op_len:]
+                                tot_lp = op_sum + (sum(arg_lps) / float(len(arg_lps)) if arg_lps else 0.0)
+                            elif act.startswith('{"arguments":') and ',"name":' in act:
+                                head_len = len(self.tokenizer.encode('{"arguments":', add_special_tokens=False))
+                                pre_name = act[: act.rfind(',"name":')]
+                                arg_end = min(
+                                    len(tok_lps),
+                                    max(head_len, len(self.tokenizer.encode(pre_name, add_special_tokens=False))),
+                                )
+                                op_sum = sum(tok_lps[:head_len]) + sum(tok_lps[arg_end:])
+                                arg_lps = tok_lps[head_len:arg_end]
+                                tot_lp = op_sum + (sum(arg_lps) / float(len(arg_lps)) if arg_lps else 0.0)
+                            else:
+                                tot_lp = sum(tok_lps)
+                        else:
+                            tot_lp = sum(tok_lps)
+                        raw_lp_out[act] = tot_lp
+                        del suf_res, suf_lps
         finally:
+            del kv_work, retained_kv
             torch.random.set_rng_state(cpu_rng)
             if cuda_rng is not None:
                 torch.cuda.set_rng_state(cuda_rng, self.device)
@@ -1856,9 +1921,9 @@ class NativeCausalPolicy(nn.Module):
         if self.meter and charged_tokens > 0:
             self.meter.record_model_call(0, 0, elapsed, role, forward_tokens=charged_tokens)
 
-        for act in unique_acts:
-            lp_out.setdefault(act, -6.0)
-        return lp_out
+        if return_raw_logprobs:
+            return raw_lp_out
+        return ControlledResponseEnsemble.compute_centered_prior_advantages(raw_lp_out)
 
     @torch.no_grad()
     def build_dcc_decision_context(
@@ -1885,6 +1950,13 @@ class NativeCausalPolicy(nn.Module):
             clean_bench, goal_text, events, action_schema
         )
         t_slots = PublicBenchmarkBinder.encode_typed_field_slots(pub_fields)
+        adm_actions = PublicBenchmarkBinder.enumerate_admissible_actions(
+            clean_bench, action_schema, goal_text, r_bindings
+        )
+        act_tmpls = {
+            act: PublicBenchmarkBinder.abstract_action_to_template(clean_bench, act, r_bindings)
+            for act in adm_actions
+        }
         rem_sec = float(min(1.0, max(0.0, remaining_budget_ratio)))
         eff_max = max(1, int(max_env_steps))
         step_frac = 1.0 / float(eff_max)
@@ -1907,6 +1979,7 @@ class NativeCausalPolicy(nn.Module):
             frozen_tail_action_vec=frozen_tail_vec,
             member_index=member_index,
             controller_mode=eff_mode,
+            action_templates=act_tmpls,
         )
 
     def snapshot_dcc_controller_state(self) -> dict[str, Any]:
@@ -2244,29 +2317,34 @@ class NativeCausalPolicy(nn.Module):
                 and self.dcc_active_program_state.binding_failed
             )
 
-            # Sample one concrete proposal from the frozen backbone prior p_0 over the full action union (mode=None, fixes F08)
+            # Sample one concrete proposal from the frozen backbone prior p_0 over the full action union (mode=None),
+            # retaining its prompt KV cache in-place so candidate scoring reuses the exact prefill with zero recomputation!
             prior_generation: NativeGeneration | None = None
-            if action_schema.get("classic_text"):
-                prior_generation = self._generate_native_text(
-                    messages,
-                    action_schema,
-                    mode=forced_mode,
-                    greedy=greedy,
-                    role=f"{role}.action",
-                    max_new_tokens=max_new_tokens,
-                )
-            else:
-                prior_generation = self._generate_program(
-                    messages,
-                    action_schema,
-                    mode=forced_mode,
-                    greedy=greedy,
-                    role=f"{role}.action",
-                    max_new_tokens=max_new_tokens,
-                )
+            with self.frozen_reference():
+                if action_schema.get("classic_text"):
+                    prior_generation = self._generate_native_text(
+                        messages,
+                        action_schema,
+                        mode=forced_mode,
+                        greedy=greedy,
+                        role=f"{role}.action",
+                        max_new_tokens=max_new_tokens,
+                        retain_kv_cache=True,
+                    )
+                else:
+                    prior_generation = self._generate_program(
+                        messages,
+                        action_schema,
+                        mode=forced_mode,
+                        greedy=greedy,
+                        role=f"{role}.action",
+                        max_new_tokens=max_new_tokens,
+                        retain_kv_cache=True,
+                    )
 
             prior_action_text = prior_generation.text.strip()
             controller_mode = str(getattr(self, "dcc_controller_mode", "expected_utility"))
+            is_prior_only = controller_mode == "prior_only_reranker"
             decision_ctx = self.build_dcc_decision_context(
                 benchmark=benchmark,
                 goal_text=goal_text,
@@ -2301,7 +2379,6 @@ class NativeCausalPolicy(nn.Module):
             use_legacy_filter = controller_mode == "legacy_lcb_v3"
 
             # Build unified candidate pool E(h) = {admissible native actions} U {executable condition programs}
-            # Each entry carries `(candidate_id, concrete_action, program_or_None, advanced_ExecutionFrame_or_None)`.
             candidates: list[tuple[str, str, ExecutableProgram | None, ProgramExecutionState | None]] = []
             seen_atomic_actions: set[str] = set()
             has_valid_prior = False
@@ -2314,8 +2391,8 @@ class NativeCausalPolicy(nn.Module):
                 seen_atomic_actions.add(prior_action_text)
                 has_valid_prior = True
 
-            # 2. Residual program from previous step (preserving `local_env`, return bindings, and `node_stack`)
-            if self.dcc_active_program_state is not None and not forced_program_failed:
+            # 2. Residual program from previous step (skipped in `prior_only_reranker` baseline)
+            if not is_prior_only and self.dcc_active_program_state is not None and not forced_program_failed:
                 res_prog = self.dcc_active_program_state.residual_program()
                 if res_prog is not None:
                     res_step = PublicBenchmarkBinder.step_ast_frame(
@@ -2328,9 +2405,9 @@ class NativeCausalPolicy(nn.Module):
                             (res_prog.program_id, res_step.concrete_action, res_prog, res_step.frame)
                         )
 
-            # 3. Active library programs bound in current public state
+            # 3. Active library programs bound in current public state (skipped in `prior_only_reranker` baseline)
             seen_prog_ids: set[str] = {c[0] for c in candidates}
-            progs = library.active_programs(starter_only=starter_only)
+            progs = [] if is_prior_only else library.active_programs(starter_only=starter_only)
             for prog in progs:
                 if prog.program_id in seen_prog_ids:
                     continue
@@ -2378,7 +2455,6 @@ class NativeCausalPolicy(nn.Module):
                 action_schema,
                 [c[1] for c in candidates],
                 prompt_ids=prior_generation.prompt_ids,
-                prefill_already_charged=True,
             )
 
             def _lookup_action_embed(a_str: str) -> tuple[float, ...]:
@@ -2421,7 +2497,12 @@ class NativeCausalPolicy(nn.Module):
             best_q = cand_qs[best_idx] if cand_qs else 0.0
 
             sel_id, sel_act, sel_prog, sel_next_frame = candidates[best_idx]
-            if sel_next_frame is not None and not sel_next_frame.completed and not sel_next_frame.binding_failed:
+            if (
+                not is_prior_only
+                and sel_next_frame is not None
+                and not sel_next_frame.completed
+                and not sel_next_frame.binding_failed
+            ):
                 self.dcc_active_program_state = sel_next_frame
             else:
                 self.dcc_active_program_state = None
@@ -2911,21 +2992,24 @@ class NativeCausalPolicy(nn.Module):
             )
             self.dcc_ensemble.load_initial_state_dict_snapshot(loaded_init)
         dcc_lib_path = source / "dcc_program_libraries.json"
+        self.dcc_libraries.clear()
         if dcc_lib_path.is_file():
             from .native_dcc import ProgramLibrary
             raw_libs = json.loads(dcc_lib_path.read_text(encoding="utf-8"))
-            self.dcc_libraries.clear()
             for name, payload in raw_libs.items():
                 lib = ProgramLibrary(name)
                 lib.load_dict(payload)
                 self.dcc_libraries[name] = lib
-        # Clear intra-task DCC state whenever switching checkpoints so resident evaluation never leaks across cells (fixes A)
+        # Clear intra-task DCC state and retained KV cache whenever switching checkpoints so resident evaluation never leaks across cells (fixes A)
+        self.dcc_mode_enabled = False
         self.dcc_active_belief = None
         self.dcc_active_program_state = None
         self.dcc_active_member_index = None
         self.dcc_episode_events = []
         self._dcc_context_cache_key = None
         self._dcc_context_cache_vec = ()
+        self._retained_kv_cache = None
+        self._retained_prompt_ids = ()
         metadata = json.loads((source / "native_policy.json").read_text(encoding="utf-8"))
         has_reference = metadata["has_warmstart_reference"]
         if not isinstance(has_reference, bool):

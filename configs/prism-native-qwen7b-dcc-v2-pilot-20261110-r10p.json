@@ -1,8 +1,8 @@
 {
   "protocol_version": "native-v1",
   "action_contract_version": "prism-native-text-v1",
-  "dcc_contract_version": "prism-dcc-v2-unified-r4",
-  "experiment_id": "prism-qwen7b-dcc-v2-pilot-s42-20261111-r11p",
+  "dcc_contract_version": "prism-dcc-v2-unified-r5",
+  "experiment_id": "prism-qwen7b-dcc-v2-pilot-s42-20261111-r12p",
   "site_id": "host_b",
   "workload_plan": [
     {
@@ -157,27 +157,14 @@
   ],
   "methods": [
     "frozen_base",
-    "prism_evolve",
-    "dcc_k0_planner",
-    "dcc_no_program_growth",
-    "dcc_reset_parameters",
-    "dcc_fixed_d_shuffled",
-    "dcc_label_shuffled",
-    "dcc_pre_first_success"
+    "prism_evolve"
   ],
   "main_methods": [
     "frozen_base",
     "prism_evolve"
   ],
   "mechanism_backbone": "Qwen/Qwen2.5-7B-Instruct",
-  "ablation_methods": [
-    "dcc_k0_planner",
-    "dcc_no_program_growth",
-    "dcc_reset_parameters",
-    "dcc_fixed_d_shuffled",
-    "dcc_label_shuffled",
-    "dcc_pre_first_success"
-  ],
+  "ablation_methods": [],
   "checkpoint_selection": "budget_terminal",
   "max_train_groups": 4,
   "dcc_ensemble_size": 8,
@@ -189,7 +176,7 @@
   "dcc_controller_mode": "expected_utility",
   "dcc_fork_acquisition": "decision_disagreement",
   "dcc_cluster_updates_per_block": 4,
-  "dcc_proposer_mode": "witness_hard",
+  "dcc_proposer_mode": "conditional_gain",
   "dcc_quantize_prompt_wall_seconds": true,
   "completed_training_imports": {},
   "reuse_completed_paired_evaluations": false,

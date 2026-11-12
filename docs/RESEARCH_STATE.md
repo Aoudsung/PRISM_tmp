@@ -1,6 +1,6 @@
 # PRISM-Exact 当前研究状态
 
-> 自动生成，只读摘要。生成时间：2026-11-09T14:21:26+00:00；数据库修订：3849。
+> 自动生成，只读摘要。生成时间：2026-11-11T09:23:46+00:00；数据库修订：3855。
 > 任务和结论通过 prism-knowledge 更新；此页不是另一套可写状态。
 
 ## 有效约束
@@ -31,10 +31,10 @@
   历史依据：doc:docs/RESEARCH_STATE.md，源版本 1，L42–42（用 show --source-revision 读取原文快照）。
 - **R5.1 · PRISM-Evolve 原生环境与完整基线公平协议修复**（in_progress，修订 68）
   22:09台北小时检查：r7已取得一张卡，LOCA cohort在GPU2实际执行AREW训练，累计约106万计算tokens、成本日志持续更新，无新增异常。alfworld/WebShop两个cohort仍在资源准入队列，GPU0/1由其他native作业占用；本批次当前1个worker，遵守同机配额及最多3并发，不干预其他作业。PoS容器修订尚未进入alfworld实际评测，不能声称已通过触发点。18完成训练阶段及有效评测/记忆来源配置保持。每小时循环heartbeat cc7f4a50保持，下次2026-11-09 23:09台北（UTC15:09）；仍推进全部33单元7799回合与统一统计。
-  来源：[原文](<docs/prism-evolve-design.md:1>)（doc:docs/prism-evolve-design.md，源版本 1，L1–392；历史原文用 show --source-revision 查看）。
-  来源：[原文](<docs/baseline-benchmark-official-audit-20261108.md:1>)（doc:docs/baseline-benchmark-official-audit-20261108.md，源版本 1，L1–210；历史原文用 show --source-revision 查看）。
+  来源：[原文](</Users/cxw/Documents/科研方案实现/long-horizon-decision/docs/prism-evolve-design.md:1>)（doc:docs/prism-evolve-design.md，源版本 1，L1–392；历史原文用 show --source-revision 查看）。
+  来源：[原文](</Users/cxw/Documents/科研方案实现/long-horizon-decision/docs/baseline-benchmark-official-audit-20261108.md:1>)（doc:docs/baseline-benchmark-official-audit-20261108.md，源版本 1，L1–210；历史原文用 show --source-revision 查看）。
 
 ## 历史覆盖
 
-登记来源 70 份；章节 598；未处理 135；已标记但存在歧义 7。
+登记来源 71 份；章节 617；未处理 154；已标记但存在歧义 7。
 原文导入与语义整理分别计数；使用 search --history 查询历史，show 查看依据与修订。

@@ -419,7 +419,7 @@ def _train_cell(policy, config, manifest, cell, directory, initial):
         if cell["method"] not in {
             "frozen_base", "prism_evolve", "dcc_label_shuffled",
             "dcc_no_program_growth", "dcc_reset_parameters", "dcc_pre_first_success",
-            "dcc_k0_planner", "dcc_fixed_d_shuffled",
+            "dcc_k0_planner", "dcc_prior_reranker", "dcc_fixed_d_shuffled",
             "gigpo", "step_dpo", "infopo", "arew", "t3",
         }:
             raise ValueError("Terminal training imports require a registered parameter-training method or initial policy.")
@@ -467,7 +467,7 @@ def _train_cell(policy, config, manifest, cell, directory, initial):
                                    "episode_max_steps": local_config["episode_max_steps"],
                                    "max_new_tokens": local_config["max_new_tokens"]}
         checkpoint = str(initial)
-        if method in INFERENCE_METHODS or method in {"frozen_base", "dcc_k0_planner"}:
+        if method in INFERENCE_METHODS or method in {"frozen_base", "dcc_k0_planner", "dcc_prior_reranker"}:
             summary["parameter_training"] = {"status": "not_applicable", "parameter_updates": False}
         memory_initialization = config.get("worldevolver", {}).get("memory_initialization", "empty")
         if method == "worldevolver" and memory_initialization not in {"empty", "train_prequential"}:
@@ -505,7 +505,7 @@ def _train_cell(policy, config, manifest, cell, directory, initial):
                 "new_training_model_calls": 0,
                 "zero_success_throughout_training": bool(sib_train.get("zero_success_throughout_training", False)),
             }
-        elif method not in INFERENCE_METHODS and method not in {"frozen_base", "dcc_k0_planner"}:
+        elif method not in INFERENCE_METHODS and method not in {"frozen_base", "dcc_k0_planner", "dcc_prior_reranker"}:
             training_meter = BudgetMeter(BudgetLimits(**config["training_budget"]),
                                          event_path=directory / "training_costs.jsonl")
             summary["training"] = run_training(method, policy, env, train, dev, local_config,
@@ -729,7 +729,7 @@ def _run_resident_cells(policy, config, manifest, bundle, gpu, initial, identity
     condition = "shared-load" if config["scheduler"].get("share_occupied_gpus", False) else "exclusive-lane"
     admission = json.loads(os.environ.get("PRISM_NATIVE_GPU_ADMISSION_JSON", "{}"))
     training_order = sorted(bundle["cells"], key=lambda cell: (
-        cell["method"] in {"frozen_base", "dcc_k0_planner"} or cell["method"] in INFERENCE_METHODS - {"worldevolver"},
+        cell["method"] in {"frozen_base", "dcc_k0_planner", "dcc_prior_reranker"} or cell["method"] in INFERENCE_METHODS - {"worldevolver"},
         cell["method"] in {"dcc_no_program_growth", "dcc_reset_parameters", "dcc_pre_first_success", "dcc_fixed_d_shuffled"},
         cell["method"] != "prism_evolve",
         config["benchmarks"].index(cell["benchmark"]),

@@ -1,0 +1,267 @@
+{
+  "method": "prism_evolve",
+  "tasks": 12,
+  "successes": 0,
+  "success_rate": 0.0,
+  "mean_utility_u_b": 0.0,
+  "mean_elapsed_seconds": 20.873386565673474,
+  "mean_env_steps": 11.666666666666666,
+  "total_model_tokens": 684194,
+  "consecutive_repeat_steps": 17,
+  "dcc_steps_total": 140,
+  "prior_action_overrides": 18,
+  "program_attributed_steps": 11,
+  "per_task": [
+    {
+      "task_index": 0,
+      "task_id": "webshop/500",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 31.477495430968702,
+      "env_steps": 15,
+      "model_tokens": 87947,
+      "termination": "native_failure",
+      "actions": [
+        "click[search]",
+        "search[home office furniture sets dining room living room color blue gray item shape round size 5 ft 3 in x 7 ft 5 in price < 70.00]",
+        "click[next >]",
+        "click[next >]",
+        "click[b09c8fz9ys]",
+        "click[description]",
+        "click[back to search]",
+        "search[home office furniture sets dining room living room color blue gray item shape round size 5 ft 3 in x 7 ft 5 in price < 70.00]",
+        "click[b07fkgqkz1]",
+        "click[5 ft 3 in x 7 ft 5 in]"
+      ]
+    },
+    {
+      "task_index": 1,
+      "task_id": "webshop/501",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 28.280763215385377,
+      "env_steps": 15,
+      "model_tokens": 81660,
+      "termination": "native_failure",
+      "actions": [
+        "click[search]",
+        "search[eco friendly throw blankets fleece throw color: fish scale1goo8111 size: 49x79in price: <70.00]",
+        "click[next >]",
+        "click[b09km7x1g4]",
+        "click[description]",
+        "click[back to search]",
+        "search[eco friendly throw blankets fleece throw color: fish scale1goo8111 size: 49x79in price: <70.00]",
+        "click[b09dg3ythy]",
+        "click[description]",
+        "click[back to search]"
+      ]
+    },
+    {
+      "task_index": 2,
+      "task_id": "webshop/502",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 5.953723376616836,
+      "env_steps": 4,
+      "model_tokens": 8480,
+      "termination": "native_failure",
+      "actions": [
+        "search[slim fit men's henleys short sleeve color:158- purple size:xx-large price:<30.00]",
+        "click[b09r9ycm6r]",
+        "click[xx-large]",
+        "click[buy now]"
+      ]
+    },
+    {
+      "task_index": 3,
+      "task_id": "webshop/503",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 30.275256007909775,
+      "env_steps": 13,
+      "model_tokens": 72210,
+      "termination": "native_failure",
+      "actions": [
+        "click[search]",
+        "search[loose fit women's tops tees & blouses short sleeve long sleeve color: a1-blue size: xx-large price < 50.00]",
+        "click[next >]",
+        "click[next >]",
+        "click[next >]",
+        "click[next >]",
+        "click[next >]",
+        "click[back to search]",
+        "search[loose fit women's tops tees & blouses short sleeve long sleeve color: a1-blue size: xx-large price < 50.00]",
+        "click[b09npml43m]"
+      ]
+    },
+    {
+      "task_index": 4,
+      "task_id": "webshop/504",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 10.947787631303072,
+      "env_steps": 8,
+      "model_tokens": 24886,
+      "termination": "native_failure",
+      "actions": [
+        "click[search]",
+        "search[machine wash men's dress shirts polyester heathers heathers cotton cotton heather fit type: men size: large price < 50.00]",
+        "click[next >]",
+        "click[next >]",
+        "click[next >]",
+        "click[b09q67h373]",
+        "click[large]",
+        "click[buy now]"
+      ]
+    },
+    {
+      "task_index": 5,
+      "task_id": "webshop/505",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 21.411132059060037,
+      "env_steps": 15,
+      "model_tokens": 68381,
+      "termination": "native_failure",
+      "actions": [
+        "click[search]",
+        "search[high density space saving sofa tables living room color gs2900 size small]",
+        "click[next >]",
+        "click[b09dg92ljl]",
+        "click[description]",
+        "click[back to search]",
+        "search[high density space saving sofa tables living room color gs2900 size small]",
+        "click[b09688c4xm]",
+        "click[small]",
+        "click[description]"
+      ]
+    },
+    {
+      "task_index": 6,
+      "task_id": "webshop/506",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 9.741118983365595,
+      "env_steps": 7,
+      "model_tokens": 18657,
+      "termination": "native_failure",
+      "actions": [
+        "click[search]",
+        "search[wash cold machine wash men's shirts polyester heathers heathers cotton cotton heather needle sleeve classic fit color: navy fit type: men size: large price: < 40.00]",
+        "click[next >]",
+        "click[next >]",
+        "click[b07fd13lp1]",
+        "click[large]",
+        "click[buy now]"
+      ]
+    },
+    {
+      "task_index": 7,
+      "task_id": "webshop/507",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 26.792753590270877,
+      "env_steps": 15,
+      "model_tokens": 83628,
+      "termination": "native_failure",
+      "actions": [
+        "click[search]",
+        "search[slim fit loose fit men's tuxedo shirts long sleeve short sleeve contrast color classic fit teen girls color: a-blue size: large price < 40.00]",
+        "click[next >]",
+        "click[next >]",
+        "click[next >]",
+        "click[next >]",
+        "click[back to search]",
+        "click[search]",
+        "search[slim fit loose fit men's tuxedo shirts long sleeve short sleeve contrast color classic fit teen girls color: a-blue size: large price < 40.00]",
+        "click[b09s3bn15c]"
+      ]
+    },
+    {
+      "task_index": 8,
+      "task_id": "webshop/508",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 15.759162050671875,
+      "env_steps": 8,
+      "model_tokens": 30833,
+      "termination": "native_failure",
+      "actions": [
+        "click[search]",
+        "search[wash cold, machine wash men's shirts polyester heathers, heathers cotton, cotton heather, needle sleeve, classic fit royal blue men size small price < 40]",
+        "click[next >]",
+        "click[next >]",
+        "click[b09m63b87v]",
+        "click[xnj-tshirt326-blue]",
+        "click[small]",
+        "click[buy now]"
+      ]
+    },
+    {
+      "task_index": 9,
+      "task_id": "webshop/509",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 14.584899614565074,
+      "env_steps": 10,
+      "model_tokens": 35190,
+      "termination": "native_failure",
+      "actions": [
+        "search[machine wash men's pants drawstring closure elastic waist polyester spandex navy xx-large price<30]",
+        "click[next >]",
+        "click[b09hy9xb8p]",
+        "click[description]",
+        "click[back to search]",
+        "search[machine wash men's pants drawstring closure elastic waist polyester spandex navy size:xx-large price<30]",
+        "click[b09qcvcyvy]",
+        "click[navy]",
+        "click[xx-large]",
+        "click[buy now]"
+      ]
+    },
+    {
+      "task_index": 10,
+      "task_id": "webshop/510",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 30.562143520452082,
+      "env_steps": 15,
+      "model_tokens": 94864,
+      "termination": "native_failure",
+      "actions": [
+        "click[search]",
+        "search[hand wash machine wash women's dresses quality polyester long sleeve color: black size: small price: < 60.00]",
+        "click[next >]",
+        "click[next >]",
+        "click[next >]",
+        "click[next >]",
+        "click[back to search]",
+        "search[hand wash machine wash women's dresses quality polyester long sleeve color: black size: small price: < 60.00]",
+        "click[next >]",
+        "click[next >]"
+      ]
+    },
+    {
+      "task_index": 11,
+      "task_id": "webshop/511",
+      "success": 0,
+      "utility_u_b": 0.0,
+      "elapsed_seconds": 24.694403307512403,
+      "env_steps": 15,
+      "model_tokens": 77458,
+      "termination": "native_failure",
+      "actions": [
+        "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]",
+        "click[b09p8d2q1q]",
+        "click[description]",
+        "click[back to search]",
+        "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]",
+        "click[next >]",
+        "click[b09rx1plp4]",
+        "click[description]",
+        "click[back to search]",
+        "search[height adjustable high density easy install easy assemble home office chairs living room type 1-yellow price<110.00]"
+      ]
+    }
+  ]
+}

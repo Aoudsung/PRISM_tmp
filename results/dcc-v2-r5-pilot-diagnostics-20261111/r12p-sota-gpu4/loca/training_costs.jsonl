@@ -1,0 +1,33 @@
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 18773, "elapsed_seconds": 3.7915664175525308}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 2.0329330172389746}
+{"kind": "native_api_calls", "attempted": 1, "successful": 0, "replay": false}
+{"kind": "snapshot_save", "elapsed_seconds": 1.8429712858051062}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 20374, "output_tokens": 13, "forward_tokens": 0, "elapsed_seconds": 4.134828431531787}
+{"kind": "model_call", "role": "dcc.candidate_suffix_prior", "input_tokens": 0, "output_tokens": 0, "forward_tokens": 3724, "elapsed_seconds": 11.705528569407761}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 2.0051456838846207}
+{"kind": "native_api_calls", "attempted": 1, "successful": 1, "replay": false}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 23218, "output_tokens": 13, "forward_tokens": 0, "elapsed_seconds": 4.827807805500925}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 2.1983906934037805}
+{"kind": "native_api_calls", "attempted": 1, "successful": 1, "replay": false}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 25791, "output_tokens": 35, "forward_tokens": 0, "elapsed_seconds": 6.269675370305777}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 2.1359224738553166}
+{"kind": "native_api_calls", "attempted": 1, "successful": 0, "replay": false}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 27449, "output_tokens": 35, "forward_tokens": 0, "elapsed_seconds": 6.593182316049933}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 2.038945215754211}
+{"kind": "native_api_calls", "attempted": 1, "successful": 0, "replay": false}
+{"kind": "snapshot_restore", "elapsed_seconds": 1.8620085157454014, "replayed_env_steps": 0}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 2.3977763783186674}
+{"kind": "native_api_calls", "attempted": 1, "successful": 0, "replay": false}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 22416, "output_tokens": 104, "forward_tokens": 0, "elapsed_seconds": 7.293370474129915}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 2.1421113600954413}
+{"kind": "native_api_calls", "attempted": 1, "successful": 0, "replay": false}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 24136, "output_tokens": 104, "forward_tokens": 0, "elapsed_seconds": 7.847078555263579}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 2.2637025248259306}
+{"kind": "native_api_calls", "attempted": 1, "successful": 1, "replay": false}
+{"kind": "model_call", "role": "actor.action", "input_tokens": 25994, "output_tokens": 104, "forward_tokens": 0, "elapsed_seconds": 8.379720138385892}
+{"kind": "environment_step", "replay": false, "elapsed_seconds": 2.196083859540522}
+{"kind": "native_api_calls", "attempted": 1, "successful": 1, "replay": false}
+{"kind": "gradient_update", "elapsed_seconds": 0.11705352552235126}
+{"kind": "gradient_update", "elapsed_seconds": 0.11856372375041246}
+{"kind": "gradient_update", "elapsed_seconds": 0.10056475922465324}
+{"kind": "gradient_update", "elapsed_seconds": 0.10201331041753292}

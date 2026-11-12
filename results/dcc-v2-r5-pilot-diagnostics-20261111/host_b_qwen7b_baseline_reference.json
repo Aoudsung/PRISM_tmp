@@ -1,0 +1,330 @@
+{
+  "host": "host_b (10.8.128.241)",
+  "backbone": "Qwen/Qwen2.5-7B-Instruct",
+  "pos_benchmark_training_cells": [
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r5",
+      "cell": "qwen25_7b.alfworld.arew.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "alfworld",
+      "method": "arew",
+      "seed": 42,
+      "stop_reason": "budget:model_tokens",
+      "gradient_steps": 3,
+      "nonzero_gradient_steps": 3,
+      "training_trajectories": 12,
+      "native_terminal_successes": 0,
+      "native_train_success_rate": 0.0
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r5",
+      "cell": "qwen25_7b.alfworld.gigpo.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "alfworld",
+      "method": "gigpo",
+      "seed": 42,
+      "stop_reason": "global_budget_during_rollout_group",
+      "gradient_steps": 0,
+      "nonzero_gradient_steps": 0,
+      "training_trajectories": 16,
+      "native_terminal_successes": 0,
+      "native_train_success_rate": 0.0
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r5",
+      "cell": "qwen25_7b.alfworld.infopo.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "alfworld",
+      "method": "infopo",
+      "seed": 42,
+      "stop_reason": "budget:model_tokens",
+      "gradient_steps": 1,
+      "nonzero_gradient_steps": 1,
+      "training_trajectories": 10,
+      "native_terminal_successes": 0,
+      "native_train_success_rate": 0.0
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r5",
+      "cell": "qwen25_7b.alfworld.step_dpo.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "alfworld",
+      "method": "step_dpo",
+      "seed": 42,
+      "stop_reason": "candidate_global_budget",
+      "gradient_steps": 0,
+      "nonzero_gradient_steps": 0,
+      "training_trajectories": 32,
+      "native_terminal_successes": 0,
+      "native_train_success_rate": 0.0
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r5",
+      "cell": "qwen25_7b.loca.gigpo.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "loca",
+      "method": "gigpo",
+      "seed": 42,
+      "stop_reason": "budget:model_tokens",
+      "gradient_steps": 0,
+      "nonzero_gradient_steps": 0,
+      "training_trajectories": 24,
+      "native_terminal_successes": 0,
+      "native_train_success_rate": 0.0
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r5",
+      "cell": "qwen25_7b.loca.infopo.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "loca",
+      "method": "infopo",
+      "seed": 42,
+      "stop_reason": "budget:context_window",
+      "gradient_steps": 0,
+      "nonzero_gradient_steps": 0,
+      "training_trajectories": 5,
+      "native_terminal_successes": 0,
+      "native_train_success_rate": 0.0
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r5",
+      "cell": "qwen25_7b.loca.step_dpo.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "loca",
+      "method": "step_dpo",
+      "seed": 42,
+      "stop_reason": "incomplete_global_budget",
+      "gradient_steps": 0,
+      "nonzero_gradient_steps": 0,
+      "training_trajectories": 57,
+      "native_terminal_successes": 0,
+      "native_train_success_rate": 0.0
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r5",
+      "cell": "qwen25_7b.webshop.gigpo.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "webshop",
+      "method": "gigpo",
+      "seed": 42,
+      "stop_reason": "budget:model_tokens",
+      "gradient_steps": 6,
+      "nonzero_gradient_steps": 6,
+      "training_trajectories": 80,
+      "native_terminal_successes": 11,
+      "native_train_success_rate": 0.1375
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r5",
+      "cell": "qwen25_7b.webshop.infopo.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "webshop",
+      "method": "infopo",
+      "seed": 42,
+      "stop_reason": "budget:model_tokens",
+      "gradient_steps": 8,
+      "nonzero_gradient_steps": 8,
+      "training_trajectories": 45,
+      "native_terminal_successes": 4,
+      "native_train_success_rate": 0.08888888888888889
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r5",
+      "cell": "qwen25_7b.webshop.step_dpo.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "webshop",
+      "method": "step_dpo",
+      "seed": 42,
+      "stop_reason": "incomplete_global_budget",
+      "gradient_steps": 2,
+      "nonzero_gradient_steps": 2,
+      "training_trajectories": 203,
+      "native_terminal_successes": 21,
+      "native_train_success_rate": 0.10344827586206896
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r6",
+      "cell": "qwen25_7b.loca.infopo.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "loca",
+      "method": "infopo",
+      "seed": 42,
+      "stop_reason": "budget:model_tokens",
+      "gradient_steps": 2,
+      "nonzero_gradient_steps": 2,
+      "training_trajectories": 15,
+      "native_terminal_successes": 0,
+      "native_train_success_rate": 0.0
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r6",
+      "cell": "qwen25_7b.webshop.arew.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "webshop",
+      "method": "arew",
+      "seed": 42,
+      "stop_reason": "budget:model_tokens",
+      "gradient_steps": 16,
+      "nonzero_gradient_steps": 16,
+      "training_trajectories": 63,
+      "native_terminal_successes": 5,
+      "native_train_success_rate": 0.07936507936507936
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r6",
+      "cell": "qwen25_7b.alfworld.t3.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "alfworld",
+      "method": "t3",
+      "seed": 42,
+      "stop_reason": "budget:model_tokens",
+      "gradient_steps": 23,
+      "nonzero_gradient_steps": 23,
+      "training_trajectories": 150,
+      "native_terminal_successes": 15,
+      "native_train_success_rate": 0.1
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r7",
+      "cell": "qwen25_7b.loca.arew.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "loca",
+      "method": "arew",
+      "seed": 42,
+      "stop_reason": "global_budget_during_rollout_group",
+      "gradient_steps": 6,
+      "nonzero_gradient_steps": 6,
+      "training_trajectories": 20,
+      "native_terminal_successes": 0,
+      "native_train_success_rate": 0.0
+    },
+    {
+      "run_id": "prism-qwen7b-main11-s42-20261109-r7",
+      "cell": "qwen25_7b.loca.t3.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "loca",
+      "method": "t3",
+      "seed": 42,
+      "stop_reason": "budget:model_tokens",
+      "gradient_steps": 0,
+      "nonzero_gradient_steps": 0,
+      "training_trajectories": 20,
+      "native_terminal_successes": 0,
+      "native_train_success_rate": 0.0
+    },
+    {
+      "run_id": "prism-qwen7b-dcc-v2-s42-20261109-r7",
+      "cell": "qwen25_7b.webshop.t3.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "webshop",
+      "method": "t3",
+      "seed": 42,
+      "stop_reason": "budget:model_tokens",
+      "gradient_steps": 17,
+      "nonzero_gradient_steps": 17,
+      "training_trajectories": 105,
+      "native_terminal_successes": 15,
+      "native_train_success_rate": 0.14285714285714285
+    },
+    {
+      "run_id": "prism-qwen7b-dcc-v2-s42-20261109-r7",
+      "cell": "qwen25_7b.alfworld.prism_evolve.s42",
+      "backbone": "qwen25_7b",
+      "benchmark": "alfworld",
+      "method": "prism_evolve",
+      "seed": 42,
+      "stop_reason": "global_budget_during_first_branch",
+      "gradient_steps": 174,
+      "nonzero_gradient_steps": 174,
+      "training_trajectories": 351,
+      "native_terminal_successes": 6,
+      "native_train_success_rate": 0.017094017094017096
+    }
+  ],
+  "formal_r12_appworld_planbench_summary": [
+    {
+      "benchmark": "appworld",
+      "phase": "full_training",
+      "status": "completed",
+      "successful_demonstrations": 2,
+      "actor_terminal_successes": 0,
+      "env_steps": 741,
+      "total_model_tokens": 18730105
+    },
+    {
+      "benchmark": "appworld",
+      "arm": "R",
+      "task_count": 2,
+      "native_success_count": 0,
+      "mean_utility": 0.0,
+      "mean_trajectory_steps": 100.0,
+      "terminations": {
+        "native_failure": 2
+      }
+    },
+    {
+      "benchmark": "appworld",
+      "arm": "W",
+      "task_count": 2,
+      "native_success_count": 0,
+      "mean_utility": 0.0,
+      "mean_trajectory_steps": 100.0,
+      "terminations": {
+        "native_failure": 2
+      }
+    },
+    {
+      "benchmark": "appworld",
+      "arm": "P",
+      "task_count": 2,
+      "native_success_count": 0,
+      "mean_utility": 0.0,
+      "mean_trajectory_steps": 100.0,
+      "terminations": {
+        "native_failure": 2
+      }
+    },
+    {
+      "benchmark": "planbench_xl",
+      "phase": "full_training",
+      "status": "completed",
+      "successful_demonstrations": 2,
+      "actor_terminal_successes": 0,
+      "env_steps": 397,
+      "total_model_tokens": 4195222
+    },
+    {
+      "benchmark": "planbench_xl",
+      "arm": "R",
+      "task_count": 2,
+      "native_success_count": 0,
+      "mean_utility": 0.0,
+      "mean_trajectory_steps": 53.5,
+      "terminations": {
+        "native_failure": 2
+      }
+    },
+    {
+      "benchmark": "planbench_xl",
+      "arm": "W",
+      "task_count": 2,
+      "native_success_count": 0,
+      "mean_utility": 0.0,
+      "mean_trajectory_steps": 55.5,
+      "terminations": {
+        "native_failure": 2
+      }
+    },
+    {
+      "benchmark": "planbench_xl",
+      "arm": "P",
+      "task_count": 2,
+      "native_success_count": 0,
+      "mean_utility": 0.0,
+      "mean_trajectory_steps": 54.5,
+      "terminations": {
+        "native_failure": 2
+      }
+    }
+  ]
+}

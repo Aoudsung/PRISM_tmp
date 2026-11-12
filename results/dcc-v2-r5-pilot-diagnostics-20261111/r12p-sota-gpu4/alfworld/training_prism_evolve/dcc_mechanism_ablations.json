@@ -1,0 +1,64 @@
+{
+  "diagnostic_scope": "internal_model_scoring_diagnostic_only; native_trajectory_cells_required_for_performance_claims",
+  "benchmark": "alfworld",
+  "seed": 42,
+  "complete_dcc_v2": {
+    "cell": "phi_T_Xi_T",
+    "library_size": 4,
+    "grow_calls": 8,
+    "unique_witness_pairs": 0,
+    "cumulative_witness_visits": 0,
+    "max_unified_q": 0.038196027278900146,
+    "max_evsi_per_cost": 3.725290298461914e-09,
+    "max_dual_control_j": 0.038196027278900146,
+    "max_feedback_use_value_i": 3.725290298461914e-09
+  },
+  "dcc_no_program_growth": {
+    "cell": "phi_T_Xi_0",
+    "library_size": 4,
+    "max_unified_q": 0.038196027278900146,
+    "max_evsi_per_cost": 3.725290298461914e-09,
+    "max_dual_control_j": 0.038196027278900146,
+    "max_feedback_use_value_i": 3.725290298461914e-09
+  },
+  "dcc_reset_parameters": {
+    "cell": "phi_0_Xi_T",
+    "library_size": 4,
+    "max_unified_q": 0.06285574287176132,
+    "max_evsi_per_cost": 0.0,
+    "max_dual_control_j": 0.06285574287176132,
+    "max_feedback_use_value_i": 0.0
+  },
+  "dcc_k0_planner": {
+    "cell": "phi_0_Xi_0",
+    "library_size": 4,
+    "max_unified_q": 0.06285574287176132,
+    "max_evsi_per_cost": 0.0,
+    "max_dual_control_j": 0.06285574287176132,
+    "max_feedback_use_value_i": 0.0
+  },
+  "dcc_fixed_d_shuffled": {
+    "library_size": 4,
+    "grow_calls": 8,
+    "unique_witness_pairs": 0,
+    "cumulative_witness_visits": 0,
+    "witness_pairs_found": 0,
+    "max_unified_q": 0.038196027278900146,
+    "max_evsi_per_cost": 3.725290298461914e-09,
+    "max_dual_control_j": 0.038196027278900146,
+    "max_feedback_use_value_i": 3.725290298461914e-09,
+    "checkpoint": "/apps/users/adminuser/prism-exact-reproduction/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-pilot-20261111-r12p-sota-gpu4/alfworld/training_prism_evolve/fixed_d_shuffled_adapter"
+  },
+  "dcc_label_shuffled": {
+    "library_size": 4,
+    "grow_calls": 8,
+    "unique_witness_pairs": 0,
+    "cumulative_witness_visits": 0,
+    "witness_pairs_found": 0,
+    "max_evsi_per_cost": 3.725290298461914e-09,
+    "max_dual_control_j": 0.038196027278900146,
+    "max_feedback_use_value_i": 3.725290298461914e-09
+  },
+  "pre_first_success_checkpoint": "/apps/users/adminuser/prism-exact-reproduction/outputs/prism_evolve_pos_benchmarks/prism-qwen7b-dcc-v2-pilot-20261111-r12p-sota-gpu4/alfworld/training_prism_evolve/pre_first_success_adapter",
+  "zero_success_throughout_training": false
+}
