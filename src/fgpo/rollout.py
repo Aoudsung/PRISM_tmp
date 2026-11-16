@@ -278,8 +278,9 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
 
             for cohort in cohorts:
                 model_cost_start = len(ledger.records)
-                sampled_state, responses, probabilities = _sample_turn(
-                    policy, cohort, generators, output_limit, on_response=dispatch)
+                with ledger.aggregate_model_calls():
+                    sampled_state, responses, probabilities = _sample_turn(
+                        policy, cohort, generators, output_limit, on_response=dispatch)
                 cohort.state = None
                 model_event_ids = tuple(row.event_id for row in ledger.records[model_cost_start:])
                 sampled_cohorts.append((cohort, sampled_state, responses, probabilities, model_event_ids))

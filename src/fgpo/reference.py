@@ -28,20 +28,37 @@ class ReferenceRound:
     conditioning: str = "actual-bounded-actor-prefix-r3"
     diagnostics: dict = field(default_factory=dict)
 
+    def release_features(self):
+        """Retain the frozen response law after credit and diagnostics finish."""
+        for step in self.steps.values():
+            step.z_hist = step.z_obs = None
+        self.diagnostics["features_released_after_credit"] = True
 
-def sampled_logprobs(policy, hidden, target, *, role, chunk_tokens=64):
-    """One target upload and one result download for the complete response."""
+
+@torch.no_grad()
+def sampled_logprobs(policy, hidden, target, *, role, chunk_tokens=64, positions=None):
+    """Upload targets and download scores once per packed segment.
+
+    Optional causal positions gather only one head chunk at a time. Full
+    vocabulary logits and selected hidden states are released before the next
+    projection, including when adjacent chunks belong to different responses.
+    """
     if not target:
         return ()
-    if chunk_tokens < 1 or len(hidden) != len(target):
+    source_length = len(hidden) if positions is None else len(positions)
+    if chunk_tokens < 1 or source_length != len(target):
         raise ValueError("Reference head slices must match the actual response tokens.")
     device = policy.model.get_output_embeddings().weight.device
     ids = torch.tensor(target, dtype=torch.long, device=device)
+    if positions is not None:
+        positions = torch.as_tensor(positions, dtype=torch.long, device=hidden.device)
     values = []
     for start in range(0, len(target), chunk_tokens):
         end = min(start + chunk_tokens, len(target))
-        logits = policy.head(hidden[start:end], role=role)
+        selected = hidden[start:end] if positions is None else hidden.index_select(0, positions[start:end])
+        logits = policy.head(selected, role=role)
         values.append(-F.cross_entropy(logits, ids[start:end], reduction="none"))
+        del logits, selected
     return tuple(torch.cat(values).detach().cpu().tolist())
 
 
@@ -59,10 +76,9 @@ def actor_history_embeddings(policy, trajectories):
                 continue
             hidden, layer = policy.packed_segment_hidden(
                 segment.token_ids[:segment.behavior_closed_length], hidden_layer=-8,
+                hidden_positions=[row.prompt_length - 1 for row in rows], stop_at_hidden_layer=True,
                 role="bipace.current_actor_history")
-            positions = torch.tensor([row.prompt_length - 1 for row in rows],
-                                     dtype=torch.long, device=layer.device)
-            values = F.normalize(layer[0].index_select(0, positions).float(), dim=-1).cpu()
+            values = F.normalize(layer[0].float(), dim=-1).cpu()
             result.update((row.step_id, value) for row, value in zip(rows, values, strict=True))
             del hidden, layer, values
     return result
@@ -72,6 +88,7 @@ def actor_history_embeddings(policy, trajectories):
 def prepare_round(policy, trajectories, *, method="fgpo", config=None):
     config = {} if config is None else config
     own = method in OWN_METHODS
+    needs_history = own and method != "fgpo_obs_only"
     scale = float(config.get("reward_scale", 10.))
     chunk = int(config.get("head_chunk_tokens", 64))
     result = ReferenceRound()
@@ -91,21 +108,29 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None):
                 continue
             hidden, layer = policy.packed_segment_hidden(
                 segment.token_ids[:segment.behavior_closed_length],
-                hidden_layer=-8 if own else None, role="reference.packed_segment")
+                hidden_layer=-8 if needs_history else None,
+                hidden_positions=[row.prompt_length - 1 for row in rows] if needs_history else None,
+                role="reference.packed_segment")
             histories = None
-            if own:
-                positions = torch.tensor([row.prompt_length - 1 for row in rows],
-                                         dtype=torch.long, device=layer.device)
-                histories = F.normalize(layer[0].index_select(0, positions).float(), dim=-1).cpu()
+            if needs_history:
+                histories = F.normalize(layer[0].float(), dim=-1).cpu()
+            del layer
+            if any(row.response_span.length != len(row.response_ids) for row in rows):
+                raise ValueError("Reference head slices must match each actual response's tokens.")
+            targets = tuple(token for row in rows for token in row.response_ids)
+            positions = [position for row in rows
+                         for position in range(row.response_span.start - 1, row.response_span.stop - 1)]
+            scores = sampled_logprobs(policy, hidden[0], targets, positions=positions,
+                                      role="reference.response_head", chunk_tokens=chunk)
+            del hidden
+            offset = 0
             for index, row in enumerate(rows):
-                span = row.response_span
-                scores = sampled_logprobs(policy, hidden[0, span.start - 1:span.stop - 1],
-                                          row.response_ids, role="reference.response_head",
-                                          chunk_tokens=chunk)
+                stop = offset + len(row.response_ids)
                 reward = scale * float(trajectory.official_success) if row.index == len(trajectory.steps) - 1 else 0.
                 result.steps[row.step_id] = ReferenceStep(
-                    scores, z_hist=histories[index] if own else None, reward=reward)
-            del hidden, layer, histories
+                    scores[offset:stop], z_hist=histories[index] if needs_history else None, reward=reward)
+                offset = stop
+            del histories, scores, targets, positions
     if own and observation_users:
         # The policy implements length-aware, token-budgeted microbatches. A
         # single padded batch of all observation tokens is deliberately avoided.

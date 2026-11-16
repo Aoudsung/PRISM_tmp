@@ -1,11 +1,5 @@
 {
-  "protocol": "fgpo-r3-success-v2",
-  "install_root": "/home/chenxiangwei/workspace/fgpo-r3",
-  "python_executable": "/home/chenxiangwei/env/prism-native-v1/bin/python",
-  "alfworld_python_executable": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/venv-alfworld/bin/python",
-  "model_path": "/home/chenxiangwei/models/Qwen2.5-7B-Instruct",
-  "alfworld_data_root": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/alfworld",
-  "appworld_data_root": "/home/chenxiangwei/workspace/external/appworld-root-v020",
+  "protocol": "fgpo-r3-published-v3",
   "local_files_only": true,
   "benchmarks": [
     "alfworld",
@@ -18,14 +12,54 @@
   ],
   "methods": [
     "fgpo",
-    "fgpo_no_full_filtration",
-    "fgpo_no_transfer",
-    "fgpo_obs_only",
-    "fgpo_no_support_weight",
-    "gigpo_shared",
-    "bipace_q_shared",
-    "native_qwen_shared"
+    "gigpo",
+    "hgpo",
+    "graphgpo"
   ],
+  "experiment_suites": {
+    "comparison": {
+      "methods": [
+        "fgpo",
+        "gigpo",
+        "hgpo",
+        "graphgpo"
+      ],
+      "benchmarks": [
+        "alfworld",
+        "appworld"
+      ],
+      "planned_cells": 24,
+      "claims": [
+        "C1_method_level_official_success",
+        "C5_actual_end_to_end_cost"
+      ],
+      "necessity": "Compare the complete proposed method with three published predecessors on both official benchmarks.",
+      "interpretation": "Released-source ALFWorld recipes; AppWorld is an explicit native-code transfer. Report recipe cost beside final performance.",
+      "checkpoint_selection": "final_predeclared_training_round_only"
+    },
+    "ablation": {
+      "methods": [
+        "fgpo_obs_only",
+        "fgpo_no_transfer",
+        "fgpo_no_support_weight"
+      ],
+      "benchmarks": [
+        "alfworld"
+      ],
+      "planned_additional_cells": 9,
+      "reference_method": "fgpo",
+      "reference_suite": "comparison",
+      "reuse_reference": true,
+      "claim_by_method": {
+        "fgpo_obs_only": "C2_history_conditioned_matching",
+        "fgpo_no_transfer": "C3_next_state_peer_continuation",
+        "fgpo_no_support_weight": "C4_support_weighted_transfer"
+      },
+      "necessity": "Each own-method deletion tests one retained mechanism claim; reuse the three main FGPO ALFWorld cells.",
+      "interpretation": "Mechanistic conclusions apply to ALFWorld; no separate cross-benchmark mechanism claim.",
+      "additional_diagnostic_rollouts": 0
+    }
+  },
   "evaluation_splits": {
     "alfworld": [
       "valid_unseen"
@@ -48,221 +82,67 @@
   "trajectories": 8,
   "max_context_tokens": 32768,
   "activation_offload": false,
-  "excluded_gpu_ids": [],
   "gpu_id_semantics": "CLI_physical_allocation_with_isolated_process_local_CUDA_indices",
-  "skill_induction_tasks": {
-    "alfworld": 200,
-    "appworld": 90
-  },
   "method_configs": {
     "fgpo": {
       "rounds": 60,
-      "training_window_source": "r3_shared_system_60_rounds",
+      "training_window_source": "predeclared_fgpo_60_rounds",
       "output_tokens_by_benchmark": {
         "alfworld": 256,
         "appworld": 1024
-      },
-      "history_length": null,
-      "learning_rate": 0.000001,
-      "weight_decay": 0.01,
-      "gamma": 1,
-      "ppo_minibatch_rows": 256,
-      "ppo_epochs": 1,
-      "loss_normalization": "trajectory"
-    },
-    "fgpo_no_full_filtration": {
-      "rounds": 60,
-      "training_window_source": "r3_shared_system_60_rounds",
-      "output_tokens_by_benchmark": {
-        "alfworld": 256,
-        "appworld": 1024
-      },
-      "history_length": 2,
-      "learning_rate": 0.000001,
-      "weight_decay": 0.01,
-      "gamma": 1,
-      "ppo_minibatch_rows": 256,
-      "ppo_epochs": 1,
-      "loss_normalization": "trajectory"
-    },
-    "fgpo_no_transfer": {
-      "rounds": 60,
-      "training_window_source": "r3_shared_system_60_rounds",
-      "output_tokens_by_benchmark": {
-        "alfworld": 256,
-        "appworld": 1024
-      },
-      "history_length": null,
-      "learning_rate": 0.000001,
-      "weight_decay": 0.01,
-      "gamma": 1,
-      "ppo_minibatch_rows": 256,
-      "ppo_epochs": 1,
-      "loss_normalization": "trajectory"
+      }
     },
     "fgpo_obs_only": {
       "rounds": 60,
-      "training_window_source": "r3_shared_system_60_rounds",
+      "training_window_source": "same_as_main_fgpo",
       "output_tokens_by_benchmark": {
         "alfworld": 256,
         "appworld": 1024
-      },
-      "history_length": null,
-      "learning_rate": 0.000001,
-      "weight_decay": 0.01,
-      "gamma": 1,
-      "ppo_minibatch_rows": 256,
-      "ppo_epochs": 1,
-      "loss_normalization": "trajectory"
+      }
+    },
+    "fgpo_no_transfer": {
+      "rounds": 60,
+      "training_window_source": "same_as_main_fgpo",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      }
     },
     "fgpo_no_support_weight": {
       "rounds": 60,
-      "training_window_source": "r3_shared_system_60_rounds",
+      "training_window_source": "same_as_main_fgpo",
       "output_tokens_by_benchmark": {
         "alfworld": 256,
         "appworld": 1024
-      },
-      "history_length": null,
-      "learning_rate": 0.000001,
-      "weight_decay": 0.01,
-      "gamma": 1,
-      "ppo_minibatch_rows": 256,
-      "ppo_epochs": 1,
-      "loss_normalization": "trajectory"
-    },
-    "gigpo_shared": {
-      "rounds": 60,
-      "training_window_source": "r3_shared_system_60_rounds",
-      "output_tokens_by_benchmark": {
-        "alfworld": 256,
-        "appworld": 1024
-      },
-      "history_length": null,
-      "learning_rate": 0.000001,
-      "weight_decay": 0.01,
-      "gamma": 1,
-      "ppo_minibatch_rows": 256,
-      "ppo_epochs": 1,
-      "loss_normalization": "trajectory"
-    },
-    "bipace_q_shared": {
-      "rounds": 60,
-      "training_window_source": "r3_shared_system_60_rounds",
-      "output_tokens_by_benchmark": {
-        "alfworld": 256,
-        "appworld": 1024
-      },
-      "history_length": null,
-      "learning_rate": 0.000001,
-      "weight_decay": 0.01,
-      "gamma": 1,
-      "ppo_minibatch_rows": 256,
-      "ppo_epochs": 1,
-      "loss_normalization": "trajectory"
-    },
-    "native_qwen_shared": {
-      "rounds": 0,
-      "training_window_source": "frozen_shared_system",
-      "output_tokens_by_benchmark": {
-        "alfworld": 256,
-        "appworld": 1024
-      },
-      "history_length": null,
-      "learning_rate": 0.000001,
-      "weight_decay": 0.01,
-      "gamma": 1,
-      "ppo_minibatch_rows": 256,
-      "ppo_epochs": 1,
-      "loss_normalization": "trajectory"
+      }
     },
     "gigpo": {
-      "rounds": 150,
-      "training_window_source": "author_complete_iterations",
-      "output_tokens_by_benchmark": {
-        "alfworld": 512,
-        "appworld": 1024
-      },
-      "history_length": 2,
-      "author_prompt_length": 2048,
-      "learning_rate": 0.000001,
-      "gamma": 0.95,
-      "ppo_minibatch_rows": 256,
-      "ppo_epochs": 1,
-      "loss_normalization": "token"
+      "training_window_source": "released_source_150_rounds"
     },
-    "bipace_q": {
-      "rounds": 150,
-      "training_window_source": "author_complete_iterations",
-      "output_tokens_by_benchmark": {
-        "alfworld": 512,
-        "appworld": 1024
-      },
-      "history_length": 2,
-      "author_prompt_length": 2048,
-      "learning_rate": 5e-7,
-      "gamma": 0.95,
-      "ppo_minibatch_rows": 128,
-      "ppo_epochs": 1,
-      "loss_normalization": "token"
+    "hgpo": {
+      "training_window_source": "released_source_160_rounds"
     },
-    "self": {
-      "rounds": 60,
-      "training_window_source": "study_finite_Qwen7B_ALF_migration_window_not_author_reported",
-      "output_tokens_by_benchmark": {
-        "alfworld": 512,
-        "appworld": 1024
-      },
-      "max_context_tokens": 32768,
-      "history_mode": "full_messages_with_model_context_window",
-      "learning_rate": 0.0003,
-      "weight_decay": 0,
-      "self_collection_trajectories": 16,
-      "self_batch_size": 16,
-      "lora_rank": 96,
-      "lora_alpha": 128,
-      "lora_dropout": 0.05,
-      "teacher_ema_decay": 0.99,
-      "loss_normalization": "token"
-    },
-    "skill_disco": {
-      "rounds": 0,
-      "training_window_source": "single_author_offline_pipeline_no_outer_RL_rounds",
-      "output_tokens_by_benchmark": {
-        "alfworld": 512,
-        "appworld": 1024
-      },
-      "max_context_tokens": 32768,
-      "history_mode": "full_messages_with_skill_library_and_model_context_window",
-      "workflow": "single_author_offline_induction_and_verification",
-      "skill_refinements": 3,
-      "skill_operation_batch_size": 32,
-      "skill_induction_output_tokens": 8192,
-      "loss_normalization": "token"
-    },
-    "native_qwen": {
-      "rounds": 0,
-      "training_window_source": "frozen_no_training",
-      "output_tokens_by_benchmark": {
-        "alfworld": 512,
-        "appworld": 1024
-      },
-      "max_context_tokens": 32768,
-      "history_mode": "full_messages_with_model_context_window",
-      "workflow": "frozen_no_training",
-      "loss_normalization": "token"
+    "graphgpo": {
+      "training_window_source": "released_source_150_rounds"
     }
   },
+  "published_recipe_source": {
+    "module": "fgpo.baseline_specs",
+    "repository": "https://github.com/langfengQ/verl-agent",
+    "commit": "20bd331bdbc9026a5668e11362178e10ab7400c8",
+    "resolution": "Source recipe sets all published semantic defaults; common resource options remain configurable."
+  },
   "adaptations": [
-    "fresh_r3_study_no_v1_resume",
-    "shared_Qwen2.5_7B_backbone",
-    "official_native_ALFWorld_and_AppWorld_interfaces",
-    "full_official_evaluation_splits",
-    "finite_horizon_terminal_success_gamma1",
-    "shared_system_history_outputs_training_rounds_and_optimizer",
-    "own_short_history_ablation_uses_two_complete_turns",
-    "author_recipe_transfers_are_separate_optional_methods",
-    "SELF_study_finite_migration_window60_not_author_reported",
-    "Skill_DisCo_single_offline_workflow"
+    "fresh_published_v3_study_no_v1_or_v2_resume",
+    "Qwen2.5_7B_backbone_and_full_official_evaluation",
+    "published_ALFWorld_credit_prompt_reward_and_training_recipes",
+    "AppWorld_native_Python_transfer_not_original_paper_experiment",
+    "PyTorch_batch_rollout_and_CPU_FP32_master_AdamW_runtime",
+    "released_copy_balance_virtual_microbatch_weights_for_published_PPO",
+    "GiGPO_published_1_5B_full_finetune_recipe_transferred_to_study_7B",
+    "own_fixed_trajectory_loss_and_undiscounted_terminal_success",
+    "own_ablations_only_on_ALFWorld_reusing_main_FGPO",
+    "diagnostics_reuse_formal_records_no_additional_rollouts"
   ],
   "environment_pool_size": 8,
   "cache_initial_capacity": 1024,
@@ -281,5 +161,12 @@
   "ppo_dual_clip": 3,
   "entropy_coef": 0.001,
   "kl_coef": 0.01,
-  "max_grad_norm": 1
+  "max_grad_norm": 1,
+  "install_root": "/home/chenxiangwei/workspace/fgpo-r3",
+  "python_executable": "/home/chenxiangwei/env/prism-native-v1/bin/python",
+  "alfworld_python_executable": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/venv-alfworld/bin/python",
+  "model_path": "/home/chenxiangwei/models/Qwen2.5-7B-Instruct",
+  "alfworld_data_root": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/alfworld",
+  "appworld_data_root": "/home/chenxiangwei/workspace/external/appworld-root-v020",
+  "excluded_gpu_ids": []
 }

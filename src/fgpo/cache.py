@@ -141,8 +141,24 @@ class ArenaCache(Cache):
                       for _ in range(int(num_layers))]
         super().__init__(layers=layers)
 
+    def _row_selections(self, indices):
+        """Upload each row selection once per device, shared by its layers."""
+        device_indices = {}
+        for layer in self.layers:
+            if not layer.is_initialized:
+                yield layer, indices
+                continue
+            if layer.device not in device_indices:
+                device_indices[layer.device] = indices.to(device=layer.device, dtype=torch.long)
+            yield layer, device_indices[layer.device]
+
     def copy_rows(self, indices):
-        return ArenaCache(layers=[layer.copy_rows(indices) for layer in self.layers])
+        return ArenaCache(layers=[layer.copy_rows(selected)
+                                  for layer, selected in self._row_selections(indices)])
+
+    def batch_select_indices(self, indices):
+        for layer, selected in self._row_selections(indices):
+            layer.batch_select_indices(selected)
 
     def compact(self, positions, lengths):
         device_positions = {}

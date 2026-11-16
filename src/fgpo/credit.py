@@ -139,10 +139,12 @@ class CrossTrajectoryCredit:
 
         obs = self._features("z_obs")
         distance = (1 - torch.bmm(obs, obs.transpose(1, 2))).clamp_(0, 2)
+        del obs
         if self.method != "fgpo_obs_only":
             hist = self._features("z_hist")
             history_distance = (1 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0, 2)
-            distance = torch.maximum(distance, history_distance)
+            torch.maximum(distance, history_distance, out=distance)
+            del hist, history_distance
         # Shapes are [depth, target trajectory, peer trajectory]. This computes
         # O(H*K^2) matches, rather than comparing every pair of temporal nodes.
         eligible = self.valid[:, :, None] & self.valid[:, None, :]

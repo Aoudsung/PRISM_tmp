@@ -1,6 +1,6 @@
 # F-GPO r3 数学与实现契约
 
-本文件与 [研究方案及推导](fgpo_design_and_derivation.md) 定义 `fgpo-r3-success-v2` 的实际实现，版本日期为 2026-11-16。核心实现是 `src/fgpo/credit.py` 的 `CrossTrajectoryCredit`，对外算法名为 `r3_history_conditioned_peer_value_sharing`。旧方案通过基准提交 `977bb86ac31a4b1f95ea26b7b53334be5cadf57e` 追溯；r3 使用新 study，不接续旧奖励和旧优势的 checkpoint。
+本文件与 [研究方案及推导](fgpo_design_and_derivation.md) 定义 `fgpo-r3-published-v3` 的实际实现，版本日期为 2026-11-16。第 1—6 节规定 F-GPO 及其自身消融的数学对象；第 9 节单列已发表基线的来源、配方和比较范围。核心实现是 `src/fgpo/credit.py` 的 `CrossTrajectoryCredit`，对外算法名为 `r3_history_conditioned_peer_value_sharing`。旧方案通过基准提交 `977bb86ac31a4b1f95ea26b7b53334be5cadf57e` 追溯；本协议使用新 study，不接续旧协议的奖励、优势或待完成更新。
 
 本文规定数据、公式、默认值、更新和测量口径。当前仅完成静态编写与源代码审阅，所有项目执行及正式评测均在指定服务器进行，尚无 r3 的实测成功率或加速倍数。
 
@@ -31,11 +31,11 @@ $$
 
 数学公开历史记为 $h_t$，actor 真实输入是 $p_t=C(h_t)$。$C$ 固定保留初始任务与公开 bootstrap，随后保留有限容量内的最近完整动作—反馈轮次。每步生成上限默认为 ALFWorld 256、AppWorld 1024，模型上下文默认 32768。提示容量为 $C_{\mathrm{prompt}}=C_{\max}-M_{\mathrm{gen}}$。
 
-通常滚动水位为 $0.75C_{\mathrm{prompt}}$；实际水位取该值与“初始锚定块长度 + 最新完整轮次长度”的较大值，并满足提示上限。历史窗口由完整块构成，初始块与最新完整轮次无法容纳时显式报错。`fgpo_no_full_filtration` 的候选历史仅含最近两轮，仍遵循相同容量规则。
+通常滚动水位为 $0.75C_{\mathrm{prompt}}$；实际水位取该值与“初始锚定块长度 + 最新完整轮次长度”的较大值，并满足提示上限。历史窗口由完整块构成，初始块与最新完整轮次无法容纳时显式报错。三个正式自身消融均保留这一 actor 历史条件。
 
 环境文本采用 `split_special_tokens=True` 编码，帧结构由静态 ChatML 整数 token 构建。实际采样的 `im_end/endoftext` 属于响应；人工补入的闭合 token 不属于响应损失。一个实际响应只有一个 `response_span`，滚动复制的历史响应不重新拥有损失。
 
-若响应起点为 $a$、长度为 $m$，在输入 `S[:-1]` 的因果段前向中使用隐藏态 `[a-1:a-1+m]` 预测其实际目标 token。历史特征读取 `prompt_length-1`。参考与 PPO 都读取该响应的实际段和实际前缀，短历史消融也完全遵循这一条件。
+若响应起点为 $a$、长度为 $m$，在输入 `S[:-1]` 的因果段前向中使用隐藏态 `[a-1:a-1+m]` 预测其实际目标 token。历史特征读取 `prompt_length-1`。参考与 PPO 都读取该响应的实际段和实际前缀；PPO 可将段的末端截到当前 minibatch 最后一个响应目标之后，完整前缀和位置编号保持相同。
 
 只有 actor 下一步实际消费的反馈进入段。终末反馈仍保存于步骤及 `TurnBlock`，其 `observation_span=None`，没有独立的 feedback-only 评分段。参考阶段读取至 `behavior_closed_length`；段中未来位置由因果 attention mask 屏蔽。
 
@@ -112,12 +112,11 @@ $$
 
 | 方法 | 与 `fgpo` 的唯一区别 |
 |---|---|
-| `fgpo_no_full_filtration` | actor 实际历史保留初始锚定块与最近两轮；参考、PPO 和历史特征采用同一真实输入 |
 | `fgpo_no_transfer` | 所有共享权重 $\lambda=0$，原核与基线保留 |
 | `fgpo_obs_only` | $d$ 只保留观测余弦距离，actor 的历史窗口不变 |
 | `fgpo_no_support_weight` | 非终末且下一状态 $S>0$ 时 $\lambda=1$，否则为零；该消融不使用 `credit_transfer_max` |
 
-`fgpo_no_befp` 和 `fgpo_no_dag_loo` 显式拒绝，不映射到任意新消融。外部共享比较器为 `gigpo_shared`、`bipace_q_shared`、`native_qwen_shared`，从各自估计器入口调用。原作者配置 ID 单列为迁移配方，不能静默变成共享配方。
+正式消融只使用表中三个方法，全部在 ALFWorld 上执行；完整 F-GPO 复用主比较中的对应种子。短两轮历史变体 `fgpo_no_full_filtration` 不进入正式矩阵。旧 BEFP、DAG-LOO 与自定义 shared 变体不映射为已发表基线；主比较使用第 9 节的 GiGPO、HGPO 和 GraphGPO。
 
 ## 5. 理论声明的适用范围
 
@@ -139,7 +138,7 @@ $$
 
 良好前缀可以获得负优势。八轨迹组中目标失败、七个同伴成功，且当前和下一状态都完全匹配时，默认参数给出 $b=R,\mu_{t+1}=R,\lambda=7/8,A=-1/8$。全失败组的任务优势为零。熵正则仅提供有限探索辅助，r3 没有冷启动成功保证。
 
-## 6. PPO 及轨迹归一化
+## 6. F-GPO PPO 及轨迹归一化
 
 固定行为 log-prob、参考 log-prob 和步骤优势；每个实际响应 token $i$ 的优势为所属步骤 $A_i$。设 $\rho_i=\exp(\ell_i^\theta-\ell_i^{\mathrm{old}})$，clip $\eta=.2$，dual clip $c=3$：
 
@@ -164,7 +163,7 @@ $$
 
 为防止无意义的指数溢出，概率比的指数输入上限为 $\log(\max(c,1+\eta))+1$，该范围外双裁剪损失已是常数；$d_i$ 在计算指数前截到 $[-11,\log22]$，原 $k_i$ 在这个范围外已饱和到 10。这些数值处理保持所定义的截断目标。
 
-每轮先固定响应行 minibatch 数 $M$。共享协议定义 $Z_{\mathrm{mb}}=N_{\mathrm{traj}}/M$，并使用
+每轮先固定响应行 minibatch 数 $M$。F-GPO 及三个自身消融定义 $Z_{\mathrm{mb}}=N_{\mathrm{traj}}/M$，并使用
 
 $$
 \mathcal L_m=\frac{1}{Z_{\mathrm{mb}}}\sum_{i\in\mathcal B_m}
@@ -173,25 +172,49 @@ $$
 
 这是所有响应 token 损失的求和，轨迹内部不按长度平均。末批维持同一分母；完整轮的轨迹数和 minibatch 数在恢复后也保持相同。固定参数下 $\frac1M\sum_m\mathcal L_m$ 等于轨迹归一化的整体 surrogate。`metrics.loss` 累加实际 minibatch 损失，比较时要保留该口径与 optimizer step 数。
 
-每个 minibatch 完成后执行一次 AdamW，默认学习率 `1e-6`、weight decay `.01`、全局梯度裁剪 `1`。参考权重固定；行为权重随训练轮更新。PPO 裁剪、k3 采样正则、条件熵及有偏续值估计构成实际正则化 surrogate，其性质不能直接等同于每次更新都计算精确成功率梯度。
+每个 minibatch 完成后执行一次 AdamW，默认学习率 `1e-6`、weight decay `.01`、全局梯度裁剪 `1`。参考权重固定；行为权重随训练轮更新。PPO 裁剪、k3 采样正则、条件熵及有偏续值估计构成实际正则化 surrogate，其性质不能直接等同于每次更新都计算精确成功率梯度。本节的轨迹分母只用于 F-GPO 系列。已发表基线保留发布源码的 batch 复制与顺序、virtual rank/microbatch 内部 token-mean 及其外层平均权重；GiGPO 在优势估计之前复制，HGPO/GraphGPO 在优势估计之后复制。分组与每个响应的损失系数均须遵循这一执行顺序，具体配方和批处理规则由 `baseline_specs.py / published_batching.py` 定义。
+
+对已发表方法，令来源 virtual rank 数为 $W$、每 rank 的 actor microbatch 行数为 $b$、全局 PPO minibatch 行数为 $B$，固定梯度累积数为 $A=B/(Wb)$。第 $m$ 个 virtual microbatch 的真实响应 token 数为 $N_m$，则该批每个 token 的损失系数为
+
+$$
+c_i=\frac{1}{W A N_m}.
+$$
+
+最后一个不满 PPO minibatch 仍使用来源固定的 $A$。`plan_published_batch` 保留复制、按序列长度平衡及各 rank 内的行顺序，将同一个 optimizer step 内重复响应行的正系数相加；`ppo_update(..., published_plan=...)` 只执行该行一次前向，将合并系数同时乘 PPO、熵、KL 及对应统计。合并不跨越参数更新边界。`EngineState.published_batch_plan` 保存计划，`credit_row_ids` 保留 GiGPO 估计所需的重复次数，cursor 记录 `published_virtual_microbatch_mean` 权重身份。batch 复制仅引用已采样响应；实际采样预算按原始轨迹与环境调用计数。
 
 ## 7. 系统执行契约
 
-因果段只在相同参数版本下共享主干前向。某段在不同 minibatch 的参数更新之后再次被使用时，必须重算其主干激活。参考阶段按轮集中安装冻结权重，完成响应评分后恢复 actor；相同公开观察值按词元序列去重、按长度和 token 预算微批提取表示。
+因果段只在相同参数版本下共享主干前向。PPO 对当前段仅前向至所选响应的最大 `response_span.stop`，送入主干的 token 为该前缀去掉最后一个目标 token；所有前文和绝对位置保留。某段在参数更新后的另一个 minibatch 再次使用时，重新计算其主干激活。
 
-输出头每次只保留默认 `head_chunk_tokens=64` 的图。隐藏态块 detach 为叶子后执行该块 backward，将其梯度用位置索引加回完整隐藏态梯度缓冲；全部块完成后对主干输出调用一次 backward。输出头参数梯度与主干参数梯度按一阶链式法则累积。bf16 的实际数值由实现精度决定，批处理变更不声明逐位一致。
+设主干输出为 $H=f_\theta(x)$，一次可微位置 gather 得到实际响应隐藏态 $Q=H[I]$。每个默认最多 64 个 token 的词表块使用 $Q_c$ 的 detached 叶子计算并立即反向，收集 $\partial L/\partial Q_c$；全部块结束后执行一次 `Q.backward(dL/dQ)`，由 gather 将梯度散射回主干。循环期间仅保持响应位置梯度缓冲，主干反向所需的完整激活仍由训练 checkpoint 策略管理。跨设备复制参与 autograd，绑权 embedding/head 的两条路径累积到同一参数。
 
-采样槽位独立拥有 generator。每个 token 步仍使用独立随机流，结果合并为一次 CPU 读取；达到响应结束条件立即派发 CPU 环境调用。下一交互轮保留 turn barrier。持久环境池复用进程、独占 lease 隔离轨迹状态，新的任务重新初始化原生环境对象。已结束轨迹不继续采样。
+词表投影输出 FP32 logits。`_LogProbabilityEntropy` 保存 logits、行级 log-partition、熵和目标索引，并使用解析一阶 adjoint。对 $p=\operatorname{softmax}(z)$、$\ell=\log p_y$、熵 $\mathcal H$，
 
-arena cache 按容量几何增长，保留 padding mask、实际有效跨度与逻辑 position。`compact` 对需要压紧的布局移动数据；`crop` 只缩短逻辑视图并保留容量。丢弃有效历史后重新 prefill 新窗口。增量缓存、整段评分和参数更新分别遵守对应输入条件。
+$$
+\frac{\partial\ell}{\partial z}=\operatorname{onehot}(y)-p,\qquad
+\frac{\partial\mathcal H}{\partial z}=-p(\log p+\mathcal H),
+$$
 
-CPU AdamW 保存 fp32 master/m/v。传输桶默认 64 MiB，每个设备与 dtype 使用两个有限槽；D2H 完成后才能读取 CPU 梯度，H2D 完成后才能复用其 host weight 缓冲。模型更新前同步所有未完成参数写回。主干梯度检查点继续使用；`activation_offload=false` 为默认值，显式开启时采用非锁页 CPU 激活保存。
+$$
+\frac{\partial L}{\partial z}
+=g_\ell\bigl(\operatorname{onehot}(y)-p\bigr)-g_Hp(\log p+\mathcal H).
+$$
 
-热路径的模型调用时间记录为 `host_dispatch`。阶段边界同步 CUDA，记录 `synchronized_wall` 与实际 allocated/reserved/peak bytes；嵌套峰值归属外层阶段。环境与 GPU 重叠时间不重复相加为端到端成本。
+其中 $g_H=\partial L/\partial\mathcal H$；F-GPO 使用 $g_H=-\mathrm{entropy\_coef}/Z_{\mathrm{mb}}$，已发表基线使用其 virtual rank/microbatch 规则对应的逐响应系数。$g_\ell$ 由 PPO、dual clip、k3 截断及相同损失系数的小图求得。反向重建概率，原位复用仅涉及新建临时张量，保存的 logits 保持不变。`once_differentiable` 将接口限定为一阶训练。bf16 主干、FP32 词表统计与运算顺序共同决定实际数值，正式记录中的数值容差与实测结果不声明逐位一致。
+
+参考阶段每轮集中安装冻结权重，完成评分后恢复 actor。同段实际响应合并为一次目标上传和一次分数回传，词表投影仍按 chunk 执行，每块立即释放 logits。历史层 hook 只保留动作前所需位置；`fgpo_obs_only` 跳过历史表示。公开观测按 token 序列去重、按长度和 token 预算微批编码，纯表示前向可在指定中间层结束。信用及组诊断完成后调用 `ReferenceRound.release_features()` 释放 `z_hist/z_obs`，保留 PPO 所需的冻结 log-prob、已计算优势和诊断。尚待信用计算的断点保留其所需表示。
+
+采样槽位独立拥有 generator，token 与对应行为 log-prob 合并读取。F-GPO 在响应结束后立即派发该槽的 CPU 环境调用，下一交互轮保留 turn barrier。已发表方法的完整原生 prompt 使用批量 prefill；完全相同的 prompt 先单次 prefill 再复制缓存，其他 prompt 显式右侧 padding，并按每行最后一个真实 token 取分布。结束槽及时移除；增量 head 只投影本次有新增 token 的行，未变化行保留已有分布。批处理保持各槽原有 generator、逻辑位置和 prompt token。
+
+arena cache 按容量几何增长，保留 padding mask、实际有效跨度与逻辑 position。`compact` 对需要压紧的布局移动数据；`crop` 只缩短逻辑视图并保留容量。丢弃有效历史后重新 prefill 新窗口。持久环境池复用进程，独占 lease 隔离轨迹，新的任务重新初始化原生环境对象。缓存、增量 logits 和环境句柄均有明确的消费与释放边界。
+
+CPU AdamW 保存 FP32 master/m/v，先完成全局范数的设备归约与有限值检查。传输桶默认 64 MiB，每个设备与 dtype 最多使用两个有限槽；每槽的前次 H2D/参数写回、下次 D2H 和 `downloaded` event 按同一 CUDA stream 排序。CPU 在该 event 完成后读取梯度或覆盖 host weight，因此不再额外提前阻塞等待前次 H2D。梯度桶转 FP32 后原位缩放、完成当前桶更新后释放临时量；step 返回前同步全部写回。主干梯度 checkpoint 保持启用；`activation_offload=false` 为默认值，显式开启时采用非锁页 CPU 激活保存。
+
+热路径模型调用按操作和 role 聚合日志，保留 calls、实际 token、padded compute token、投影位置数和 host dispatch 总量；环境转移、同步阶段及断点边界保留各自事件。`host_dispatch` 表示主机提交时间。阶段边界同步 CUDA 后记录 `synchronized_wall` 与 allocated/reserved/peak bytes，嵌套峰值归属外层阶段。端到端成本采用实际运行墙钟，环境与 GPU 重叠时间不重复相加。
 
 ## 8. 正式日志诊断
 
-对非空组，`advantages(..., diagnostics=output)` 将诊断写入 `output[group_id]`，同时返回 `{step_id: float_advantage}`。`engine.py` 将这些值写入正式 `training.jsonl` 的 `diagnostics.credit_groups`，并保存原始 reference/advantages 供解释正式结果。
+对非空组，`advantages(..., diagnostics=output)` 将诊断写入 `output[group_id]`，同时返回 `{step_id: float_advantage}`。`engine.py` 将这些值写入正式 `training.jsonl` 的 `diagnostics.credit_groups`，保存冻结响应分数、优势及实际轨迹供解释正式结果；用于计算这些量的参考表示在信用完成后释放。
 
 | 日志字段 | 精确定义 |
 |---|---|
@@ -211,22 +234,40 @@ CPU AdamW 保存 fp32 master/m/v。传输桶默认 64 MiB，每个设备与 dtyp
 
 组诊断还记录算法、方法、时域及实际信用参数。Brier 使用整条目标轨迹之外的数据进行预测，再用目标终局结果计算损失；它包含 Bernoulli outcome 噪声，衡量留出结果预测，不能作为真实 Q 误差、置信界或校准分数。这些诊断不参与共享权重或奖励。跨组聚合采用相应真实样本数加权。
 
+这些字段只用于正式主比较和自身消融的 claim：历史匹配是否改变同伴支持与留出结果预测、续值共享是否实际改变失败轨迹的信用、支持收缩是否限制低支持更新。诊断直接读取已完成的训练日志；不增加反馈探针、额外 rollout、反事实分支或独立诊断实验。正优势计数描述更新发生的位置，对这些动作质量的判断结合官方结果及对应自身消融。
+
 ## 9. 研究身份、基线与源码映射
 
-主配置为 `configs/fgpo-r3-host-a.json` 和 `configs/fgpo-r3-host-b.json`。默认主矩阵包含本方法、四个自身消融、`gigpo_shared`、`bipace_q_shared` 和 `native_qwen_shared`；两种可训练共享比较器与 r3 遵循同一 collector、context、输出预算、60 轮、16 组、8 轨迹、优化器与轨迹损失分母。GiGPO/BiPACE 的相对优势定义由各自估计器保留；BiPACE 指纹来自当前 actor 的实际历史 prompt。作者配方作为可选单列运行，保留其已注明迁移超参数。
+主配置为 `configs/fgpo-r3-host-a.json` 和 `configs/fgpo-r3-host-b.json`，协议为 `fgpo-r3-published-v3`。主比较固定为 F-GPO、GiGPO（NeurIPS 2025）、HGPO（ICLR 2026）、GraphGPO（ICML 2026）四个方法，ALFWorld/AppWorld 两个 benchmark 与种子 0、1、2，共 $4\times2\times3=24$ 个运行单元。三个自身消融仅在 ALFWorld 各运行三个种子，新增 $3\times1\times3=9$ 个单元；完整 F-GPO 的结果直接复用主比较。正式训练合计 33 个单元。主结果表比较四个完整方法，自身消融独立呈现。
 
-种子默认为 0、1、2；完整评测为 ALFWorld `valid_unseen` 的 134 任务，以及 AppWorld `test_normal` 的 168 任务与 `test_challenge` 的 417 任务。官方 success/TGC/SGC 与任务完成数一并记录。性能结果报告真实阶段耗时、输出 token、环境步数、GPU 小时和实际显存峰值。
+| 正式方法 ID | 来源与本研究采用的配方 | 原 ALFWorld 配方的主要设置 |
+|---|---|---|
+| `fgpo` | 本文件第 1—6 节 | 60 轮，16 任务组/轮，8 轨迹/组，响应 256，轨迹归一化，$\gamma=1$ |
+| `gigpo` | [GiGPO NeurIPS 2025](https://proceedings.neurips.cc/paper_files/paper/2025/hash/420c9f777c0b4f78d515e53cf74d58b2-Abstract-Conference.html)；官方 1.5B full-finetuning 配方迁移到本研究 7B | 150 轮，最近两轮记忆，prompt 2048，响应 512，row minibatch 256，$\gamma=.95$ |
+| `hgpo` | [HGPO ICLR 2026](https://openreview.net/forum?id=T8Dev99qnz)及作者发布代码 | 160 轮，最近两轮记忆，prompt 4096，响应 512，row minibatch 256，$\gamma=.95$ |
+| `graphgpo` | [GraphGPO ICML 2026](https://proceedings.mlr.press/v306/cheng26e.html)及作者发布代码 | 150 轮，最近两轮记忆与公开状态摘要，prompt 2048，响应 512，7B row minibatch 64，$\gamma=.10$ |
 
-`effective_training_identity/require_training_identity` 约束恢复时相同的协议、方法、种子、模型、任务、上下文、生成、信用、PPO 和 Adam 有效参数。GPU 放置、缓存容量、offload、传输桶及 head/representation 微批属于可调整的资源项，row minibatch 大小仍属于训练身份。CUDA RNG 流数量保持一致；SELF 的 dropout 还要求相同的逻辑层放置与随机流分配。旧协议待执行优势和优化状态禁止复用。中断恢复以已保存完整组和更新 cursor 为单位，不假设恢复任意时刻的环境进程内部状态。
+三种已发表方法采用 [`verl-agent` 固定来源快照](https://github.com/langfengQ/verl-agent/tree/20bd331bdbc9026a5668e11362178e10ab7400c8)的 `released-source-recipe`，来源文件、论文/代码差异和解析后的参数集中在 `src/fgpo/baseline_specs.py`。保留来源中的分组、回报、归一化、无效动作惩罚、prompt 与截断方式、采样温度，以及 batch 复制、平衡顺序和 virtual rank/microbatch token-mean 权重。GiGPO 的步骤行 episode 统计、HGPO 的非零层级项重归一化与 population std、GraphGPO 的下一节点距离指数均按该代码来源实现，并在运行身份中披露。这些基线使用自己的原生 collector 和优势入口。
+
+本研究使用的来源虚拟批参数 $(W,b,A)$ 分别为 GiGPO $(2,32,4)$、HGPO $(4,8,8)$、GraphGPO $(4,4,4)$。这些值定义数学上的响应权重，和实际执行模型的物理 GPU 数分别记录。GiGPO 固定来源中可用的 full-finetuning 脚本使用 Qwen2.5-1.5B，本研究将其原配方迁移到统一的 Qwen2.5-7B，并保留该来源的两 rank 与 32 行 microbatch 规则。HGPO 和 GraphGPO 使用其 7B 配方。
+
+ALFWorld 保留发布算法与来源配方并披露上述 backbone 迁移；AppWorld 为本研究明确标记的 benchmark 迁移：执行原生 Python，固定任务/API bootstrap、保留近期完整交互消息，响应上限 1024，遵守 AppWorld 的官方时域和评价接口。上述三篇论文没有报告本研究的 AppWorld 迁移结果。四方法运行于本仓库的 SDPA、缓存、offloaded AdamW 与日志路径，原作者的 vLLM/Ray/FSDP 运行栈不构成本次逐位复现承诺。各方法保留自己的训练轮数、prompt、输出和更新配方，官方测试只评价最终模型。共同预算区间内的曲线仅来自每轮已有行为采样的训练成功率日志，不增加中途测试集评价；实际轨迹、token、环境步、optimizer step、GPU 小时和峰值显存共同说明成本。
+
+实验必要性按 claim 收敛：四方法主比较回答相对已发表方法的官方任务效果与成本；`fgpo_obs_only` 对应历史条件匹配；`fgpo_no_transfer` 对应续值共享；`fgpo_no_support_weight` 对应支持收缩。各消融改变本方法的一个机制，并复用相同正式日志解释更新。短两轮历史、shared 变体、冻结 native 模型、BiPACE、SELF、Skill-DisCo 均不进入本次正式矩阵；不增加参数 sweep、系统配置网格或额外采样诊断。
+
+最终模型的完整评测为 ALFWorld `valid_unseen` 的 134 任务，以及 AppWorld `test_normal` 的 168 任务与 `test_challenge` 的 417 任务。每个 AppWorld 训练单元在两个 split 评价，split 不重复计为训练单元。官方 success/TGC/SGC 与任务完成数一并记录，三个种子均完整报告。
+
+`effective_training_identity/require_training_identity` 约束恢复时相同的协议、方法、种子、模型、任务、上下文、生成、信用、PPO 和 Adam 有效参数，已发表方法同时保留来源与解析配方。GPU 放置、缓存容量、offload、传输桶及 head/representation 微批属于资源项，row minibatch 属于训练身份。CUDA RNG 流数量保持一致。旧 `fgpo-r3-success-v2` 及更早协议的待执行优势和优化状态禁止复用；中断恢复以已保存完整组、信用结果和更新 cursor 为单位。
 
 | 文件 | 负责的契约 |
 |---|---|
 | `public.py / filtration.py / records.py` | 公开输入、实际有界历史、词元所有权和步骤记录 |
 | `rollout.py / envs.py` | 独立采样、提前环境派发、轮间同步和持久隔离 lease |
 | `policy.py / cache.py` | 因果前向、表征批处理、采样、缓存和阶段实测 |
-| `reference.py` | 固定参考响应 log-prob、动作前表示、真实终局奖励 |
+| `reference.py` | 段级分块参考评分、所需位置表示、信用后释放表示 |
 | `credit.py` | 同深度排除、核支持、基线、MC 续值共享和诊断 |
-| `optimization.py` | 轨迹归一化 surrogate、分块输出头反向、有界 AdamW |
-| `protocol.py / engine.py` | 方法身份、共享比较、生命周期、记录和恢复 |
+| `optimization.py` | 方法对应的损失分母、解析一阶 head adjoint、响应梯度与双槽 AdamW |
+| `baseline_specs.py / published_baselines.py / published_batching.py / baselines.py` | 已发表来源配方、信用算法、batch 复制与更新权重、原生 prompt/动作与 benchmark 迁移 |
+| `protocol.py / engine.py` | published-v3 方法身份、正式矩阵、生命周期、记录和恢复 |
 
-正式研究只围绕方案中的成功率、匹配与共享估计、系统成本 claim 开展，诊断直接复用正式日志。没有新增校准、认证、分阶段放行或与研究主线无关的运行机制。
+截至本次修订完成的是静态实现与源代码审阅。指定服务器连接说明未随当前仓库提供，尚未执行上述正式单元，文档不报告成功率、显存实测或加速倍数。数值容差、阶段成本和 benchmark 表现随服务器的正式真实任务运行记录，不扩展为独立合成实验或放行流程。

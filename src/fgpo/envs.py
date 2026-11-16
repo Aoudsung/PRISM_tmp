@@ -125,6 +125,7 @@ class ALFWorldEnv:
         self.done = bool(native_done or won or self.steps >= 50)
         return StepResult(self._observation(), self.done, won,
                           {'valid': valid, 'step_failed': not valid, 'native_executed': True,
+                           'native_admissible_commands': list(self.state['admissible_commands']),
                            'official_termination': bool(native_done or won), 'steps': self.steps})
 
     def finalize_evaluation(self):

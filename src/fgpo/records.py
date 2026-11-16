@@ -1,10 +1,11 @@
 """Shared F-GPO data contract: immutable integer segments and actual interaction records.
 
-Actor segments alone own PPO responses.  Canonical full-history segments supply
-reference conditioning and never add a second sampled action or response mask.
+Actor segments alone own PPO responses. Reference and update computations use
+those same actual bounded prefixes without creating additional response masks.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
@@ -76,9 +77,60 @@ class CostLedger:
         self._usage_complete = True
         self.recovery = None
         self.active_group_id = None
+        self._model_scope_depth = 0
+        self._model_calls = {}
+
+    @contextmanager
+    def aggregate_model_calls(self):
+        """Keep exact work totals with one journal row per role in an operation.
+
+        Decode calls only need aggregate work for the manuscript's efficiency
+        claim. Environment transitions and synchronized phases remain separate.
+        Completed work is flushed on normal exit and on an exception.
+        """
+        self._model_scope_depth += 1
+        try:
+            yield
+        finally:
+            self._model_scope_depth -= 1
+            if self._model_scope_depth == 0:
+                self._flush_model_calls()
+
+    def _flush_model_calls(self):
+        if not self._model_calls:
+            return
+        pending, self._model_calls = self._model_calls, {}
+        depth, self._model_scope_depth = self._model_scope_depth, 0
+        try:
+            for item in pending.values():
+                self.record("model", **item)
+        finally:
+            self._model_scope_depth = depth
 
     def record(self, kind, role, *, input_tokens=0, output_tokens=0, forward_tokens=0,
                seconds=0., gpu_ids=None, details=None, env_steps=0):
+        if kind == "model" and self._model_scope_depth:
+            devices = self.gpu_ids if gpu_ids is None else tuple(gpu_ids)
+            detail = {} if details is None else dict(details)
+            key = (role, devices, detail.get("time_basis"), detail.get("status"),
+                   detail.get("use_cache"), detail.get("executed_decoder_layers"),
+                   self.active_group_id)
+            values = dict(input_tokens=input_tokens, output_tokens=output_tokens,
+                          forward_tokens=forward_tokens, seconds=seconds, env_steps=env_steps)
+            if key not in self._model_calls:
+                detail.update(aggregation="model_calls_in_operation", calls=1)
+                self._model_calls[key] = dict(role=role, gpu_ids=devices, details=detail, **values)
+            else:
+                item = self._model_calls[key]
+                for name, value in values.items():
+                    item[name] = None if item[name] is None or value is None else item[name] + value
+                item["details"]["calls"] += 1
+                for name in ("padded_compute_tokens", "positions"):
+                    if name in detail:
+                        item["details"][name] = item["details"].get(name, 0) + detail[name]
+            return None
+        if kind != "model":
+            self._flush_model_calls()
         self.event_cursor += 1
         elapsed = monotonic_seconds() - self.started
         event_details = {} if details is None else dict(details)
@@ -103,6 +155,7 @@ class CostLedger:
         return row
 
     def snapshot(self):
+        self._flush_model_calls()
         elapsed = monotonic_seconds() - self.started
         return {"events": self.event_cursor, "wall_seconds": self._elapsed_before + elapsed,
                 "allocated_device_seconds": self._device_seconds_before + elapsed * len(self.gpu_ids),
@@ -199,6 +252,7 @@ class CostLedger:
 
     def begin_group(self, group_id=None):
         """Bound in-memory retention; aggregate counters and the complete JSONL remain intact."""
+        self._flush_model_calls()
         self.records.clear()
         self.active_group_id = None if group_id is None else str(group_id)
 

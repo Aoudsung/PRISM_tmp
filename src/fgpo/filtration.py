@@ -45,6 +45,8 @@ class TokenFiltration:
         if history_length not in (None, 2):
             raise ValueError("r3 uses bounded retained history or its two-turn ablation.")
         self.tokenizer, self.pinned_ids = tokenizer, tuple(pinned_ids)
+        self.user_header_ids = (IM_START,) + encode_text(tokenizer, "user\n")
+        self.assistant_footer_ids = (IM_END, NEWLINE, IM_START) + encode_text(tokenizer, "assistant\n")
         self.trajectory_id, self.history_length, self.kind = trajectory_id, history_length, kind
         self.max_context_tokens = int(max_context_tokens)
         self.prompt_limit = self.max_context_tokens - int(max_new_tokens)
@@ -74,8 +76,8 @@ class TokenFiltration:
 
     def _block(self, step_id, response_ids, observation):
         closure = (NEWLINE,) if response_ids[-1] == IM_END else (IM_END, NEWLINE)
-        header = (IM_START,) + encode_text(self.tokenizer, "user\n")
-        footer = (IM_END, NEWLINE, IM_START) + encode_text(self.tokenizer, "assistant\n")
+        header = self.user_header_ids
+        footer = self.assistant_footer_ids
         user = header + observation.user_body_ids + footer
         offset = len(response_ids) + len(closure) + len(header) + observation.observation_body_offset
         return TurnBlock(step_id, tuple(response_ids), closure, user,

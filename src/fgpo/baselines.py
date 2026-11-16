@@ -1,12 +1,14 @@
-"""Author-recipe external comparators, isolated from the F-GPO reward and credit.
+"""Published comparators and retained historical implementations.
 
-Qwen transfer: retain task/bootstrap; native windows are complete-message
-windows. Skill proposals partition whole source steps/operations at actual model
-capacity and preserve global indices. No environment answers enter the actor.
+Published methods retain their released prompt and truncation rules. AppWorld
+transfers retain the task/API bootstrap. Historical Skill proposals partition
+whole source operations at actual model capacity and preserve global indices.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from contextlib import redirect_stdout
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import builtins
 import io
 import json
@@ -25,12 +27,15 @@ from torch.utils.checkpoint import checkpoint
 from .records import StepRecord, SegmentRecord, TrajectoryRecord, GroupRecord, TokenSpan, TurnBlock
 from .policy import clock
 from .optimization import UpdateCursor
-from .protocol import SHARED_BASELINES
+from .baseline_specs import PUBLISHED_RECIPES, published_recipe
+from .published_baselines import (
+    GraphALFWorldHistory, alfworld_prompt, published_advantages, published_alfworld_action,
+)
 
 
 AUTHOR_RECIPES = {
+    **PUBLISHED_RECIPES,
     "native_qwen":{"trainable":False,"output_alf":512,"output_app":1024},
-    "gigpo":{"lr":1e-6,"weight_decay":.01,"minibatch":256,"rounds":150,"history":2,"gamma":.95},
     "bipace_q":{"lr":5e-7,"weight_decay":.01,"minibatch":128,"rounds":150,"history":2,"gamma":.95},
     "self":{"lr":3e-4,"weight_decay":0.,"batch":16,"lora_rank":96,"lora_alpha":128,
             "dropout":.05,"ema":.99,"rounds":60,"round_window_identity":"study-Qwen-transfer"},
@@ -72,7 +77,32 @@ def _chat_ids(policy,messages):
 
 def native_prompt(policy,pin,history,current,*,method,config,memory=None,schema=None,goal=""):
     system,initial = pin
-    if method in ("gigpo","bipace_q"):
+    if method in PUBLISHED_RECIPES:
+        settings = {**published_recipe(method,policy.benchmark),**config}
+        memory = list(memory or ())
+        history_length = int(settings["history"])
+        if history_length < 0:
+            raise ValueError("Published history length must be nonnegative")
+        current_observation = _pure(current["content"])
+        if policy.benchmark=="alfworld":
+            text = alfworld_prompt(current_observation,_available(schema),memory,goal,history_length)
+            # The released rollout applies Qwen's chat template to one user
+            # message; an additional study system prompt changes that recipe.
+            messages = [{"role":"user","content":text}]
+            maximum = int(settings["author_prompt_length"])
+        else:
+            recent = memory[-history_length:] if history_length else []
+            messages = [system,initial,{"role":"user","content":json.dumps({"task":goal,
+                "recent_observation_action_pairs":recent,"current_observation":current_observation},ensure_ascii=False)}]
+            maximum = policy.max_context_tokens-policy.max_new_tokens
+        ids = _chat_ids(policy,messages)
+        if len(ids)>maximum:
+            if settings["prompt_truncation"]=="left":
+                ids = ids[-maximum:]
+            else:
+                raise ValueError("Published baseline prompt exceeds its declared context")
+        return ids
+    if method=="bipace_q":
         # Official SimpleMemory recipe; AppWorld uses its declared native
         # bootstrap/context adaptation rather than losing initial API documents.
         recent = list(memory or ())[-2:]
@@ -114,26 +144,91 @@ def native_prompt(policy,pin,history,current,*,method,config,memory=None,schema=
         retained.pop(0)
 
 
-def sample_ids(policy,prompt,generator,limit,*,role):
-    state = policy.prefill_root(prompt,role=role+".prefill")
-    ids,logp = [],[]
-    try:
-        for i in range(limit):
-            tokens,scores = policy.draw_tokens(state,[0],[generator])
-            ids.extend(tokens);logp.extend(scores)
-            if tokens[0] in policy.eos_token_ids or i+1==limit:
-                break
-            previous = state
-            state = policy.append_cache(previous,[tokens],role=role+".decode")
-            if state is not previous:
-                policy.release_cache(previous)
-        return tuple(ids),tuple(logp)
-    finally:
-        policy.release_cache(state)
+def sample_ids(policy,prompt,generator,limit,*,role,temperature=1.,top_p=1.):
+    with policy.ledger.aggregate_model_calls():
+        state = policy.prefill_root(prompt,role=role+".prefill")
+        ids,logp = [],[]
+        try:
+            for i in range(limit):
+                tokens,scores = policy.draw_tokens(state,[0],[generator],temperature=temperature,top_p=top_p)
+                ids.extend(tokens);logp.extend(scores)
+                if tokens[0] in policy.eos_token_ids or i+1==limit:
+                    break
+                previous = state
+                state = policy.append_cache(previous,[tokens],role=role+".decode")
+                if state is not previous:
+                    policy.release_cache(previous)
+            return tuple(ids),tuple(logp)
+        finally:
+            policy.release_cache(state)
+
+
+def _sample_native_prompts(policy,prompts,generators,limit,*,role,temperature,top_p):
+    """Batched complete author prompts with independent per-slot RNG streams."""
+    responses,logprobs = [[] for _ in prompts],[[] for _ in prompts]
+    active = list(range(len(prompts)))
+    state = root = None
+    with policy.ledger.aggregate_model_calls():
+        try:
+            if len(prompts)>1 and all(prompt==prompts[0] for prompt in prompts[1:]):
+                root = policy.prefill_root(prompts[0],role=role+".shared_prefill")
+                state = policy.fork_cache(root,copies=len(prompts))
+                policy.release_cache(root)
+                root = None
+            else:
+                state = policy.prefill_batch(prompts,role=role+".batch_prefill")
+            for position in range(limit):
+                tokens,scores = policy.draw_tokens(state,range(len(active)),[generators[slot] for slot in active],
+                                                   temperature=temperature,top_p=top_p)
+                continuing = []
+                for local,(slot,token,score) in enumerate(zip(active,tokens,scores,strict=True)):
+                    responses[slot].append(token)
+                    logprobs[slot].append(score)
+                    if token not in policy.eos_token_ids and position+1<limit:
+                        continuing.append(local)
+                if not continuing:
+                    break
+                # Finished slots release their KV rows immediately.  Selecting
+                # rows preserves each surviving slot's independently seeded RNG.
+                if len(continuing)!=len(active):
+                    state = policy.select_cache(state,continuing,consume=True)
+                active = [active[local] for local in continuing]
+                previous = state
+                state = policy.append_cache(previous,[(tokens[local],) for local in continuing],role=role+".decode")
+                if state is not previous:
+                    policy.release_cache(previous)
+            return [(tuple(ids),tuple(scores)) for ids,scores in zip(responses,logprobs,strict=True)]
+        finally:
+            if state is not None:
+                policy.release_cache(state)
+            if root is not None:
+                policy.release_cache(root)
+
+
+def _native_step_record(policy,*,trajectory_id,index,prompt,response,old,returned,action,reward,done,valid,
+                        environment_info,costs=(),shared_cost_event_ids=()):
+    step_id,segment_id = uuid.uuid4().hex,uuid.uuid4().hex
+    pure_ids = policy.encode(_pure(returned))
+    closure = (198,) if response and response[-1]==151645 else (151645,198)
+    user_header = (151644,)+policy.encode("user\n")
+    behavior_tokens = prompt+response
+    rsp = TokenSpan(segment_id,len(prompt),len(response),step_id)
+    obs = TokenSpan(segment_id,len(behavior_tokens)+len(closure)+len(user_header),len(pure_ids),step_id)
+    user = user_header+pure_ids+(151645,198,151644)+policy.encode("assistant\n")
+    turn = TurnBlock(step_id,response,closure,user,response+closure+user,
+                     len(response)+len(closure)+len(user_header),pure_ids)
+    segment = SegmentRecord(segment_id,behavior_tokens+closure+user,(rsp,),(obs,),
+                            len(behavior_tokens),len(behavior_tokens))
+    row = StepRecord(step_id,trajectory_id,index,segment_id,len(prompt),rsp,obs,response,old,pure_ids,
+        pure_ids or policy.encode("[Empty stdout]"),_pure(returned),returned,action,reward,done,valid,
+        turn,segment_id,len(prompt),rsp,obs,tuple(costs),environment_info,tuple(shared_cost_event_ids))
+    return row,segment
 
 
 def collect_native_trajectory(policy,env_factory,*,task_id,initial_seed,sampling_seed,group_id,
                               slot,method,config,library=None):
+    if method in PUBLISHED_RECIPES:
+        config = {**published_recipe(method,policy.benchmark),**config}
     trajectory_id = uuid.uuid4().hex
     start_cost = len(policy.ledger.records)
     env = env_factory(task_id,initial_seed,trajectory_id)
@@ -151,17 +246,22 @@ def collect_native_trajectory(policy,env_factory,*,task_id,initial_seed,sampling
         pinned = _chat_ids(policy,list(pin))
         history,memory,steps,segments = [],[],[],[]
         observation,observation_ids = initial_raw,policy.encode(_pure(initial_raw))
+        graph_history = GraphALFWorldHistory() if method=="graphgpo" and policy.benchmark=="alfworld" else None
+        actor_observation,anchor = _pure(initial_raw),_pure(initial_raw)
+        if graph_history is not None:
+            actor_observation,anchor = graph_history.observation_and_anchor(actor_observation,_available(schema))
         generator = policy.new_generator(sampling_seed)
         horizon = 50 if policy.benchmark=="alfworld" else 100
         physical = 0
         for index in range(horizon):
-            current = {"role":"user","content":observation}
+            current = {"role":"user","content":actor_observation if method in PUBLISHED_RECIPES else observation}
             prompt = native_prompt(policy,pin,history,current,method=method,config=config,memory=memory,
                                    schema=env.action_schema,goal=goal)
             if index==0:
                 pinned = prompt
             cost_start = len(policy.ledger.records)
-            response,old = sample_ids(policy,prompt,generator,policy.max_new_tokens,role=method+".actor")
+            response,old = sample_ids(policy,prompt,generator,policy.max_new_tokens,role=method+".actor",
+                                    temperature=float(config.get("temperature",1.)),top_p=float(config.get("top_p",1.)))
             text = policy.tokenizer.decode(response,skip_special_tokens=True,clean_up_tokenization_spaces=False)
             request = re.fullmatch(r"<skill>([\s\S]+?)</skill>",text.strip()) if library is not None else None
             if request:
@@ -172,9 +272,13 @@ def collect_native_trajectory(policy,env_factory,*,task_id,initial_seed,sampling
                 native_done = bool(execution["done"])
                 actual_reward = execution.get("environment_reward",0.)
                 valid = not bool(execution["error"])
+                environment_info = {}
             else:
-                action = parse_action(text,policy.benchmark)
-                valid = (action["text"] in _available(env.action_schema)) if policy.benchmark=="alfworld" else not action.get("parser_invalid",False)
+                if method in PUBLISHED_RECIPES and policy.benchmark=="alfworld":
+                    action,valid = published_alfworld_action(text)
+                else:
+                    action = parse_action(text,policy.benchmark)
+                    valid = (action["text"] in _available(env.action_schema)) if policy.benchmark=="alfworld" else not action.get("parser_invalid",False)
                 started = clock()
                 result = env.step_native(action)
                 policy.record("environment","native.step",seconds=clock()-started,env_steps=1,
@@ -182,28 +286,24 @@ def collect_native_trajectory(policy,env_factory,*,task_id,initial_seed,sampling
                 physical += 1
                 returned,native_done = result.observation,result.done
                 actual_reward = float(result.reward)
-            step_id,segment_id = uuid.uuid4().hex,uuid.uuid4().hex
-            pure_ids = policy.encode(_pure(returned))
-            closure = (198,) if response and response[-1]==151645 else (151645,198)
-            user_header = (151644,)+policy.encode("user\n")
-            # External actor prefixes are independently templated author prompts.
-            # Each sampled row owns one exact response-only segment.
-            behavior_tokens = prompt+response
-            tokens = behavior_tokens
-            rsp = TokenSpan(segment_id,len(prompt),len(response),step_id)
-            obs = TokenSpan(segment_id,len(tokens)+len(closure)+len(user_header),len(pure_ids),step_id)
-            user = user_header+pure_ids+(151645,198,151644)+policy.encode("assistant\n")
-            turn = TurnBlock(step_id,response,closure,user,response+closure+user,
-                             len(response)+len(closure)+len(user_header),pure_ids)
-            tokens = behavior_tokens+closure+user
-            segment = SegmentRecord(segment_id,tokens,(rsp,),(obs,),len(behavior_tokens),len(behavior_tokens))
-            row = StepRecord(step_id,trajectory_id,index,segment_id,len(prompt),rsp,obs,response,old,pure_ids,
-                pure_ids or policy.encode("[Empty stdout]"),_pure(returned),returned,action,actual_reward,
-                bool(native_done or physical>=horizon or index+1==horizon),valid,
-                turn,segment_id,len(prompt),rsp,obs,tuple(policy.ledger.records[cost_start:]))
+                environment_info = dict(result.metadata)
+            next_actor_observation,next_anchor = _pure(returned),_pure(returned)
+            if graph_history is not None:
+                graph_history.update(action["text"],next_actor_observation)
+                next_actor_observation,next_anchor = graph_history.observation_and_anchor(next_actor_observation,
+                    environment_info["native_admissible_commands"])
+            if method in PUBLISHED_RECIPES:
+                environment_info.update(baseline_anchor=anchor,baseline_next_anchor=next_anchor,
+                                        baseline_state_method=method)
+            row,segment = _native_step_record(policy,trajectory_id=trajectory_id,index=index,prompt=prompt,
+                response=response,old=old,returned=returned,action=action,reward=actual_reward,
+                done=bool(native_done or physical>=horizon or index+1==horizon),valid=valid,
+                environment_info=environment_info,costs=policy.ledger.records[cost_start:])
             steps.append(row);segments.append(segment)
             history.append(({"role":"assistant","content":text},{"role":"user","content":returned}))
-            memory.append((_pure(observation),action.get("text",action.get("code",text))))
+            memory.append((actor_observation if method in PUBLISHED_RECIPES else _pure(observation),
+                           action.get("text",action.get("code",text))))
+            actor_observation,anchor = next_actor_observation,next_anchor
             observation = returned
             if native_done or physical>=horizon:
                 break
@@ -213,7 +313,8 @@ def collect_native_trajectory(policy,env_factory,*,task_id,initial_seed,sampling
         success = bool(metrics["success"])
         trajectory = TrajectoryRecord(trajectory_id,group_id,slot,task_id,policy.benchmark,initial_seed,sampling_seed,goal,
             policy.encode(goal),policy.encode(_pure(initial_raw)),pinned,tuple(steps),tuple(segments),tuple(segments),
-            success,metrics,tuple(policy.ledger.records[start_cost:]),2 if method in ("gigpo","bipace_q") else None)
+            success,metrics,tuple(policy.ledger.records[start_cost:]),
+            int(config["history"]) if method in PUBLISHED_RECIPES else 2 if method=="bipace_q" else None)
         if config.get("artifact_dir"):
             directory = Path(config["artifact_dir"])
             directory.mkdir(parents=True,exist_ok=True)
@@ -224,6 +325,9 @@ def collect_native_trajectory(policy,env_factory,*,task_id,initial_seed,sampling
 
 
 def collect_native_group(policy,env_factory,*,task_id,initial_seed,slot_seeds,group_id,method,config,library=None):
+    if method in PUBLISHED_RECIPES:
+        return _collect_published_group(policy,env_factory,task_id=task_id,initial_seed=initial_seed,
+                                        slot_seeds=slot_seeds,group_id=group_id,method=method,config=config)
     policy.ledger.begin_group(group_id)
     start = len(policy.ledger.records)
     trajectories = tuple(collect_native_trajectory(policy,env_factory,task_id=task_id,initial_seed=initial_seed,
@@ -232,15 +336,136 @@ def collect_native_group(policy,env_factory,*,task_id,initial_seed,slot_seeds,gr
     return GroupRecord(group_id,task_id,policy.benchmark,initial_seed,trajectories,tuple(policy.ledger.records[start:]))
 
 
-def baseline_advantages(policy,trajectories,method,*,config=None):
+def _collect_published_group(policy,env_factory,*,task_id,initial_seed,slot_seeds,group_id,method,config):
+    """Author prompts/credit with batched model work and concurrent native RPCs.
+
+    The adapters own their state and memory.  Sampling remains one on-policy
+    group with one independent generator per slot and no intermediate updates.
+    """
+    from .rollout import _parallel_requests, _raise_request_error, _reset_environment
+
+    config = {**published_recipe(method,policy.benchmark),**config}
+    seeds = tuple(slot_seeds)
+    if not seeds or len(set(seeds))!=len(seeds):
+        raise ValueError("Published rollout slots require distinct sampling seeds")
+    ledger = policy.ledger
+    ledger.begin_group(group_id)
+    start = len(ledger.records)
+    environments = [None for _ in seeds]
+    slots = []
+    trajectory_ids = [uuid.uuid4().hex for _ in seeds]
+    horizon = 50 if policy.benchmark=="alfworld" else 100
+    pool = ThreadPoolExecutor(max_workers=len(seeds),thread_name_prefix="published-environment")
+    try:
+        created = _parallel_requests(pool,[(slot,partial(env_factory,task_id,initial_seed,trajectory_ids[slot]),
+            {"task_id":task_id,"slot":slot}) for slot in range(len(seeds))],ledger,"native.create")
+        for slot,(request,_) in created.items():
+            if request.error is None:
+                environments[slot] = request.value
+        _raise_request_error(created)
+        resets = _parallel_requests(pool,[(slot,partial(_reset_environment,env,task_id,initial_seed),
+            {"task_id":task_id,"slot":slot}) for slot,env in enumerate(environments)],ledger,"native.reset")
+        _raise_request_error(resets)
+        for slot,seed in enumerate(seeds):
+            context,schema = resets[slot][0].value
+            raw,goal = str(context["observation"]),str(context["instruction"])
+            system = {"role":"system","content":str(schema["native_system_prompt"])}
+            pin = system,{"role":"user","content":json.dumps({"task":goal,"observation":raw},ensure_ascii=False)}
+            graph = GraphALFWorldHistory() if method=="graphgpo" and policy.benchmark=="alfworld" else None
+            actor,anchor = _pure(raw),_pure(raw)
+            if graph is not None:
+                actor,anchor = graph.observation_and_anchor(actor,_available(schema))
+            slots.append({"goal":goal,"initial_raw":raw,"pin":pin,"pinned":(),"graph":graph,
+                          "actor":actor,"anchor":anchor,"memory":[],"steps":[],"segments":[],"metrics":None,
+                          "generator":policy.new_generator(seed),"costs":[created[slot][1],resets[slot][1]]})
+        for index in range(horizon):
+            active = [slot for slot,item in enumerate(slots) if item["metrics"] is None]
+            if not active:
+                break
+            prompts = []
+            for slot in active:
+                item = slots[slot]
+                prompt = native_prompt(policy,item["pin"],[],{"role":"user","content":item["actor"]},method=method,
+                    config=config,memory=item["memory"],schema=environments[slot].action_schema,goal=item["goal"])
+                prompts.append(prompt)
+                if index==0:
+                    item["pinned"] = prompt
+            model_start = len(ledger.records)
+            samples = _sample_native_prompts(policy,prompts,[slots[slot]["generator"] for slot in active],
+                policy.max_new_tokens,role=method+".actor",temperature=float(config["temperature"]),top_p=float(config["top_p"]))
+            model_events = tuple(row.event_id for row in ledger.records[model_start:])
+            actions,valids,texts = {},{},{}
+            for slot,(response,_) in zip(active,samples,strict=True):
+                text = policy.tokenizer.decode(response,skip_special_tokens=True,clean_up_tokenization_spaces=False)
+                texts[slot] = text
+                if policy.benchmark=="alfworld":
+                    actions[slot],valids[slot] = published_alfworld_action(text)
+                else:
+                    actions[slot] = parse_action(text,policy.benchmark)
+                    valids[slot] = not actions[slot].get("parser_invalid",False)
+            stepped = _parallel_requests(pool,[(slot,partial(environments[slot].step_native,actions[slot]),
+                {"task_id":task_id,"slot":slot,"action":actions[slot]}) for slot in active],ledger,"native.step",env_steps=1)
+            _raise_request_error(stepped)
+            finished = []
+            for slot,prompt,(response,old) in zip(active,prompts,samples,strict=True):
+                item = slots[slot]
+                result,environment_cost = stepped[slot][0].value,stepped[slot][1]
+                raw = str(result.observation)
+                info = dict(result.metadata)
+                next_actor,next_anchor = _pure(raw),_pure(raw)
+                if item["graph"] is not None:
+                    item["graph"].update(actions[slot]["text"],next_actor)
+                    next_actor,next_anchor = item["graph"].observation_and_anchor(next_actor,info["native_admissible_commands"])
+                info.update(baseline_anchor=item["anchor"],baseline_next_anchor=next_anchor,baseline_state_method=method)
+                done = bool(result.done or index+1==horizon)
+                row,segment = _native_step_record(policy,trajectory_id=trajectory_ids[slot],index=index,prompt=prompt,
+                    response=response,old=old,returned=raw,action=actions[slot],reward=float(result.reward),done=done,
+                    valid=valids[slot],environment_info=info,costs=(environment_cost,),shared_cost_event_ids=model_events)
+                item["steps"].append(row)
+                item["segments"].append(segment)
+                item["costs"].append(environment_cost)
+                item["memory"].append((item["actor"],actions[slot].get("text",actions[slot].get("code",texts[slot]))))
+                item["actor"],item["anchor"] = next_actor,next_anchor
+                if done:
+                    finished.append(slot)
+            scoring = _parallel_requests(pool,[(slot,environments[slot].finalize_evaluation,
+                {"task_id":task_id,"slot":slot}) for slot in finished],ledger,"native.official_scoring")
+            _raise_request_error(scoring)
+            for slot,(request,cost) in scoring.items():
+                slots[slot]["metrics"] = dict(request.value)
+                slots[slot]["costs"].append(cost)
+        trajectories = []
+        for slot,item in enumerate(slots):
+            metrics = item["metrics"]
+            trajectory = TrajectoryRecord(trajectory_ids[slot],group_id,slot,task_id,policy.benchmark,initial_seed,
+                seeds[slot],item["goal"],policy.encode(item["goal"]),policy.encode(_pure(item["initial_raw"])),
+                item["pinned"],tuple(item["steps"]),tuple(item["segments"]),tuple(item["segments"]),bool(metrics["success"]),
+                metrics,tuple(item["costs"]),int(config["history"]))
+            if config.get("artifact_dir"):
+                directory = Path(config["artifact_dir"])
+                directory.mkdir(parents=True,exist_ok=True)
+                torch.save(trajectory,directory/(trajectory.trajectory_id+".pt"))
+            trajectories.append(trajectory)
+        return GroupRecord(group_id,task_id,policy.benchmark,initial_seed,tuple(trajectories),tuple(ledger.records[start:]))
+    finally:
+        pool.shutdown(wait=True)
+        for environment in environments:
+            if environment is not None:
+                environment.close()
+
+
+def baseline_advantages(policy,trajectories,method,*,config=None,credit_row_ids=None):
     config = {} if config is None else config
-    shared = method in SHARED_BASELINES
-    recipe_method = SHARED_BASELINES.get(method,method)
-    if recipe_method not in ("gigpo","bipace_q"):
+    if method in PUBLISHED_RECIPES:
+        return published_advantages(trajectories,method,config=config,credit_row_ids=credit_row_ids)
+    # BiPACE is retained only as a historical preprint implementation.  It is
+    # absent from the formal published-comparison registry and experiment matrix.
+    recipe_method = method
+    if recipe_method!="bipace_q":
         raise ValueError(f"No PPO advantage recipe for {method!r}")
-    gamma = float(config.get("gamma",1. if shared else .95))
+    gamma = float(config.get("gamma",.95))
     scale = float(config.get("reward_scale",10.))
-    syntax_penalty = 0. if shared else float(config.get("syntax_reward_penalty",.1))
+    syntax_penalty = float(config.get("syntax_reward_penalty",.1))
     groups,episode,discounted,anchors,keys = {},{},{},{},{}
     for trajectory in trajectories:
         groups.setdefault(trajectory.group_id,[]).append(trajectory)

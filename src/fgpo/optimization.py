@@ -12,6 +12,50 @@ import math
 from typing import Any
 
 import torch
+from torch.autograd.function import once_differentiable
+
+
+class _LogProbabilityEntropy(torch.autograd.Function):
+    """First-order response statistics without retaining a softmax loss graph.
+
+    With p=softmax(z), d log p_y / dz = onehot(y)-p and
+    d H / dz = -p*(log p+H). Only logits and row-sized statistics are saved;
+    probabilities are reconstructed once when their combined adjoint is used:
+    g_logp*(onehot(y)-p) - g_H*p*(log p+H), where g_* are the upstream
+    derivatives of the normalized loss. The head supplies FP32 logits.
+    """
+
+    @staticmethod
+    def forward(ctx, logits, targets):
+        log_z = torch.logsumexp(logits, dim=-1)
+        log_probability = logits.gather(1, targets[:, None]).squeeze(1)-log_z
+        probabilities = (logits-log_z[:, None]).exp_()
+        entropy = log_z-torch.einsum("ij,ij->i", probabilities, logits)
+        ctx.save_for_backward(logits, log_z, entropy, targets)
+        ctx.set_materialize_grads(False)
+        return log_probability, entropy
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, grad_log_probability, grad_entropy):
+        if grad_log_probability is None and grad_entropy is None:
+            return None, None
+        logits, log_z, entropy, targets = ctx.saved_tensors
+        log_probabilities = logits-log_z[:, None]
+        if grad_entropy is not None:
+            gradient = log_probabilities.exp()
+            # g_H * dH/dz plus the dense -g_logp*p term. These two
+            # temporaries are private to backward; saved logits stay intact.
+            log_probabilities.add_(entropy[:, None]).mul_(-grad_entropy[:, None])
+            if grad_log_probability is not None:
+                log_probabilities.sub_(grad_log_probability[:, None])
+            gradient.mul_(log_probabilities)
+        else:
+            gradient = log_probabilities.exp_().mul_(-grad_log_probability[:, None])
+        del log_probabilities
+        if grad_log_probability is not None:
+            gradient.scatter_add_(1, targets[:, None], grad_log_probability[:, None])
+        return gradient, None
 
 
 @dataclass(frozen=True)
@@ -32,8 +76,6 @@ class _TransferSlot:
         self.pin_memory = bool(pin_memory)
         self.stream = torch.cuda.Stream(device=device)
         self.downloaded = torch.cuda.Event()
-        self.uploaded = torch.cuda.Event()
-        self.has_upload = False
         self.host_grad = torch.empty(capacity, dtype=dtype, device="cpu", pin_memory=self.pin_memory)
         self.host_weight = torch.empty(capacity, dtype=dtype, device="cpu", pin_memory=self.pin_memory)
         with torch.cuda.stream(self.stream):
@@ -41,11 +83,10 @@ class _TransferSlot:
             self.device_weight = torch.empty(capacity, dtype=dtype, device=device)
 
     def download(self, entries, fresh):
-        # A previous H2D copy may still be reading host_weight.  A stream wait
-        # alone would not protect that host storage from the next CPU update.
-        if self.has_upload:
-            self.uploaded.synchronize()
-            self.has_upload = False
+        # Reuse is ordered on this slot's stream: prior H2D/writeback -> next
+        # D2H -> downloaded event. The CPU waits for that final event before
+        # reading gradients or overwriting host_weight, so no earlier host
+        # wait is needed while the other slot's CPU update can proceed.
         self.entries = entries
         self.length = sum(entry.size for entry in entries)
         producer = torch.cuda.current_stream(self.device)
@@ -71,13 +112,10 @@ class _TransferSlot:
                 section = slice(entry.offset, entry.offset + entry.size)
                 destination = slice(entry.start, entry.start + entry.size)
                 entry.parameter.view(-1)[destination].copy_(self.device_weight[section])
-            self.uploaded.record(self.stream)
-        self.has_upload = True
 
     def synchronize(self):
         # Completion also makes state_dict/save_model and the next forward safe.
         self.stream.synchronize()
-        self.has_upload = False
 
 
 class OffloadedAdamW:
@@ -85,7 +123,9 @@ class OffloadedAdamW:
                  bucket_mib=64, pin_memory=True):
         self.params = [(name,p) for name,p in model.named_parameters() if p.requires_grad]
         self.lr, self.weight_decay, self.betas, self.eps = float(lr),float(weight_decay),tuple(betas),float(eps)
-        if self.lr < 0 or self.weight_decay < 0 or self.eps <= 0 or len(self.betas) != 2 or not all(0 <= b < 1 for b in self.betas):
+        if (not all(math.isfinite(value) for value in (self.lr,self.weight_decay,self.eps,*self.betas))
+            or self.lr < 0 or self.weight_decay < 0 or self.eps <= 0
+            or len(self.betas) != 2 or not all(0 <= b < 1 for b in self.betas)):
             raise ValueError("Invalid AdamW hyperparameters")
         self.bucket_bytes = int(float(bucket_mib) * 1024 * 1024)
         if self.bucket_bytes < 1:
@@ -139,9 +179,10 @@ class OffloadedAdamW:
                     for entry in entries:
                         part = slice(entry.start, entry.start + entry.size)
                         values = entry.parameter.detach().view(-1)[part]
-                        gradient = entry.parameter.grad.detach().view(-1)[part].float().mul(scale)
+                        gradient = entry.parameter.grad.detach().view(-1)[part].to(dtype=torch.float32,copy=True).mul_(scale)
                         master = self._update_slice(entry, gradient, values if entry.name in fresh else None)
                         entry.parameter.view(-1)[part].copy_(master)
+                        del gradient
                 continue
             capacity = max(sum(entry.size for entry in bucket) for bucket in buckets)
             key = (device, dtype)
@@ -161,12 +202,13 @@ class OffloadedAdamW:
                     slot.downloaded.synchronize()
                     # CPU kernels use PyTorch's configured thread pool.  Only
                     # this bounded bucket is converted to fp32 for arithmetic.
-                    gradients = slot.host_grad[:slot.length].float().mul(scale)
+                    gradients = slot.host_grad[:slot.length].float().mul_(scale)
                     for entry in entries:
                         section = slice(entry.offset, entry.offset + entry.size)
                         initial = slot.host_weight[section] if entry.name in fresh else None
                         master = self._update_slice(entry, gradients[section], initial)
                         slot.host_weight[section].copy_(master)
+                    del gradients
                     slot.upload()
                     following = index + len(slots)
                     if following < len(buckets):
@@ -279,13 +321,21 @@ class UpdateCursor:
 def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                minibatch_rows=256, chunk_tokens=64, cursor=None, checkpoint_callback=None,
                constant_denominator=True, loss_normalization="token", clip_ratio=.2,
-               dual_clip=3., entropy_coef=.001, kl_coef=.01, max_grad_norm=1.):
+               dual_clip=3., entropy_coef=.001, kl_coef=.01, max_grad_norm=1., published_plan=None):
     """PPO with one live vocabulary chunk and one backbone backward per segment.
 
     ``trajectory`` sums all response-token scores along each trajectory and
     divides by a fixed trajectory count; it does not divide by trajectory
     length.  ``token`` preserves the previous token-normalized recipe.  A
     trajectory split across row minibatches keeps the same round denominator.
+    Only the selected responses' causal prefix is forwarded. The gathered
+    response states retain the one trunk graph; their detached chunks carry
+    vocabulary gradients until a single gather/backbone backward.
+
+    A published plan preserves the released virtual-rank/microbatch weighting
+    and optimizer boundaries. Its per-token coefficient already includes the
+    fixed gradient accumulation and rank average; repeated copies of one row
+    within one update are summed before a forward, never across updates.
     """
     if minibatch_rows < 1 or chunk_tokens < 1:
         raise ValueError("PPO minibatch and vocabulary chunk sizes must be positive")
@@ -299,10 +349,20 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
     rows = [step for trajectory in trajectories for step in trajectory.steps]
     if not rows:
         raise ValueError("PPO requires real sampled response rows")
-    minibatches = [rows[i:i+minibatch_rows] for i in range(0,len(rows),minibatch_rows)]
+    if published_plan is not None:
+        if constant_denominator or loss_normalization != "token":
+            raise ValueError("Published source weights require their token-mean update definition")
+        indexed = {row.step_id:row for row in rows}
+        coefficients = [dict(batch) for batch in published_plan["minibatches"]]
+        minibatches = [[indexed[step_id] for step_id in batch] for batch in coefficients]
+        if not minibatches or any(not batch for batch in minibatches):
+            raise ValueError("A published optimizer step requires actual response rows")
+    else:
+        coefficients = None
+        minibatches = [rows[i:i+minibatch_rows] for i in range(0,len(rows),minibatch_rows)]
     round_mass = (len(trajectories) if loss_normalization == "trajectory" else
                   sum(len(row.response_ids) for row in rows))
-    expected_denominator = round_mass / len(minibatches)
+    expected_denominator = 1. if published_plan is not None else round_mass / len(minibatches)
     if not cursor.denominator:
         cursor.denominator = expected_denominator
     elif not math.isclose(cursor.denominator, expected_denominator, rel_tol=1e-12, abs_tol=1e-12):
@@ -311,6 +371,10 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
     if saved_normalization != loss_normalization:
         raise ValueError("PPO resume loss normalization changed")
     cursor.metrics["loss_normalization"] = loss_normalization
+    weighting = "published_virtual_microbatch_mean" if published_plan is not None else "round_trajectory" if constant_denominator else "minibatch_token_mean"
+    if cursor.metrics.get("loss_weighting",weighting) != weighting:
+        raise ValueError("PPO resume loss weighting changed")
+    cursor.metrics["loss_weighting"] = weighting
     segments = {s.segment_id:s for t in trajectories for s in t.segments}
     policy.model.train()
     try:
@@ -320,42 +384,55 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
             for row in batch:
                 grouped.setdefault(row.segment_id,[]).append(row)
             items = list(grouped.items())
-            denominator = cursor.denominator if constant_denominator else sum(len(row.response_ids) for row in batch)
+            denominator = (1. if coefficients is not None else cursor.denominator if constant_denominator
+                           else sum(len(row.response_ids) for row in batch))
             if cursor.segment == 0 and not cursor.optimizer_ready:
                 optimizer.zero_grad()
             while cursor.segment < len(items):
                 segment_id,selected = items[cursor.segment]
                 segment = segments[segment_id]
-                stop = segment.behavior_closed_length or len(segment.token_ids)
-                with policy.phase("ppo.forward"):
-                    hidden,_ = policy.packed_segment_hidden(segment.token_ids[:stop],hidden_layer=None,role="ppo.current_segment")
-                positions, targets, old, ref, advantage = [], [], [], [], []
+                closed = segment.behavior_closed_length or len(segment.token_ids)
+                positions, targets, old, ref, advantage, weights = [], [], [], [], [], []
                 for row in selected:
                     span = row.response_span
                     row_ref = reference_data.steps[row.step_id].token_logprobs
-                    if span.length != len(row.response_ids) or span.length != len(row.old_token_logprobs) or span.length != len(row_ref):
+                    if (span.segment_id != segment_id or span.start < 1 or span.length < 1
+                        or span.stop > closed or span.length != len(row.response_ids)
+                        or span.length != len(row.old_token_logprobs) or span.length != len(row_ref)):
                         raise ValueError("PPO response IDs and saved behavior/reference scores must align")
                     positions.extend(range(span.start-1, span.start-1+span.length))
                     targets.extend(row.response_ids)
                     old.extend(row.old_token_logprobs)
                     ref.extend(row_ref)
                     advantage.extend([float(advantages[row.step_id])] * span.length)
+                    if coefficients is not None:
+                        weights.extend([coefficients[cursor.minibatch][row.step_id]] * span.length)
+                # Future tokens in this packed segment cannot affect a
+                # selected response under the causal mask. Retain every
+                # preceding token and its original position, stopping only
+                # after the last target owned by this minibatch.
+                stop = max(row.response_span.stop for row in selected)
+                with policy.phase("ppo.forward"):
+                    hidden,_ = policy.packed_segment_hidden(segment.token_ids[:stop],hidden_layer=None,role="ppo.current_segment")
+                    position_ids = torch.tensor(positions, dtype=torch.long, device=hidden.device)
+                    response_hidden = hidden[0].index_select(0,position_ids)
+                    # IndexSelectBackward retains the scatter indices and
+                    # input shape, not this full prompt/observation output.
+                    del hidden,position_ids
                 output_device = policy.model.get_output_embeddings().weight.device
-                position_ids = torch.tensor(positions, dtype=torch.long, device=hidden.device)
                 target_ids = torch.tensor(targets, dtype=torch.long, device=output_device)
                 old_scores = torch.tensor(old, dtype=torch.float32, device=output_device)
                 ref_scores = torch.tensor(ref, dtype=torch.float32, device=output_device)
                 advantage_scores = torch.tensor(advantage, dtype=torch.float32, device=output_device)
-                hidden_gradient = torch.zeros_like(hidden)
+                loss_weights = torch.tensor(weights,dtype=torch.float32,device=output_device) if coefficients is not None else None
+                response_gradient = torch.empty_like(response_hidden) if response_hidden.requires_grad else None
                 metrics = torch.zeros(3, dtype=torch.float64, device=output_device)
                 with policy.phase("ppo.backward"):
                     for start in range(0, len(positions), chunk_tokens):
                         end = min(start+chunk_tokens, len(positions))
-                        indices = position_ids[start:end]
-                        states = hidden[0].index_select(0, indices).detach().requires_grad_(True)
+                        states = response_hidden[start:end].detach().requires_grad_(response_gradient is not None)
                         logits = policy.head(states, role="ppo.head")
-                        log_z = torch.logsumexp(logits, dim=-1)
-                        lp = logits.gather(-1, target_ids[start:end, None]).squeeze(-1)-log_z
+                        lp,entropy = _LogProbabilityEntropy.apply(logits,target_ids[start:end])
                         a = advantage_scores[start:end]
                         # Above this bound both branches of the dual-clipped
                         # objective are already constant.  Capping the exp
@@ -364,27 +441,39 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                         ratio = (lp-old_scores[start:end]).clamp(max=ratio_limit).exp()
                         dual = torch.maximum(-a*ratio, -a*ratio.clamp(1-clip_ratio, 1+clip_ratio))
                         dual = torch.where(a < 0, torch.minimum(dual, -dual_clip*a), dual)
-                        probabilities = torch.softmax(logits, dim=-1)
-                        entropy = log_z-torch.einsum("ij,ij->i", probabilities, logits)
                         d = ref_scores[start:end]-lp
                         # The exact capped k3 estimator equals 10 outside
                         # this interval; compute only finite exponentials.
                         bounded_d = d.clamp(min=-11., max=math.log(22.))
                         kl = (bounded_d.expm1()-bounded_d).clamp(min=0., max=10.)
-                        loss = (dual-entropy_coef*entropy+kl_coef*kl).sum()/denominator
-                        metrics.add_(torch.stack((loss.detach(), entropy.detach().sum()/denominator,
-                                                  kl.detach().sum()/denominator)).double())
+                        objective = dual+kl_coef*kl
+                        if entropy_coef:
+                            objective = objective-entropy_coef*entropy
+                        # This small scalar graph supplies the exact clipped
+                        # PPO/k3 coefficient g_logp and entropy's coefficient
+                        # (trajectory denominator or published row weight)
+                        # to the combined vocabulary adjoint above.
+                        if loss_weights is None:
+                            loss = objective.sum()/denominator
+                            entropy_metric,kl_metric = entropy.detach().sum()/denominator,kl.detach().sum()/denominator
+                        else:
+                            weight = loss_weights[start:end]
+                            loss = (objective*weight).sum()
+                            entropy_metric,kl_metric = (entropy.detach()*weight).sum(),(kl.detach()*weight).sum()
+                        metrics.add_(torch.stack((loss.detach(),entropy_metric,kl_metric)).double())
                         # Head parameters (including a tied embedding) get
                         # their usual gradient.  The detached leaf captures
                         # dL/dH, so this backward cannot traverse the trunk.
                         loss.backward()
-                        hidden_gradient[0].index_add_(0, indices, states.grad)
-                        del states, logits, log_z, lp, ratio, dual, probabilities, entropy, d, bounded_d, kl, loss
-                    if hidden.requires_grad:
-                        hidden.backward(hidden_gradient)
+                        if response_gradient is not None:
+                            response_gradient[start:end].copy_(states.grad)
+                        del states, logits, lp, ratio, dual, entropy, d, bounded_d, kl, objective, loss
+                    if response_gradient is not None:
+                        response_hidden.backward(response_gradient)
+                del response_hidden,response_gradient
                 for name, value in zip(("loss", "entropy", "reference_kl"), metrics.cpu().tolist()):
                     cursor.metrics[name] += value
-                del hidden, hidden_gradient, position_ids, target_ids, old_scores, ref_scores, advantage_scores, metrics
+                del target_ids, old_scores, ref_scores, advantage_scores, loss_weights, metrics
                 cursor.segment += 1
                 if checkpoint_callback is not None:
                     checkpoint_callback(cursor)

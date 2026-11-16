@@ -5,11 +5,13 @@ import argparse
 import json
 import os
 from pathlib import Path
+from statistics import fmean, stdev
 
 from .envs import make_env, EnvironmentPool
 from .metrics import official_summary
-from .protocol import (METHODS, SHARED_FROZEN,
-                       require_protocol, require_training_identity)
+from .baseline_specs import PUBLISHED_SOURCES
+from .protocol import (METHODS, METHOD_ROLES, SUITE_METHODS, SUITE_BENCHMARKS,
+                       resolve_method_config, require_protocol, require_training_identity)
 
 
 def write_json(path, value, *, durable=False):
@@ -66,8 +68,8 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
     compute_physical, compute_logical = compute_allocation(gpu_ids, model_gpu_ids)
     from .engine import Engine
     output = Path(output_dir)
-    cell_config = dict(config, method=method, benchmark=benchmark, seed=int(seed))
-    cell_config.update(config['method_configs'][method])
+    cell_config = resolve_method_config(dict(config,method=method,benchmark=benchmark,seed=int(seed)))
+    require_protocol(cell_config)
     cell_config.update(gpu_ids=logical_ids, physical_gpu_ids=list(gpu_ids),
                        logical_gpu_ids=logical_ids, cuda_visible_devices=visible_mask,
                        allocated_physical_gpu_ids=list(gpu_ids), allocated_logical_gpu_ids=logical_ids,
@@ -81,9 +83,6 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
         cell_config['gpu_free_memory_gib'] = {
             logical: physical_memory[physical] if physical in physical_memory else physical_memory[str(physical)]
             for logical, physical in enumerate(gpu_ids)}
-    output_limits = cell_config.pop('output_tokens_by_benchmark')
-    cell_config['output_tokens'] = output_limits[benchmark]
-    cell_config['skill_induction_tasks'] = config['skill_induction_tasks'][benchmark]
     resume_from = None
     if output.exists():
         if not resume:
@@ -112,7 +111,7 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
         write_json(output / 'config.json', cell_config)
         catalog = make_env(cell_config, benchmark, output / 'environments/catalog', seed=seed)
         try:
-            train_tasks = catalog.list_tasks('train') if method not in ('native_qwen',SHARED_FROZEN) else []
+            train_tasks = catalog.list_tasks('train')
             evaluation_tasks = {split: catalog.list_tasks(split)
                                 for split in config['evaluation_splits'][benchmark]}
         finally:
@@ -124,14 +123,11 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
     engine = None
     try:
         engine = Engine(cell_config, output, resume_from=resume_from)
-        # The method's own window/workflow is executed inside this single call;
-        # offline skill induction is not wrapped in an outer round loop.
+        # Each method executes its declared complete recipe once per study cell.
         training_path = output / 'training_summary.json'
         training = json.loads(training_path.read_text()) if resume_from and training_path.is_file() else None
         if training is None or training.get('status') != 'complete':
-            training = engine.train(train_tasks, env_factory) if method not in ('native_qwen',SHARED_FROZEN) else {
-                'status': 'complete', 'protocol':config['protocol'], 'method': method,
-                'trained': False, 'initialization': 'frozen_base_qwen'}
+            training = engine.train(train_tasks, env_factory)
         checkpoint = engine.save_checkpoint(output / 'checkpoint')
         write_json(training_path, training)
         if training.get('status') == 'interrupted':
@@ -165,10 +161,13 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
             scores[split] = summary
         completed_checkpoint = engine.prepare_completed_checkpoint(training, scores)
         result = {'status': 'complete', 'protocol':config['protocol'], 'method': method, 'benchmark': benchmark, 'seed': seed,
+                  'method_role':METHOD_ROLES[method], 'suite':config['suite'],
+                  'published_source':PUBLISHED_SOURCES.get(method),
                   'model_path': cell_config['model_path'],
                   'checkpoint': completed_checkpoint['path'], 'completed_checkpoint': completed_checkpoint,
                   'training_resume_supported': False,
                   'training': training, 'evaluation': scores, 'costs': engine.ledger.snapshot(),
+                  'costs_scope':'complete_cell_including_official_evaluation_and_final_model_export',
                   'environment_pool':env_factory.statistics()}
         write_json(output / 'cell_summary.json', result, durable=True)
         engine.reclaim_completed_checkpoint(output / 'cell_summary.json')
@@ -181,10 +180,52 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
                 engine.close()
 
 
+def aggregate_cells(cells):
+    """Seed statistics from completed official splits, with explicit seed count."""
+    grouped = {}
+    for cell in cells:
+        if cell.get('status') != 'complete':
+            continue
+        for split, scores in cell['evaluation'].items():
+            if not scores['dataset_complete']:
+                continue
+            for metric in ('SR','TGC','SGC'):
+                if scores.get(metric) is not None:
+                    key = (cell['benchmark'],cell['method'],split,metric)
+                    grouped.setdefault(key,[]).append((cell['seed'],scores[metric]))
+    return [{'benchmark':benchmark,'method':method,'method_role':METHOD_ROLES[method],
+             'split':split,'metric':metric,'mean':fmean(value for _,value in values),
+             'sample_std':stdev(value for _,value in values) if len(values)>1 else None,
+             'seeds':sorted(seed for seed,_ in values),'seed_count':len(values),'unit':'percent'}
+            for (benchmark,method,split,metric),values in sorted(grouped.items())]
+
+
+def reused_fgpo_results(study_root, cells, config):
+    """Read main-comparison receipts for the ablation table; never train them."""
+    references,completed = [],[]
+    for benchmark,seed in sorted({(cell['benchmark'],cell['seed']) for cell in cells}):
+        relative = Path('..')/'comparison'/benchmark/'fgpo'/f'seed-{seed}'/'cell_summary.json'
+        path = Path(study_root)/'ablation'/relative
+        entry = {'method':'fgpo','benchmark':benchmark,'seed':seed,'path':str(relative),
+                 'path_base':'study_summary_directory','reuse':'main_comparison_no_additional_training',
+                 'status':'pending_main_comparison'}
+        if path.is_file():
+            reference = json.loads(path.read_text())
+            expected = dict(config,method='fgpo',benchmark=benchmark,seed=seed)
+            require_identity(reference,expected)
+            if reference.get('status') == 'complete':
+                entry.update(status='complete',evaluation=reference['evaluation'])
+                completed.append(reference)
+        references.append(entry)
+    return references,aggregate_cells(completed)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--suite', choices=tuple(SUITE_METHODS), default='comparison',
+                        help='Published comparison or own ALFWorld ablations; stored separately.')
     parser.add_argument('--methods', nargs='+', choices=METHODS)
     parser.add_argument('--benchmarks', nargs='+', choices=('alfworld', 'appworld'))
     parser.add_argument('--seeds', nargs='+', type=int)
@@ -196,22 +237,41 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config = json.loads(args.config.read_text())
     require_protocol(config)
+    plan = config['experiment_suites'][args.suite]
+    methods = args.methods if args.methods is not None else plan['methods']
+    benchmarks = args.benchmarks if args.benchmarks is not None else plan['benchmarks']
+    seeds = args.seeds if args.seeds is not None else config['seeds']
+    if (not methods or not benchmarks or not seeds
+            or not set(methods).issubset(set(plan['methods']) & set(SUITE_METHODS[args.suite]))
+            or not set(benchmarks).issubset(set(plan['benchmarks']) & set(SUITE_BENCHMARKS[args.suite]))
+            or not set(seeds).issubset(config['seeds'])):
+        raise ValueError('CLI selection must be a subset of the declared claim-scoped suite')
+    if any(len(values) != len(set(values)) for values in (methods,benchmarks,seeds)):
+        raise ValueError('Select each method, benchmark and seed only once')
+    config = dict(config,suite=args.suite,methods=list(methods),benchmarks=list(benchmarks))
+    require_protocol(config)
     os.environ['PYTHONPATH'] = str(Path(__file__).resolve().parents[1])
     isolate_gpus(args.gpu, config['excluded_gpu_ids'])
     compute_allocation(args.gpu, args.model_gpu)
+    suite_dir = args.output_dir / args.suite
     if args.resume:
-        if not args.output_dir.is_dir():
-            raise FileNotFoundError('Explicit --resume requires an existing study directory.')
+        if not suite_dir.is_dir():
+            raise FileNotFoundError('Explicit --resume requires the existing selected suite directory.')
     else:
-        args.output_dir.mkdir(parents=True, exist_ok=False)
-    study_path = args.output_dir / 'study_summary.json'
+        suite_dir.mkdir(parents=True, exist_ok=False)
+    study_path = suite_dir / 'study_summary.json'
     cells = json.loads(study_path.read_text())['cells'] if args.resume and study_path.is_file() else []
-    for benchmark in args.benchmarks if args.benchmarks is not None else config['benchmarks']:
-        for method in args.methods if args.methods is not None else config['methods']:
-            for seed in args.seeds if args.seeds is not None else config['seeds']:
-                output = args.output_dir / benchmark / method / f'seed-{seed}'
+    if any(saved['protocol'] != config['protocol'] or saved['method'] not in SUITE_METHODS[args.suite]
+           or saved['benchmark'] not in SUITE_BENCHMARKS[args.suite] for saved in cells):
+        raise ValueError('Existing suite summary belongs to another experiment definition')
+    for benchmark in benchmarks:
+        for method in methods:
+            for seed in seeds:
+                output = suite_dir / benchmark / method / f'seed-{seed}'
                 cell = run_cell(config, output, method=method, benchmark=benchmark,
-                                seed=seed, gpu_ids=args.gpu, model_gpu_ids=args.model_gpu, resume=args.resume)
+                                seed=seed, gpu_ids=args.gpu, model_gpu_ids=args.model_gpu,
+                                resume=args.resume and output.exists())
+                cell.update(method_role=METHOD_ROLES[method],suite=args.suite)
                 position = next((index for index, saved in enumerate(cells)
                                  if (saved['method'], saved['benchmark'], saved['seed'])
                                  == (method, benchmark, seed)), None)
@@ -219,8 +279,12 @@ def main(argv=None):
                     cells.append(cell)
                 else:
                     cells[position] = cell
+                references,reference_aggregates = (reused_fgpo_results(args.output_dir,cells,config)
+                    if args.suite=='ablation' else ([],[]))
                 write_json(study_path, {
-                    'protocol': config['protocol'], 'cells': cells,
+                    'protocol': config['protocol'], 'suite':args.suite,'experiment_plan':plan,
+                    'cells': cells,'aggregates':aggregate_cells(cells),
+                    'reference_cells':references,'reference_aggregates':reference_aggregates,
                     'design': 'docs/fgpo_design_and_derivation.md'})
                 if cell['status'] == 'interrupted':
                     return 130

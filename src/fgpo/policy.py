@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import math
 import time
 from typing import Any, Mapping, Sequence
 
@@ -126,6 +127,7 @@ class CausalPolicy(nn.Module):
             raise ValueError("Cache and representation batch budgets must be positive")
         self._phase_depth = 0
         self.eos_token_ids = (151645, 151643)
+        self.sampling_temperature = 1.
         self._reference_active = False
         self.metadata = {"base_model": model_path, "adaptation": adaptation, "dtype": "bfloat16",
                          "compute_logical_gpu_ids":list(self.gpu_ids),
@@ -144,6 +146,17 @@ class CausalPolicy(nn.Module):
     @property
     def base(self):
         return self.model.get_base_model() if self.adaptation else self.model
+
+    @property
+    def sampling_temperature(self):
+        return self._sampling_temperature
+
+    @sampling_temperature.setter
+    def sampling_temperature(self, value):
+        value = float(value)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("Sampling temperature must be finite and positive")
+        self._sampling_temperature = value
 
     def synchronize(self):
         for gpu in self.gpu_ids:
@@ -211,7 +224,7 @@ class CausalPolicy(nn.Module):
 
     def body(self, input_ids, *, attention_mask=None, position_ids=None, cache=None,
              cache_position=None, use_cache=False, hidden_layer=None, role="forward", teacher_forced=False,
-             actual_tokens=None, logical_length=None, stop_at_hidden_layer=False):
+             actual_tokens=None, logical_length=None, stop_at_hidden_layer=False, hidden_positions=None):
         ids = torch.as_tensor(input_ids, dtype=torch.long, device=self.device)
         if ids.ndim == 1:
             ids = ids.unsqueeze(0)
@@ -240,6 +253,8 @@ class CausalPolicy(nn.Module):
             actual_tokens = int(mask[:, -ids.shape[1]:].sum())
         if stop_at_hidden_layer and (hidden_layer is None or use_cache or torch.is_grad_enabled()):
             raise ValueError("Layer early exit is restricted to no-grad, uncached representation forwards")
+        if hidden_positions is not None and hidden_layer is None:
+            raise ValueError("Selected representation positions require an intermediate layer")
         captures = []
         hook = None
         if hidden_layer is not None:
@@ -248,7 +263,11 @@ class CausalPolicy(nn.Module):
             if not 0 <= index < len(layers):
                 raise ValueError("Representation layer is outside the model")
             def capture(_module, _args, output):
-                captures.append(output[0] if isinstance(output, tuple) else output)
+                representation = output[0] if isinstance(output, tuple) else output
+                if hidden_positions is not None:
+                    positions = torch.as_tensor(hidden_positions, dtype=torch.long, device=representation.device)
+                    representation = representation.index_select(1, positions)
+                captures.append(representation)
                 if stop_at_hidden_layer:
                     raise _LayerCaptured
             hook = layers[index].register_forward_hook(capture)
@@ -277,8 +296,17 @@ class CausalPolicy(nn.Module):
                                  "padded_compute_tokens": ids.numel(), "use_cache": use_cache,
                                  "executed_decoder_layers": index + 1 if stop_at_hidden_layer else len(self.base.model.layers)})
 
-    def packed_segment_hidden(self, token_ids, *, hidden_layer=-8, role="packed_segment"):
-        return self.body(tuple(token_ids)[:-1], hidden_layer=hidden_layer, role=role)[:2]
+    def packed_segment_hidden(self, token_ids, *, hidden_layer=-8, role="packed_segment",
+                              hidden_positions=None, stop_at_hidden_layer=False):
+        """Score causal tokens, optionally retaining only requested layer positions.
+
+        ``hidden_positions`` selects sequence positions in the intermediate
+        representation, without changing the full final hidden states used
+        for response scoring. Representation-only callers may exit at that
+        layer; both returned tensors then contain the selected positions.
+        """
+        return self.body(tuple(token_ids)[:-1], hidden_layer=hidden_layer, role=role,
+                         hidden_positions=hidden_positions, stop_at_hidden_layer=stop_at_hidden_layer)[:2]
 
     @torch.no_grad()
     def observation_embeddings(self, rows, *, role="reference.observation_embedding", layer=-8):
@@ -318,7 +346,8 @@ class CausalPolicy(nn.Module):
 
     @torch.no_grad()
     def prefill_root(self, token_ids, *, role="rollout.root"):
-        self.model.eval()
+        if self.model.training:
+            self.model.eval()
         ids = tuple(token_ids)
         if not ids:
             raise ValueError("A causal root needs at least one prompt token")
@@ -329,6 +358,37 @@ class CausalPolicy(nn.Module):
         logits = self.head(hidden[:, -1], role=role+".head")
         return KVState(cache, torch.ones((1,len(ids)), dtype=torch.bool, device=self.device),
                        logits, (len(ids),), (((0, len(ids)),),))
+
+    @torch.no_grad()
+    def prefill_batch(self, prompts, *, role="rollout.batch_root"):
+        """Prefill complete independent prompts with explicit right padding.
+
+        Each row keeps its own logical RoPE positions and last real-token
+        distribution. Padding is masked throughout subsequent cache appends;
+        prompt tokens are never truncated to form a batch.
+        """
+        if self.model.training:
+            self.model.eval()
+        prompts = tuple(tuple(prompt) for prompt in prompts)
+        lengths = tuple(len(prompt) for prompt in prompts)
+        if not lengths or not all(lengths):
+            raise ValueError("A batched causal prefill requires nonempty prompts")
+        width = max(lengths)
+        if width > self.max_context_tokens:
+            raise ValueError("A complete prompt exceeds the logical context capacity")
+        ids = torch.tensor([prompt + (self.tokenizer.pad_token_id,) * (width - len(prompt))
+                            for prompt in prompts], dtype=torch.long, device=self.device)
+        counts = torch.tensor(lengths, dtype=torch.long, device=self.device)
+        valid = torch.arange(width, device=self.device)[None, :] < counts[:, None]
+        cache = ArenaCache(len(self.base.model.layers), initial_capacity=self.cache_initial_capacity,
+                           growth_limit=self.max_context_tokens)
+        hidden, _, cache = self.body(ids, attention_mask=valid, cache=cache, use_cache=True, role=role,
+                                     actual_tokens=sum(lengths), logical_length=width)
+        row_indices = torch.arange(len(prompts), device=hidden.device)
+        last = counts.to(hidden.device) - 1
+        logits = self.head(hidden[row_indices, last], role=role+".head")
+        spans = tuple(((0, length),) for length in lengths)
+        return KVState(cache, valid, logits, lengths, spans)
 
     def cache_tensors(self, cache):
         return [(entry[0],entry[1]) for entry in cache]
@@ -407,7 +467,9 @@ class CausalPolicy(nn.Module):
 
     @torch.no_grad()
     def append_cache(self, state: KVState, rows: Sequence[Sequence[int]], *, role="rollout.increment"):
-        self.model.eval()
+        """Extend exclusively owned KV storage and transfer it to the result."""
+        if self.model.training:
+            self.model.eval()
         lengths = [len(row) for row in rows]
         if len(lengths) != len(state.lengths):
             raise ValueError("Cache append rows must match the owned trajectory slots")
@@ -431,13 +493,20 @@ class CausalPolicy(nn.Module):
         hidden,_,cache = self.body(ids,attention_mask=mask,position_ids=positions,cache=state.cache,
             cache_position=torch.arange(physical,physical+width,device=self.device),use_cache=True,role=role,
             actual_tokens=sum(lengths), logical_length=max(totals))
-        last = torch.tensor([max(0,n-1) for n in lengths],device=hidden.device)
-        selected = hidden[torch.arange(batch,device=hidden.device),last]
-        logits = self.head(selected,role=role+".head")
-        inactive = [i for i, n in enumerate(lengths) if not n]
-        if inactive:
-            indices = torch.tensor(inactive, dtype=torch.long, device=logits.device)
-            logits.index_copy_(0, indices, state.next_logits.index_select(0, indices))
+        active = [i for i, count in enumerate(lengths) if count]
+        indices = torch.tensor(active, dtype=torch.long, device=hidden.device)
+        last = torch.tensor([lengths[i] - 1 for i in active], device=hidden.device)
+        selected = hidden[indices, last]
+        projected = self.head(selected, role=role+".head")
+        if len(active) == batch:
+            logits = projected
+        else:
+            # Inactive slots keep their last causal distribution. Like the KV
+            # arena, this buffer is exclusively owned and transferred by the
+            # caller, so it can be updated without cloning a full vocabulary
+            # table or projecting padding tokens for completed responses.
+            logits = state.next_logits
+            logits.index_copy_(0, indices.to(logits.device), projected)
         right_padded = state.right_padded and all(not n or state.lengths[i] == physical
                                                 for i, n in enumerate(lengths))
         spans = tuple(old if not count else
@@ -447,14 +516,24 @@ class CausalPolicy(nn.Module):
         return KVState(cache,mask,logits,totals,spans,right_padded)
 
     @torch.no_grad()
-    def draw_tokens(self, state: KVState, active, generators):
+    def draw_tokens(self, state: KVState, active, generators, *, temperature=None, top_p=1.0):
+        """Draw from each slot's temperature-scaled law and return its log-prob."""
         active, generators = tuple(active), tuple(generators)
         if len(active) != len(generators):
             raise ValueError("Each active trajectory requires its own random generator")
         if not active:
             return [], []
+        temperature = self.sampling_temperature if temperature is None else float(temperature)
+        if not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError("Sampling temperature must be finite and positive")
+        if float(top_p) != 1.:
+            raise ValueError("The published sampling protocol uses top_p=1.0")
         selected = torch.tensor(active, dtype=torch.long, device=state.next_logits.device)
-        logp = torch.log_softmax(state.next_logits.index_select(0, selected).float(), dim=-1)
+        logits = state.next_logits.index_select(0, selected).float()
+        if temperature != 1.:
+            logits.div_(temperature)
+        logp = torch.log_softmax(logits, dim=-1)
+        del logits
         probabilities = logp.exp()
         tokens = torch.cat([torch.multinomial(probabilities[row], 1, generator=generator)
                             for row, generator in enumerate(generators)])

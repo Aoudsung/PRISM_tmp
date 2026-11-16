@@ -1,14 +1,14 @@
 # F-GPO r3：有限时域、历史条件化的跨轨迹续值共享
 
-版本日期：2026-11-16。执行协议：`fgpo-r3-success-v2`。核心算法标识：`r3_history_conditioned_peer_value_sharing`。
+版本日期：2026-11-16。执行协议：`fgpo-r3-published-v3`。核心算法标识：`r3_history_conditioned_peer_value_sharing`。
 
 本方案研究一个具体问题：在只有公开交互记录和终局成功信号的长时程任务中，怎样利用同任务的独立同伴轨迹改善中间动作的价值估计，并控制近似状态匹配造成的误差。r3 将研究对象收敛为**有限时域下、按实际可见历史匹配的同伴 Monte Carlo 续值共享**。终局成功定义训练目标，距离与同伴支持度决定共享量，实际行为前缀贯穿采样、参考评分和 PPO 更新。
 
-本文与 [数学及实现契约](fgpo_math_contract.md) 共同定义现行方案，对应实现位于 `src/fgpo/`。旧 TF-BEFP、三遍图回传及随机 RMS 设计可以通过基准提交 `977bb86ac31a4b1f95ea26b7b53334be5cadf57e` 追溯。当前交付包含静态实现与源代码审阅；正式服务器训练、性能测量及完整 benchmark 结果待执行。本文中的性能收益和研究假设均与已完成实验结果分开陈述。
+本文与 [数学及实现契约](fgpo_math_contract.md) 共同定义现行方案，对应实现位于 `src/fgpo/`。旧 TF-BEFP、三遍图回传及随机 RMS 设计可以通过基准提交 `977bb86ac31a4b1f95ea26b7b53334be5cadf57e` 追溯。当前交付包含静态实现与源代码审阅；正式服务器训练、性能测量及完整 benchmark 结果待执行。本文以公式和源码说明估计器及优化路径，数值结果由规定的正式实验填写。
 
 ## 1. 2026 年研究进展与 2027 年研究定位
 
-[GiGPO，NeurIPS 2025](https://arxiv.org/abs/2505.10978) 将轨迹级相对优势与重复 anchor state 上的步级相对优势结合，建立了无需学习 critic 的多轮智能体训练路线。2026 年的工作已经深入到历史条件、近邻分组、跨轨迹图信用及小样本可靠性。因此，r3 的贡献需要由明确的估计对象、误差分析和同协议实验共同支撑。
+[GiGPO，NeurIPS 2025](https://arxiv.org/abs/2505.10978) 将轨迹级相对优势与重复 anchor state 上的步级相对优势结合，建立了无需学习 critic 的多轮智能体训练路线。2026 年的工作已经深入到历史条件、近邻分组、跨轨迹图信用及小样本可靠性。因此，r3 的贡献需要由明确的估计对象、误差分析、已发表方法比较和自身机制消融共同支撑。
 
 | 工作与一手来源 | 2026 年的研究内容及方法 | r3 的对应研究边界 |
 |---|---|---|
@@ -20,9 +20,11 @@
 | [ECPO，EMNLP 2026](https://aclanthology.org/2026.emnlp-main.172/) | 对规范动作的少量样本估计进行收缩，并依据动作内方差调节信用，处理偶然高回报与稀疏证据。 | 小样本信用可靠性已有专门工作。r3 只用可观测距离与支持质量控制共享，诊断来自正式日志，不增加校准器或额外训练目标。 |
 | [MCGPO，2026 年 10 月预印本](https://arxiv.org/abs/2610.13755) | 用动作前状态摘要和规则标注进度匹配上下文，固定分折隔离候选动作与定向偏好的终局证据，以支持权重缩放 GraphGPO 之外的成对学习项。 | 分折隔离与支持加权也已有近邻工作。r3 的估计对象是同深度平均续值，使用公开历史表示与单一 PPO 更新，无 rubric 标注或额外成对目标。 |
 
-这些工作共同说明，2027 年仍可推进的研究问题是：在固定采样预算、部分可观测性和有限上下文共同存在时，**哪些跨轨迹信息可以有效共享，共享多少，以及这种共享何时改善官方成功率**。r3 的具体候选贡献是同深度的留一轨迹续值估计、可解释的连续共享强度、与实际行为条件一致的训练实现，以及对应的误差与成本证据。
+这些工作共同说明，2027 年仍可推进的研究问题是：在有限采样、部分可观测性和有限上下文共同存在时，**哪些跨轨迹信息可以有效共享，共享多少，以及这种共享何时改善官方成功率**。r3 的具体候选贡献是同深度的留一轨迹续值估计、可解释的连续共享强度、与实际行为条件一致的训练实现，以及对应的误差与成本证据。
 
-论文定位应围绕这组可检验的贡献展开。历史表示、留一基线、核权重和 PPO 本身属于已有工具；算法组合的价值由完整 benchmark、与强近年方法的关系及实际成本共同体现。当前代码接入的共享协议比较器是 GiGPO、BiPACE-Q 与冻结 Qwen；HGPO、GraphGPO、RewardFlow、G2PO、ECPO、MCGPO 是相关工作及后续直接比较对象，文献表不代表已经完成这些方法的实现或复现。
+论文定位围绕这组可检验的贡献展开。历史表示、留一基线、核权重和 PPO 本身属于已有工具；算法组合的价值由完整 benchmark、与已发表近年方法的关系及实际成本共同体现。当前正式主比较只有 F-GPO 与 **GiGPO、HGPO、GraphGPO**。三种 baseline 分别代表局部 anchor 信用、历史层级信用和跨轨迹图信用，覆盖本方案必须面对的直接竞争关系。表中其余工作用于解释研究边界，当前最小实验计划不为其新增单元。
+
+比较器采用作者发布源码的完整算法配方，并将来源固定到明确提交。ALFWorld 保留来源算法、提示和 batch 语义；GiGPO 从公开 1.5B 全参配方迁移到本研究 7B 基座，HGPO/GraphGPO 采用作者 7B 配方。AppWorld 另标注为 benchmark 迁移。统一 PyTorch 执行后端承载全部方法，论文呈现完整方法的质量与成本。机制归因由三个 F-GPO 自身消融完成。
 
 ## 2. 目标、信息边界与真实历史
 
@@ -62,13 +64,13 @@ $$
 
 `filtration.py` 在整数词元空间构建不可变块。给定生成预算 $M_{\mathrm{gen}}$，提示上限为 $C_{\mathrm{prompt}}=C_{\max}-M_{\mathrm{gen}}$；滚动时优先将最近完整轮次截到 $0.75C_{\mathrm{prompt}}$ 的水位。若初始锚定块与最新完整轮次超过这一预留水位，则保留这两个必要块，并允许使用至提示上限；超过提示上限时显式报错。整个过程按完整轮次处理。
 
-每个真实响应只归属一个训练段。为构建新上下文而重播的历史响应没有新的损失所有权。反馈仅在下一次实际决策需要时进入 actor 段；终末反馈保存在步骤和轮次记录中，`observation_span=None`，没有额外 feedback-only 评分段。短历史消融 `fgpo_no_full_filtration` 保留初始锚定块和最近两轮完整交互，其实际前缀同时用于行为概率、参考概率、历史特征及 PPO。该 ID 沿用既有接口名称，正文称其为“两轮历史消融”。
+每个真实响应只归属一个训练段。为构建新上下文而重播的历史响应没有新的损失所有权。反馈仅在下一次实际决策需要时进入 actor 段；终末反馈保存在步骤和轮次记录中，`observation_span=None`，没有额外 feedback-only 评分段。三个正式自身消融都保留完整 F-GPO 的 actor 历史、生成预算和 PPO 条件，使各自的唯一变化落在匹配距离或共享规则上。
 
 ### 2.3 历史与局部观测表示
 
 在冻结参考模型上，取实际动作前提示末位的倒数第 8 层表示并归一化，得到 $z^h_{k,t}$。将当前公开局部观测单独编码，在相同层取末位表示并归一化，得到 $z^o_{k,t}$。前者包含本次决策真实可见的任务和历史；后者保留当前观测的局部相似性。两种向量均停止梯度。
 
-相同的局部观测词元序列在一轮中仅提取一次表示；按长度和词元预算组成微批。历史特征复用参考响应打包前向的中间层输出。独立观察值表示使用固定层钩子截取所需输出，不修改模型的层列表。
+相同的局部观测词元序列在一轮中仅提取一次表示；按长度和词元预算组成微批。历史特征复用参考响应打包前向，中间层 hook 只保留动作前 prompt 末位向量。独立观测表示在指定层提前结束无梯度前向。`fgpo_obs_only` 直接跳过历史向量的采集。优势与必要诊断计算完成后释放表示张量，PPO 与后续 checkpoint 保留参考概率和已固定优势。
 
 余弦距离是可计算的近似匹配依据。它与真实续值差之间的关系由实验研究，当前实现没有将其解释为已知的 bisimulation 距离或概率校准结果。
 
@@ -203,7 +205,7 @@ $$
 
 一个失败轨迹中的动作可以因下一状态的成功同伴获得正优势，具体条件是 $\lambda_{k,t}\mu_{k,t+1}>b_{k,t}$。这种条件将“得到正信用”的含义绑定到可计算估计。它也说明了良好前缀仍可能有负优势：设 $K=8$，目标最终失败，另七条轨迹成功；当前及下一深度完全匹配且均非终态。此时 $S_t=S_{t+1}=7$、$b_t=R$、$\mu_{t+1}=R$、$\lambda_t=7/8$，于是 $A_t=-1/8$。即使这一步是共同的必要前缀，目标自身失败回报仍保留了 $1/8$ 的权重。
 
-因此，研究检验的是失败前缀信用的统计改善，以及这种改善对最终策略的作用。`positive_failed_steps` 是算法输出计数；认定某一步确实有益，需要结合其公开上下文、执行效果及后续任务结果。
+研究用官方任务表现和留出终局预测检验共享机制的作用。`positive_failed_steps` 直接描述算法对失败轨迹分配正优势的次数；关于有效动作信用的解释依照上述共享条件，并与任务结果一同呈现。
 
 ## 5. PPO 更新与轨迹权重
 
@@ -218,7 +220,7 @@ $$
 
 这些是保存的行为样本上的正则化 surrogate。裁剪、抽样参考项和近似续值共同决定实际更新；训练并不宣称每次参数变化都等于官方成功目标的精确梯度。默认全参数 bf16/SDPA、无 dropout，AdamW 学习率 $10^{-6}$、weight decay $0.01$，全局梯度范数裁剪 $1$。
 
-新共享协议采用 `loss_normalization="trajectory"`。一轮包含 $N_{\mathrm{traj}}$ 条真实轨迹，事先按响应行数分成 $M$ 个 minibatch，则每个 minibatch 使用相同分母
+F-GPO 及其自身消融采用 `loss_normalization="trajectory"`。一轮包含 $N_{\mathrm{traj}}$ 条真实轨迹，事先按响应行数分成 $M$ 个 minibatch，则每个 minibatch 使用相同分母
 
 $$
 Z_{\mathrm{mb}}=N_{\mathrm{traj}}/M,\qquad
@@ -226,7 +228,18 @@ Z_{\mathrm{mb}}=N_{\mathrm{traj}}/M,\qquad
 \sum_{i\in\mathcal B_m}\bigl(\ell^{\mathrm{PPO}}_i-\alpha H_i+\beta k_i\bigr).
 $$
 
-在固定参数下对这些 minibatch 损失取平均，恰好等于所有响应词元损失之和除以轨迹数。每条轨迹内部使用词元求和；长轨迹具有更多决策项。末个不足额 minibatch 保持同一分母。参数在每次 optimizer step 后变化，后续相关段按当前参数重新计算。
+在固定参数下对这些 minibatch 损失取平均，恰好等于所有响应词元损失之和除以轨迹数。每条轨迹内部使用词元求和；长轨迹具有更多决策项。末个不足额 minibatch 保持同一分母。参数在每次 optimizer step 后变化，后续相关段按当前参数重新计算。三个已发表 baseline 保留作者 virtual-rank / microbatch 内的 token mean 及其聚合权重、优势归一化和 minibatch 设置；本节的轨迹归一化是 F-GPO 的方法定义。
+
+对 baseline 的一次 optimizer update，令 $W$ 为来源配方的 virtual world size，$A$ 为固定 gradient accumulation，$T_{r,b}$ 为 rank $r$ 上 microbatch $b$ 的真实响应词元数，则对应目标为
+
+$$
+\mathcal L_m^{\mathrm{published}}
+=\sum_{r=1}^{W}\sum_{b\in m_r}
+\frac{1}{W A T_{r,b}}
+\sum_{i\in\mathcal R_{r,b}}\ell_i.
+$$
+
+最后不足额 minibatch 保持同一 $A$。同一响应的复制记录若落在同一个 optimizer update，其系数可相加后复用一次模型计算；它的目标仍由每次出现所属的 $T_{r,b}$ 定义。源码 batch copy、balance 和优势计算的先后关系同样保留，具体来源设置见第 7.2 节。虚拟 rank 在本后端定义目标权重及分组，实际 GPU 放置另由运行配置决定。
 
 ## 6. 系统实现与性能优化的成立条件
 
@@ -234,7 +247,9 @@ $$
 
 完整段包含按时间串接的动作和观测。在相同词元、位置编码、因果 mask 及参数下，响应前缀位置的隐藏态可以从整段前向获得；后面的词元被因果注意力屏蔽。这允许一个段内的多个响应共享主干计算，同时保持各自真实前缀。滚动窗口重新开始一个段，旧前缀依赖的 KV 不能直接作为新窗口的条件继续使用。
 
-冻结参考权重在每轮参考阶段集中安装，完成响应概率与历史特征计算后恢复 actor。参考 log-prob 按响应块计算、结果集中回到 CPU；整个输出词表不会为全部轨迹同时保留。局部观测表示采用去重、长度排序和词元预算微批。此处的复用范围以相同参数版本和实际段为单位。
+冻结参考权重在每轮参考阶段集中安装，完成响应概率与历史特征计算后恢复 actor。同段所有拥有损失的响应合并成有界 head chunks，按每条响应的 `span.start-1 : span.stop-1` 因果位置评分；目标 token 一次上传，每段的分数一次下载。每块词表 logits 在下一块计算前释放。历史 hook 只截取所需 prompt 向量，局部观测采用去重、长度排序和词元预算微批。此处的复用范围以相同参数版本和实际段为单位。
+
+信用阶段形成观测和历史 Gram 矩阵后及时释放临时特征，最大距离写回已有小矩阵。完成优势及聚合诊断后调用 `ReferenceRound.release_features()`，去除后续更新和 checkpoint 中无用途的表示引用，保留冻结参考的响应条件概率。
 
 ### 6.2 持久环境进程与提前派发
 
@@ -242,81 +257,112 @@ $$
 
 GPU 仍以单主线程处理模型批次。每个槽位独立维护 `torch.Generator`；采样保持各槽位自己的随机流，将 token 与 log-prob 合并为一次 CPU 读取。某条响应遇到实际终止符或生成长度上限后，立即将解析、原生环境执行和公开观测投影派给 CPU 工作线程，此时其余槽位仍可继续 GPU 解码。
 
-下一交互轮保留 turn barrier：本轮所有活跃槽位的反馈完成后，才构造下一轮模型输入。该实现实现了轮内环境调用与解码的重叠；多轮持续调度不在当前执行语义内。独立采样 seed 保障随机流所有权，批形状和浮点计算变化可能影响最终离散采样结果，复现信息需记录实际执行配置。
+下一交互轮保留 turn barrier：本轮所有活跃槽位的反馈完成后，才构造下一轮模型输入。F-GPO 在轮内重叠环境调用与解码。已发表 baseline 同样采用组内批量模型采样与并行环境调用，完整异长提示通过 `prefill_batch` 进入同一批次；其提示、记忆和动作解析仍按作者配方构造。训练温度为 1，评估温度为 .4，`top_p=1`；保存的行为 log-prob 来自实际采样温度。独立 generator 保留各槽位随机流所有权，批形状与浮点舍入变化可能影响最终离散结果，实际执行配置随结果保存。
 
 ### 6.3 几何增长 KV 与真实内存
 
 `cache.py` 的 arena 在容量充足时原位写入 KV，容量不足时按几何增长扩容。它维护每行有效长度、物理跨度、attention mask 与逻辑位置。变长批次仍然具有 padding；压紧会真实移动有效列，只有已经紧凑的布局才能跳过这项操作。`crop` 改变逻辑长度并保留底层容量，不能据此声称显存已经释放。
 
-这项设计减少逐 token 全前缀拼接分配，同时保留实际模型所需的 padding 和位置语义。根前缀可以共享一次 prefill 结果，分叉后各槽位持有可独立更新的缓存。窗口丢弃历史时重新 prefill 新窗口。数学条件一致与浮点逐位一致分别陈述，吞吐比较使用相同推理条件下的实测结果。
+这项设计减少逐 token 全前缀拼接分配，同时保留 padding 和位置语义。根前缀可以共享一次 prefill 结果，分叉后各槽位持有可独立更新的缓存。窗口丢弃历史时重新 prefill 新窗口。行选择的 indices 按设备上传一次供各层复用；已结束响应的 padding 槽位跳过词表投影，原分布保留在独占缓存对象中。连续解码已处于 eval 状态时，跳过重复模块遍历。数学条件一致与浮点逐位一致分别陈述，实际吞吐由正式日志报告。
 
 以 [Qwen2.5-7B 官方配置](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/config.json) 的 28 层、4 个 KV 头、头维度 128 和 bf16 为例，8 个槽位的纯 KV 张量在容量 4096 时为 $28\times2\times8\times4\times4096\times128\times2$ 字节，即 1.75 GiB；容量 32768 时为 14 GiB。这是指定张量的容量计算，整机峰值还包括权重、梯度、激活、输出头、缓存扩容临时量和分配器保留空间。
 
 ### 6.4 输出头分块与一次主干反向
 
-每个被当前 minibatch 使用的段先得到主干输出 $H=f_\theta(S)$。输出头按默认 64 个响应词元分块。每块的隐藏态复制为 detached leaf，对该块损失立即反向，累积输出头参数梯度及 $\partial\mathcal L_c/\partial H_c$，随后释放该块词表图。所有块完成后，将隐藏态梯度加回正确位置，对原始 $H$ 只调用一次 backward：
+每个被当前 minibatch 使用的段保留其全部必要前缀，并将主干前向截到最后一个被选响应的末位。从 $f_\theta(S)$ gather 当前响应位置形成 $H_{\mathcal R}$；显式 hidden adjoint 缓冲按真实响应词元数分配。输出头按默认 64 个响应词元分块，每块以 detached leaf 计算损失并立即反向，累积输出头参数梯度及响应隐藏态梯度，随后释放该块词表图。全部块完成后，对 $H_{\mathcal R}$ 执行一次 backward，autograd 经 gather 将梯度送回正确的主干位置：
 
 $$
 \nabla_\theta\mathcal L
-=\nabla_\theta\mathcal L\big|_{H\ \mathrm{fixed}}
- +\left(\frac{\partial H}{\partial\theta}\right)^\top
-   \sum_c\frac{\partial\mathcal L_c}{\partial H}.
+=\nabla_\theta\mathcal L\big|_{H_{\mathcal R}\ \mathrm{fixed}}
+ +\left(\frac{\partial H_{\mathcal R}}{\partial\theta}\right)^\top
+   \frac{\partial\mathcal L}{\partial H_{\mathcal R}}.
 $$
 
-在相同参数和损失定义下，这实现一阶链式法则；若输出头与输入 embedding 绑权，两部分参数梯度自然相加。每段只保留一个活跃词表块及完整隐藏态梯度缓冲。将所有块的标量 loss 图保留到最后会保留其词表相关激活，因此当前实现逐块释放图。
+在相同参数和损失定义下，这实现一阶链式法则；若输出头与输入 embedding 绑权，两部分参数梯度自然相加。每段保留一个活跃词表块和响应位置的显式梯度缓冲，主干图只遍历一次。
 
-`logsumexp`、目标词元 gather 和熵的解析形式避免保存完整 log-softmax 副本；熵仍计算全词表概率。主干保留非重入式梯度检查点。`activation_offload` 默认关闭，显式配置为 true 时仍可使用非锁页 CPU 激活换出；实际取值依据服务器显存与正式 workload 配置，不能从简单的权重加法推出统一安全峰值。
+词表头的 `_LogProbabilityEntropy` 保存 logits 与行级统计，在反向中重建概率并合并上游的 logprob、entropy 系数。其一阶导数为 $\partial\log p_y/\partial z_v=\mathbf1[v=y]-p_v$ 和 $\partial H/\partial z_v=-p_v(\log p_v+H)$。完整词表参与概率和熵计算，跨块保留的 softmax 损失图被消除。主干使用非重入梯度检查点。`activation_offload` 默认关闭；实际内存峰值通过正式 workload 的阶段日志记录。
 
 ### 6.5 有界 CPU AdamW 与阶段计时
 
 AdamW 的 fp32 主权重、一阶和二阶矩保存在 CPU。默认 64 MiB 传输桶，并为每个设备和 dtype 分配两个有限的锁页传输槽。GPU 梯度按桶传回，事件完成后 CPU 才读取；更新后的参数写入权重镜像再传回，缓冲区在传输结束后方可复用。GPU 全局范数先按设备聚合，避免每个参数触发一次 CPU 标量同步。参数更新保持完整参数集合，传输空间随桶预算约束。
 
-模型主干和词表头热路径移除显式逐调用同步，其日志耗时标为 `host_dispatch`。正式阶段边界进行 CUDA 同步，记录 `synchronized_wall` 耗时与每张卡的 allocated、reserved 和真实 peak bytes。嵌套阶段的峰值标明属于外层阶段，报告时不把重叠的环境时间与 GPU 时间相加为端到端耗时。吞吐、实际 token、环境步数、GPU 小时和峰值显存均由正式运行账本产生。
+模型主干和词表头热路径移除显式逐调用同步，其日志耗时标为 `host_dispatch`；解码操作内部按 role 聚合模型调用、真实 token 和 padding 计算计数，减少逐 token 的 JSON 文件写入与事件常驻。环境事件即时保存。正式阶段边界进行 CUDA 同步，记录 `synchronized_wall` 耗时与每张卡的 allocated、reserved 和真实 peak bytes。嵌套阶段峰值标明所属外层阶段；重叠环境时间与 GPU 时间各自解释，端到端成本使用 ledger 的 wall/device-seconds。吞吐、实际 token、环境步数、GPU 小时和峰值显存均由已有正式运行账本产生。
 
 用户性能提案中的异步派发、持久环境、减少同步、批量表征、几何缓存、有界传输与分块输出头思路已按上述条件纳入。所有模块均以 r3 数学对象为准；旧三遍估计器的删除属于算法变更。理论容量计算与预计收益可以指导配置，具体加速倍数和 benchmark 增幅由服务器结果填写。
 
 ## 7. 正式研究协议与实验解释
 
-### 7.1 主实验矩阵
+### 7.1 按 claim 保留最小实验
 
-| 方法 ID | 主实验中的改变 | 需要回答的问题 |
+`experiment_suites` 把已发表方法比较与自身消融分开定义。主比较为四种方法 × 两个 benchmark × 三个训练种子，共 **24 个训练单元**；三个自身消融只在 ALFWorld 上分别运行三个种子，新增 **9 个单元**。消融中的完整 F-GPO 直接复用主比较的三个 ALFWorld 单元，合计 **33 个训练单元**。
+
+| Suite 与方法 | Benchmark / 种子 | 新增单元 | 必须回答的 claim 及保留理由 |
+|---|---|---:|---|
+| `comparison / fgpo` | ALFWorld、AppWorld / 0、1、2 | 6 | 完整方法的官方任务表现及实际成本；提供所有主比较和自身消融的目标结果 |
+| `comparison / gigpo` | ALFWorld、AppWorld / 0、1、2 | 6 | 对照出发点 GiGPO 的已发表相对状态信用方法，检验方案相对原研究路线的进展 |
+| `comparison / hgpo` | ALFWorld、AppWorld / 0、1、2 | 6 | 对照直接使用历史层级信用的已发表方法，建立历史条件化方向的竞争关系 |
+| `comparison / graphgpo` | ALFWorld、AppWorld / 0、1、2 | 6 | 对照已发表跨轨迹成功路径图信用方法，检验本方案续值共享的完整方法表现 |
+| `ablation / fgpo_obs_only` | ALFWorld / 0、1、2 | 3 | 只去除历史距离项，检验本方法历史匹配对留出预测与任务表现的贡献 |
+| `ablation / fgpo_no_transfer` | ALFWorld / 0、1、2 | 3 | 设全部 $\lambda=0$，保留原匹配与动作前基线，检验下一状态续值共享 |
+| `ablation / fgpo_no_support_weight` | ALFWorld / 0、1、2 | 3 | 非终末下一状态有支持时令 $\lambda=1$，其余核与基线保持一致，检验连续共享收缩 |
+| `ablation / fgpo` 参考行 | 复用主比较的 ALFWorld 三种子 | 0 | 为三个机制消融提供同一完整方法结果，不再训练 |
+
+ALFWorld 承担直接来源 benchmark 与机制消融，AppWorld 承担完整方法向原生代码 agent 的迁移证据；机制消融的直接结论限定在 ALFWorld。三个训练种子用于公开训练变动，完整官方划分保证终点指标有一致口径。短历史实验、超参数扫描、模型规模扫描、系统模块消融和独立诊断 rollout 均不在计划中。已有代码兼容路径与相关文献不会自动增加实验单元。
+
+### 7.2 已发表 baseline 的来源、配方与迁移
+
+正式 baseline 为 [GiGPO / NeurIPS 2025](https://arxiv.org/abs/2505.10978)、[HGPO / ICLR 2026](https://openreview.net/forum?id=T8Dev99qnz) 和 [GraphGPO / ICML 2026](https://proceedings.mlr.press/v306/cheng26e.html)。作者实现统一固定到 [verl-agent 提交 `20bd331bdbc9026a5668e11362178e10ab7400c8`](https://github.com/langfengQ/verl-agent/tree/20bd331bdbc9026a5668e11362178e10ab7400c8)。[baseline_specs.py](../src/fgpo/baseline_specs.py) 集中记录论文版本、上游具体文件、训练设置和 paper/code 差异；[published_baselines.py](../src/fgpo/published_baselines.py) 实现信用规则，[published_batching.py](../src/fgpo/published_batching.py) 保留来源 batch 和损失权重语义。
+
+| 方法 | 来源代码的执行规则 | 已记录的论文与代码差异 |
 |---|---|---|
-| `fgpo` | 完整 r3 | 在统一预算下的成功率、样本效率和成本如何？ |
-| `fgpo_no_full_filtration` | actor、参考和 PPO 同时改成初始锚定块加最近两轮 | 增加实际可见历史是否改善匹配预测和任务表现？ |
-| `fgpo_no_transfer` | 所有 $\lambda=0$，保留相同几何与动作前基线 | 同伴下一状态续值共享产生了什么增益？ |
-| `fgpo_obs_only` | 匹配距离仅用局部观测；actor 历史保持主方法设置 | 历史匹配项如何改变覆盖率、预测误差和成功率？ |
-| `fgpo_no_support_weight` | 下一状态有正支持时 $\lambda=1$，否则为零；终末仍为零 | 连续共享强度的作用如何？ |
-| `gigpo_shared` | 共享采集、上下文、奖励、生成和优化协议，使用 GiGPO 优势规则 | 相同资源和决策条件下，相对 anchor 信用与 r3 如何比较？ |
-| `bipace_q_shared` | 相同公共协议，使用当前 actor prompt 表示和 BiPACE-Q 局部优势 | 对比已有历史表示与动作条件估计，r3 的额外收益如何？ |
-| `native_qwen_shared` | 同一输入与生成协议，冻结基座 | 未训练模型在相同上下文下的参考水平如何？ |
+| GiGPO | 轨迹级优势加公开 anchor-state 组内优势；保留 γ=.95、sample std、逐行语法惩罚及发布的奖励处理顺序 | 发布代码的 episode 统计按重复的 step rows 计算，论文式 3 使用轨迹级统计；当前 invalid-action penalty 在折扣回报之后扣在该行，episode score 同样逐行扣除 |
+| HGPO | 按不同长度的观测后缀分组，使用 population std、长度权重和 `base_group=False` | 源码分组只读 observation suffix，actor 记忆仍含动作；只聚合非零优势并重归一化，后缀长度 $k$ 使用 $(k+1)^\alpha$，与论文式 7 的索引及全层求和写法分别记录 |
+| GraphGPO | 以公开状态构图，到成功目标求最短路径，发布实现使用 $10\gamma^{d(\mathrm{next})}$，γ=.10，再结合轨迹级优势 | 论文式 4 另含转移代价指数；发布 episode 标准化沿用 step-row 统计。ALFWorld 提示含公开动作/反馈历史摘要，图键还包含排序后的可用命令 |
 
-支持量消融只改变共享强度，其余核与基线保持一致；配置可以显式选择需要执行的方法。旧 `fgpo_no_befp`、`fgpo_no_dag_loo` 显式退出协议。
+这些差异决定当前实现选择 **released-source recipe**。作者代码的历史、折扣、优势统计、生成预算、训练长度及 loss reduction 保持各自定义；把所有 baseline 替换为 F-GPO 的奖励和归一化会改变比较对象。
 
-共享比较器默认同用 $\gamma=1$、终局奖励 10、相同初始锚定与有界历史、生成预算、模型、轮数、优化器、轨迹损失分母及正则项。GiGPO 与 BiPACE 的 episode/cluster 优势标准化属于其估计器定义，保留在各自方法中；主方法使用固定奖励尺度。BiPACE 使用当前 actor 的实际 prompt 表示，包含可见历史，并明确记录 AppWorld 动作键等迁移约定。
+来源配方的 `adjust_batch` 通过 `np.random.choice(..., replace=False)` 选择已有记录并在末尾追加，使行数适配规定的 divisor；`balance_batch` 使用 equal-size Karmarkar–Karp 按完整 prompt 加响应的有效长度划分，每个 partition 内按索引排序。GiGPO 在 copy 和 balance 后计算优势，HGPO/GraphGPO 先计算优势，再 copy 和 balance。每个 virtual rank 独立形成连续 minibatch，同一序号的 rank minibatch 合成一次参数更新。复制只影响已采样记录的统计及 loss 权重，实际轨迹与环境采样仍按原始数据计数。
 
-原作者配置 ID `gigpo`、`bipace_q`、`self`、`skill_disco`、`native_qwen` 可作为单独补充实验。它们的历史、轮数、输出预算或训练方式可能不同，结果与共享协议表分开呈现；Qwen 和 AppWorld 迁移也应直接注明。
+| 来源配方 | Virtual world size | 每 rank microbatch | Global row minibatch | 固定 accumulation | Copy divisor |
+|---|---:|---:|---:|---:|---:|
+| GiGPO 公开 1.5B 全参配方，迁移到本研究 7B | 2 | 32 | 256 | 4 | 64 |
+| HGPO 7B 配方 | 4 | 8 | 256 | 8 | 32 |
+| GraphGPO 7B 配方 | 4 | 4 | 64 | 4 | 64 |
 
-### 7.2 默认预算与完整官方评测
+ALFWorld 接入作者发布的公开观测、原生动作与提示配方。HGPO/GraphGPO 的来源就是 7B，GiGPO 公开全参脚本使用 1.5B，本研究明确标注其 **7B backbone 迁移**并保留上述来源 batch 配方。三个已发表工作均未报告 AppWorld 实验，因此 AppWorld 的结果另记为**已发表算法的 benchmark 迁移**：用原生 Python action 与公开 stdout，保留初始任务/API bootstrap 及最近记忆，接入各自信用规则。AppWorld 使用 1024-token 生成上限和完整消息窗口；ALFWorld 仍保留各作者的提示容量与截断规则。所有参考和 PPO 概率都在最终实际采样前缀上重算。
 
-| 项目 | r3 默认值 |
-|---|---|
-| 基座与更新 | Qwen2.5-7B-Instruct；可训练方法全参数 bf16/SDPA |
-| 训练种子 | 0、1、2 |
-| 每种子训练量 | 60 轮 × 16 个任务组 × 每组 8 条轨迹，即 7680 条完整轨迹 |
-| 时域与每步生成上限 | ALFWorld：50 步、256 词元；AppWorld：100 步、1024 词元 |
-| 上下文上限 | 默认 32768；主方法按完整轮次滚动 |
-| ALFWorld | 官方 `valid_unseen` 全部 134 任务 |
-| AppWorld | 官方 `test_normal` 全部 168 任务，`test_challenge` 全部 417 任务 |
-| 信用参数 | $R=10,\epsilon=.10,\kappa=1,\lambda_{\max}=1$ |
-| 更新参数 | lr `1e-6`、weight decay `.01`、clip norm `1`、row minibatch `256`、head chunk `64` |
+执行后端统一为本仓库的 PyTorch/SDPA、组内批量采样、持久官方环境与 CPU-master AdamW。复现范围是算法及发布配方在该后端的实现，计算系统与原作者分布式系统分别注明。主比较因此支持完整方法级的质量—成本判断，机制归因由第 7.1 节的三个自身消融承担。
 
-这些是运行默认值，实际配置记录预算和资源参数，正式比较保持共同项一致。训练任务来自官方训练划分。最终 checkpoint 在完整测试划分评测；训练过程中的诊断复用训练日志，不通过测试集选择最优轮次。ALFWorld 报告官方 SR；AppWorld 报告官方任务完成指标和在完整 scenario 上定义的 SGC，所有数值同时附完成任务数。中断运行的部分任务结果单独标明，不补成完整官方得分。
+### 7.3 实际预算与完整官方评测
 
-### 7.3 文章 claim 与正式日志
+| 项目 | F-GPO 及自身消融 | GiGPO | HGPO | GraphGPO |
+|---|---|---|---|---|
+| 训练 rounds | 60 | 150 | 160 | 150 |
+| 每轮任务组 × 每组轨迹 | 16 × 8 | 16 × 8 | 16 × 8 | 16 × 8 |
+| 每种子完整轨迹量 | 7680 | 19200 | 20480 | 19200 |
+| 信用折扣 γ | 1 | .95 | .95 | .10 |
+| ALFWorld 每步生成上限 | 256 | 512 | 512 | 512 |
+| AppWorld 每步生成上限 | 1024 | 1024 | 1024 | 1024 |
+| ALFWorld 提示 / 历史规则 | 32768 总上下文内的初始锚定与完整轮次滚动 | 2048 prompt，最近两轮记忆，超限 error | 4096 prompt，最近两轮记忆，作者 left truncation | 2048 prompt，最近两轮记忆及公开状态摘要，超限 error |
+| PPO row minibatch | 256 | 256 | 256 | 64（7B 配方） |
+| Loss reduction | 固定轨迹分母 | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean |
 
-历史条件化的 claim 由主方法与观察值消融、两轮历史消融共同支撑：对比官方成功率、匹配覆盖、支持质量与留一 outcome 预测误差。共享估计的 claim 由 `no_transfer` 对照以及成功率随训练轮数、环境步数和响应 token 的变化支撑。支持收缩的 claim 由 `no_support_weight` 对照支撑。系统效率 claim 直接使用同硬件、同预算正式运行中的阶段耗时、端到端吞吐、环境进程复用量和峰值显存。
+共同基座为 Qwen2.5-7B-Instruct，全参数 bf16/SDPA；种子为 0、1、2；AdamW lr=`1e-6`、weight decay=`.01`、betas=`(.9,.999)`、epsilon=`1e-8`、全局梯度范数上限 1。每轮一次 PPO epoch，clip=.2、dual clip=3、entropy=.001、参考正则=.01。训练采样温度为 1，评估为 .4，`top_p=1`。F-GPO 的信用参数为 $R=10,\epsilon=.10,\kappa=1,\lambda_{\max}=1$；baseline 的奖励尺度和语法处理以来源配方为准。
 
-核心日志包括 $S$、有效同伴数 $(\sum w)^2/\sum w^2$、$\lambda$、匹配及共享比例、回报移动量 $|Z/R-Y|$、全零任务组、失败轨迹正优势步骤数与优势范围。主留一诊断定义为
+时域上限为 ALFWorld 50 步、AppWorld 100 步。训练任务取官方训练划分，每个最终 checkpoint 完整评测 ALFWorld `valid_unseen` 的 134 个任务，或 AppWorld `test_normal` 的 168 个任务与 `test_challenge` 的 417 个任务。ALFWorld 报告 SR，AppWorld 报告官方 TGC 和基于完整 scenario 的 SGC，并附完成任务数。三个种子的逐项结果、均值与标准差均公开；中断产生的部分评测保持部分状态。
+
+主表同时列最终质量、实际轨迹量、环境步数、响应词元、端到端时间与设备小时。各方法按已声明的配方终点报告，训练窗口差异随结果呈现；训练组成功率曲线解释学习进展，最终测试分数单独列出。当前计划的效率结论以质量与实际成本的联合结果为依据，不增加中途测试集挑选、额外预算扫描或独立系统基准实验。
+
+### 7.4 只复用必要的 claim 诊断
+
+| Claim | 直接实验 | 复用的诊断及用途 |
+|---|---|---|
+| 完整方法的任务表现和实际成本 | `comparison` 的四种完整方法 | 最终官方 SR/TGC/SGC、真实样本与 token 数、wall/device-seconds、阶段峰值，形成质量—成本报告 |
+| 历史条件化改善本方法的匹配 | 完整 F-GPO 与 `fgpo_obs_only` | 匹配覆盖、支持质量和留一 outcome Brier，解释距离改变后的预测表现 |
+| 下一状态共享提供任务收益 | 完整 F-GPO 与 `fgpo_no_transfer` | 共享比例、回报移动量及训练进展，确认实际使用的共享量与任务变化 |
+| 连续支持收缩有作用 | 完整 F-GPO 与 `fgpo_no_support_weight` | $S$、有效同伴数与 $\lambda$，解释共享强度改变后的任务及预测结果 |
+
+这些量全部从正式训练或官方评测的既有记录提取，不触发新 rollout。全零组和失败轨迹正优势计数作为已有信用输出的解释字段保留，正文图表按上述 claim 选取。主留一诊断定义为
 
 $$
 \operatorname{Brier}_{\mathrm{LOO}}
@@ -324,12 +370,25 @@ $$
 \left(b_{k,t}/R-Y_k\right)^2.
 $$
 
-另记录任务先验 Brier 和有匹配状态上的未收缩 $\mu/R$ Brier。目标轨迹结果没有进入预测值，随后用于计算预测损失。若真实条件成功概率为 $p$，条件平方误差可分为 $(\widehat p-p)^2+p(1-p)$：因此该指标包含 Bernoulli outcome 噪声。它衡量留出结果预测，不能直接当成真实 Q 的误差，也不回流为训练权重。
+另记录任务先验 Brier 和有匹配状态上的未收缩 $\mu/R$ Brier。目标轨迹结果在预测时被留出，随后用于计算预测损失。若真实条件成功概率为 $p$，条件平方误差可分为 $(\widehat p-p)^2+p(1-p)$，因此该指标包含 Bernoulli outcome 噪声，其用途是解释留出结果预测；真实 Q 误差和理论中的 $\delta$ 是不同对象。Brier 不回流为训练权重。
 
-这些诊断按真实步骤统计，长轨迹贡献更多预测样本；跨组聚合时按对应样本数加权，并保留每组原始记录。三种子报告完整均值、标准差及逐种子结果；论文中的显著性与收益解释还应结合配对任务结果和实际资源消耗。
+诊断按真实步骤统计，长轨迹贡献更多预测样本；跨组聚合按相应样本数加权，并保留每组原始统计。每个 claim 由对应的正式结果和这些既有统计支撑，诊断自身不扩展训练矩阵。
 
 ## 8. 运行身份与交付状态
 
-r3 使用新的 study 目录及协议 `fgpo-r3-success-v2`。旧协议 checkpoint 内含不同的奖励、优势、参考对象和待执行更新，禁止作为 r3 的继续训练状态。恢复由 `effective_training_identity/require_training_identity` 约束：模型、任务、种子、历史、生成预算、信用及 PPO/Adam 的有效语义保持相同；GPU 放置、缓存、offload 和计算微批等资源项可以调整。保存的 CUDA RNG 流数量仍须一致；SELF 使用 dropout，其逻辑层放置与对应随机流也须保持一致。完成的采集组、参考数据及更新 cursor 按原协议恢复。环境中途的任意进程状态不作为可恢复 checkpoint 的假设。
+`fgpo-r3-published-v3` 使用新的 study 根目录，内部按 suite 分成 `comparison/` 与 `ablation/`，各自保存单元和 `study_summary.json`。先完成主比较，再以同一 `--output-dir` 执行消融；消融 summary 引用 `../comparison/alfworld/fgpo/seed-X/cell_summary.json`，复用完整方法结果。
 
-目前可审阅的产物是上述方案与对应源代码。所有项目运行遵循仓库规定，在指定服务器完成；当前尚无 r3 正式服务器测量。下一步直接执行主实验矩阵，沿同一运行日志回答成功率、共享估计和系统效率三个问题，并据真实结果形成 2027 年研究结论。
+在指定服务器的独立 checkout 中，将 `PYTHONPATH` 指向 `src`，使用配置指定的既有 Python 与真实分配卡号：
+
+```bash
+python -m fgpo.runner --config configs/fgpo-r3-host-a.json --output-dir outputs/fgpo-r3-published-study --suite comparison --gpu <physical_gpu_ids>
+python -m fgpo.runner --config configs/fgpo-r3-host-a.json --output-dir outputs/fgpo-r3-published-study --suite ablation --gpu <physical_gpu_ids>
+```
+
+Host B 使用 `configs/fgpo-r3-host-b.json`。`comparison` 是默认 suite；`--methods/--benchmarks/--seeds` 只选择该 suite 的计划子集，用于按完整 cell 分配服务器。新 suite 可以在已有 study 根目录中创建；`--resume` 只恢复当前所选 suite 的目录。旧协议及其 pending update 留在原 study，不迁入新的训练状态。
+
+恢复由 `effective_training_identity/require_training_identity` 约束：方法及发布配方来源、模型、任务、种子、历史、采样、信用、PPO 和 Adam 的有效语义保持一致。GPU 放置、KV 容量、offload、head/表示微批和 staging 等资源项可以调整；保存的 CUDA RNG 流数量保持一致。完成采集组、参考概率、优势与更新 cursor 在明确操作边界恢复。
+
+当前交付是完整方案和对应源代码的静态修订与交叉审阅，尚未执行服务器训练、显存测量或正式 benchmark。仓库 [AGENTS.md](../AGENTS.md) 要求所有项目运行在指定服务器完成；当前会话没有 `SSH_Document.md`，已知 `mgt01` 入口在可用连接环境中无法解析。文中没有已执行的成功率、显存节省比例或加速倍数。正式连接恢复后直接执行上述 33 个必要训练单元及其官方评测，从相同日志形成任务表现、共享机制和实际成本的研究结论。
+
+指定服务器上的 `.research/research.sqlite` 继续作为实际研究记录来源；当前会话没有访问该数据库，未生成或改写运行记录。
