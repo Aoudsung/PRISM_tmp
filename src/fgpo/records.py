@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 import json
+import os
 from pathlib import Path
 import time
 from typing import Any, Mapping
@@ -37,15 +38,31 @@ class CostRecord:
 
 
 def _last_event_index(path):
-    """Read just the last complete journal row to number new append operations."""
-    with path.open("rb") as handle:
+    """Keep complete physical events; discard only a torn final append."""
+    with path.open("r+b") as handle:
         handle.seek(0, 2)
         position = handle.tell()
         if not position:
-            return 0
+            return 0, 0
         handle.seek(position - 1)
+        discarded = 0
         if handle.read(1) != b"\n":
-            raise ValueError("The physical-cost journal ends with an incomplete event.")
+            original, end = position, position
+            position = 0
+            while end:
+                start = max(0, end - 8192)
+                handle.seek(start)
+                boundary = handle.read(end - start).rfind(b"\n")
+                if boundary >= 0:
+                    position = start + boundary + 1
+                    break
+                end = start
+            discarded = original - position
+            handle.truncate(position)
+            handle.flush()
+            os.fsync(handle.fileno())
+            if not position:
+                return 0, discarded
         end, pieces = position - 1, []
         while end:
             start = max(0, end - 8192)
@@ -57,7 +74,7 @@ def _last_event_index(path):
                 break
             pieces.append(block)
             end = start
-        return int(json.loads(b"".join(reversed(pieces)))["event_index"])
+        return int(json.loads(b"".join(reversed(pieces)))["event_index"]), discarded
 
 
 class CostLedger:
@@ -68,13 +85,13 @@ class CostLedger:
         self.records: list[CostRecord] = []
         self.started = monotonic_seconds()
         self.session_id = uuid.uuid4().hex
-        self.event_cursor = (_last_event_index(self.path)
-                             if self.path is not None and self.path.exists() else 0)
+        self.event_cursor, self._discarded_tail_bytes = (_last_event_index(self.path)
+                             if self.path is not None and self.path.exists() else (0, 0))
         self.durable_offset_bytes = 0
         self._elapsed_before = 0.
         self._device_seconds_before = 0.
         self._totals = {name: 0 for name in ("input_tokens", "output_tokens", "forward_tokens", "env_steps", "seconds")}
-        self._usage_complete = True
+        self._usage_complete = not self._discarded_tail_bytes
         self.recovery = None
         self.active_group_id = None
         self._model_scope_depth = 0
@@ -184,7 +201,7 @@ class CostLedger:
         """
         restore_started = monotonic_seconds()
         totals = dict(state["totals"])
-        complete = bool(state["usage_complete"])
+        complete = bool(state["usage_complete"]) and not self._discarded_tail_bytes
         cursor, offset = int(state["event_cursor"]), int(state["durable_offset_bytes"])
         sessions, groups, imported = {}, set(), 0
         if self.path is None:
@@ -241,6 +258,7 @@ class CostLedger:
         # segment, and must not be restarted or added twice here.
         self.recovery = {"source_checkpoint_offset_bytes": int(state["durable_offset_bytes"]),
                          "adopted_through_offset_bytes": offset, "imported_events": imported,
+                         "discarded_incomplete_tail_bytes": self._discarded_tail_bytes,
                          "interrupted_group_ids": sorted(groups),
                          "checkpoint_active_group_id": state["active_group_id"],
                          "environment_continuation": "not_restored",

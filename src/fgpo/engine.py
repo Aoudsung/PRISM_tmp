@@ -35,6 +35,7 @@ class EngineState:
     credit_diagnostics: dict = field(default_factory=dict)
     update_cursor: object = None
     published_batch_plan: object = None
+    training_log_offset: int = 0
     evaluation_completed: dict = field(default_factory=dict)
     completed: bool = False
 
@@ -53,7 +54,12 @@ class Engine:
         self.method,self.benchmark,self.seed = method,self.config["benchmark"],int(self.config["seed"])
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True,exist_ok=True)
-        self.config["artifact_dir"] = str(self.output_dir/"trajectories")
+        self.config.setdefault("checkpoint_interval_rounds",8)
+        self.config.setdefault("retain_training_artifacts",False)
+        if int(self.config["checkpoint_interval_rounds"]) < 1:
+            raise ValueError("checkpoint_interval_rounds must be positive")
+        self.config["artifact_dir"] = (str(self.output_dir/"trajectories")
+            if self.config["retain_training_artifacts"] else None)
         self.gpu_ids = tuple(int(i) for i in self.config["gpu_ids"])
         self.compute_gpu_ids = tuple(int(i) for i in self.config.get("compute_logical_gpu_ids",self.gpu_ids))
         if (not self.compute_gpu_ids or len(set(self.compute_gpu_ids))!=len(self.compute_gpu_ids) or
@@ -64,12 +70,13 @@ class Engine:
         self.rng = random.Random(self.seed)
         self.state,self.stop_requested = EngineState(),False
         self.checkpoint_path = self.output_dir/"checkpoint"
+        self._saved_checkpoint_path,self._saved_model_version = None,None
         self._signals = {}
         self._storage_finalized = False
         self.policy,self.optimizer,self.reference,self.teacher = None,None,None,None
         if resume_from is not None:
-            self._restore_checkpoint(checkpoint.load(resume_from))
             self.checkpoint_path = Path(resume_from)
+            self._restore_checkpoint(checkpoint.load(resume_from))
         else:
             self.policy = self._make_policy()
             self.optimizer,self.reference,self.teacher = self._make_learning_state()
@@ -85,7 +92,8 @@ class Engine:
             cache_initial_capacity=int(self.config.get("cache_initial_capacity",1024)),
             representation_token_budget=int(self.config.get("representation_token_budget",8192)),
             representation_batch_size=int(self.config.get("representation_batch_size",8)),
-            working_memory_gib=float(self.config.get("working_memory_gib",6.)))
+            working_memory_gib=float(self.config.get("working_memory_gib",6.)),
+            checkpoint_shard_mib=float(self.config.get("checkpoint_shard_mib",1024.)))
         policy.sampling_temperature = float(self.config["temperature"])
         policy.metadata.update({"method":self.method,"method_role":METHOD_ROLES[self.method],
             "max_context_tokens":policy.max_context_tokens,
@@ -130,7 +138,7 @@ class Engine:
             eps=float(self.config.get("optimizer_eps",1e-8)),
             bucket_mib=int(self.config.get("optimizer_bucket_mib",64)),
             pin_memory=bool(self.config.get("optimizer_pin_memory",True)))
-        return optimizer,WeightReference(self.policy.model),None
+        return optimizer,WeightReference(self.policy.model,fixed=True),None
 
     def _install_signals(self):
         def request(_signum,_frame):
@@ -144,10 +152,12 @@ class Engine:
             signal.signal(name,value)
         self._signals.clear()
 
-    def _boundary(self,cursor=None,*,durable=False):
+    def _boundary(self,cursor=None,*,durable=False,reuse_only=False):
         if cursor is not None:
             self.state.update_cursor = cursor
-        if durable or self.stop_requested:
+        reusable = (self._saved_checkpoint_path == self.checkpoint_path.resolve()
+                    and self._saved_model_version == self.optimizer.steps)
+        if self.stop_requested or (durable and (not reuse_only or reusable)):
             self.save_checkpoint(self.checkpoint_path)
         if self.stop_requested:
             raise TrainingInterrupted()
@@ -168,6 +178,10 @@ class Engine:
             rounds = int(self.config["rounds"])
             if rounds < 1:
                 raise ValueError("Trainable methods require a positive configured round count")
+            if self._saved_model_version is None:
+                # Save the initial actor, empty Adam state, fixed reference and
+                # task/RNG state before any environment work can be discarded.
+                self._boundary(durable=True)
             while self.state.round<rounds:
                 if self.state.phase=="collect":
                     count = int(self.config["groups"])
@@ -193,12 +207,14 @@ class Engine:
                                 group = collect_native_group(self.policy,env_factory,task_id=task["task_id"],initial_seed=initial_seed,
                                     slot_seeds=seeds,group_id=group_id,method=self.method,config=self.config)
                         self.state.groups.append(group)
-                        import torch
-                        directory = self.output_dir/"groups"
-                        directory.mkdir(exist_ok=True)
-                        torch.save(group,directory/f"round-{self.state.round}-group-{g}.pt")
+                        if self.config["retain_training_artifacts"]:
+                            import torch
+                            directory = self.output_dir/"groups"
+                            directory.mkdir(exist_ok=True)
+                            torch.save(group,directory/f"round-{self.state.round}-group-{g}.pt")
                         self.state.group_cursor += 1
-                        self._boundary(durable=self.state.group_cursor%int(self.config.get("checkpoint_interval_groups",1))==0)
+                        self._boundary(durable=self.state.group_cursor%int(self.config.get("checkpoint_interval_groups",16))==0,
+                                       reuse_only=True)
                     self.state.phase = "reference"
                 trajectories = [t for group in self.state.groups for t in group.trajectories]
                 if self.state.phase=="reference":
@@ -211,7 +227,7 @@ class Engine:
                             else:
                                 self.state.advantages = baseline_advantages(self.policy,trajectories,self.method,config=self.config)
                                 self.state.published_batch_plan = plan_published_batch(trajectories,self.method,config=self.config)
-                    with self.policy.phase("reference.single_round_activation"),self.reference.activate(self.policy.model):
+                    with self.policy.phase("reference.single_round_activation"),self.reference.activate(self.policy.model,optimizer=self.optimizer):
                         self.policy._reference_active = True
                         try:
                             self.state.reference_data = prepare_round(self.policy,trajectories,method=self.method,config=self.config)
@@ -226,7 +242,7 @@ class Engine:
                             details={"groups":len(self.state.credit_diagnostics),"recursive_bootstrapping":False})
                     self.state.reference_data.release_features()
                     self.state.phase = "update"
-                    self._boundary(durable=True)
+                    self._boundary(durable=True,reuse_only=True)
                 if self.state.phase=="update":
                     self.state.update_cursor = ppo_update(self.policy,trajectories,self.state.reference_data,
                         self.state.advantages,self.optimizer,minibatch_rows=int(self.config["ppo_minibatch_rows"]),
@@ -246,7 +262,7 @@ class Engine:
                 self.state.groups,self.state.reference_data,self.state.advantages,self.state.update_cursor = [],None,{},None
                 self.state.credit_diagnostics = {}
                 self.state.published_batch_plan = None
-                self._boundary(durable=True)
+                self._boundary(durable=self.state.round%int(self.config["checkpoint_interval_rounds"])==0)
             self.state.completed,self.state.phase = True,"complete"
             self._boundary(durable=True)
             return self._result("complete")
@@ -256,7 +272,7 @@ class Engine:
             self._restore_signals()
 
     def _write_round(self,trajectories):
-        if self.state.reference_data is not None:
+        if self.config["retain_training_artifacts"] and self.state.reference_data is not None:
             import torch
             torch.save({"reference":self.state.reference_data,"advantages":self.state.advantages,
                         "round":self.state.round,"method":self.method,"published_batch_plan":self.state.published_batch_plan},
@@ -277,8 +293,9 @@ class Engine:
                 "claim_scope":"same_depth_history_support_and_nonrecursive_continuation_sharing",
                 "positive_failed_steps_interpretation":"credit_assignment_count_not_verified_helpful_actions",
                 "additional_diagnostic_rollouts":0}
-        with (self.output_dir/"training.jsonl").open("a",encoding="utf-8") as handle:
-            handle.write(json.dumps(payload,ensure_ascii=False,allow_nan=False)+"\n")
+        with (self.output_dir/"training.jsonl").open("ab") as handle:
+            handle.write((json.dumps(payload,ensure_ascii=False,allow_nan=False)+"\n").encode("utf-8"))
+            self.state.training_log_offset = handle.tell()
 
     def evaluate(self,task_rows,env_factory,*,split):
         path = self.output_dir/f"evaluation-{split}.jsonl"
@@ -293,6 +310,8 @@ class Engine:
                     for key,value in (("protocol",PROTOCOL),("method",self.method),("benchmark",self.benchmark),("seed",self.seed),("split",split)):
                         if row[key]!=value:
                             raise ValueError("Persisted official evaluation belongs to another study identity")
+                    if row.get("model_version",self.optimizer.steps) != self.optimizer.steps:
+                        raise ValueError("Official evaluation journal belongs to a different actor update")
                     completed[row["task_id"]] = row
                     committed_bytes = handle.tell()
             if path.stat().st_size!=committed_bytes:
@@ -332,7 +351,8 @@ class Engine:
                 row = {"task_id":task["task_id"],"trajectory_id":trajectory.trajectory_id,
                     "official_evaluation":dict(trajectory.official_metrics),"steps":len(trajectory.steps),
                     "input_tokens":sum(c.input_tokens or 0 for c in costs),"output_tokens":sum(c.output_tokens or 0 for c in costs),
-                    "protocol":PROTOCOL,"method":self.method,"benchmark":self.benchmark,"seed":self.seed,"split":split}
+                    "protocol":PROTOCOL,"method":self.method,"benchmark":self.benchmark,"seed":self.seed,"split":split,
+                    "model_version":self.optimizer.steps}
                 with path.open("a",encoding="utf-8") as handle:
                     handle.write(json.dumps(row,ensure_ascii=False)+"\n")
                 records.append(row)
@@ -358,10 +378,20 @@ class Engine:
     def save_checkpoint(self,path):
         if self._storage_finalized:
             raise ValueError("Completed final models do not contain incomplete-training resume state")
+        # A published trainer cursor can only name durable diagnostic/result
+        # rows. Physical cost events are synced inside checkpoint.save after
+        # it records the actual parameter-serialization work.
+        for journal in (self.output_dir/"training.jsonl", *(
+                self.output_dir/f"evaluation-{split}.jsonl"
+                for split in self.config["evaluation_splits"][self.benchmark])):
+            if journal.exists():
+                checkpoint._sync_file(journal)
+        version = self.optimizer.steps if self.optimizer else 0
         checkpoint.save(path,policy=self.policy,optimizer=self.optimizer,reference=self.reference,
             teacher=self.teacher,trainer_state={"config":self.config,"state":self.state,"sampler_rng":self.rng.getstate()},
             ledger_state=self.ledger.state_dict(),rng_state=checkpoint.capture_rng(self.gpu_ids),
-            model_version=self.optimizer.steps if self.optimizer else 0)
+            model_version=version)
+        self._saved_checkpoint_path,self._saved_model_version = Path(path).resolve(),version
         return Path(path)
 
     def prepare_completed_checkpoint(self,training,evaluation):
@@ -377,7 +407,11 @@ class Engine:
         provenance = {"config":self.config,"model":self.policy.metadata,
             "training":training,"evaluation":evaluation,"official_tasks":"official_tasks.json",
             "cost_journal":str(self.ledger.path),"costs":self.ledger.snapshot(),
-            "raw_results_retained":"existing trajectory, group, reference and evaluation files in this cell"}
+            "retain_training_artifacts":bool(self.config["retain_training_artifacts"]),
+            "results_retained":"training claim diagnostics, physical costs and official evaluation results",
+            "raw_artifact_policy":("retain explicitly requested group/reference and single-evaluation traces"
+                if self.config["retain_training_artifacts"] else
+                "reclaim this cell's groups, trajectories and reference-round files after durable completion")}
         start = clock()
         artifact = checkpoint.prepare_completed(full_root,self.output_dir/"final_checkpoint",provenance=provenance)
         self.ledger.record("checkpoint","checkpoint.completed_artifacts",seconds=clock()-start,
@@ -404,13 +438,53 @@ class Engine:
         for gpu in self.gpu_ids:
             with torch.cuda.device(gpu):
                 torch.cuda.empty_cache()
-        self._restore_checkpoint(checkpoint.load(path))
         self.checkpoint_path = Path(path)
+        self._restore_checkpoint(checkpoint.load(path))
         return self._result("loaded")
+
+    def _restore_training_log(self):
+        """Roll back round statistics while retaining all actual physical costs."""
+        path = self.output_dir/"training.jsonl"
+        offset = vars(self.state).get("training_log_offset")
+        if offset is None:
+            # Earlier v3 snapshots did not store a byte cursor. Their round
+            # counter advances after _write_round, so rows below it committed.
+            offset = 0
+            if path.exists():
+                with path.open("rb") as handle:
+                    for line in handle:
+                        if not line.endswith(b"\n") or json.loads(line)["round"] >= self.state.round:
+                            break
+                        offset = handle.tell()
+        self.state.training_log_offset = int(offset)
+        size = path.stat().st_size if path.exists() else 0
+        if size < offset:
+            raise ValueError("Training diagnostic journal is shorter than its checkpoint cursor")
+        if size > offset:
+            with path.open("r+b") as handle:
+                handle.truncate(offset)
+            checkpoint._sync_file(path)
+            self.ledger.record("artifact","training.rollback",details={
+                "committed_rounds":self.state.round,"committed_bytes":offset,
+                "discarded_training_bytes":size-offset,"physical_costs_retained":True})
+
+    def _require_evaluation_after_completed_training(self):
+        if self.state.completed:
+            return
+        for split in self.config["evaluation_splits"][self.benchmark]:
+            for path in (self.output_dir/f"evaluation-{split}.jsonl",
+                         self.output_dir/split/"evaluation_summary.json",
+                         self.output_dir/split/"evaluation_records.json"):
+                if path.exists() and path.stat().st_size:
+                    raise ValueError(f"Incomplete training snapshot at round {self.state.round} "
+                        f"cannot reuse official evaluation output {path}; resume this cell's "
+                        "completed-training snapshot before continuing its evaluation")
 
     def _restore_checkpoint(self,saved):
         config = saved["trainer"]["config"]
         require_training_identity(config,self.config)
+        self.state = saved["trainer"]["state"]
+        self._require_evaluation_after_completed_training()
         self.policy = self._make_policy(saved["model_path"])
         if saved["metadata"]["has_optimizer"]:
             self.optimizer = OffloadedAdamW(self.policy.model,
@@ -420,11 +494,13 @@ class Engine:
             self.optimizer.bucket_bytes = int(float(self.config.get("optimizer_bucket_mib",64))*1024*1024)
             self.optimizer.pin_memory = bool(self.config.get("optimizer_pin_memory",True))
             self.optimizer.restore_gradients(saved["gradients"])
-        self.reference = WeightReference(state=saved["reference"]) if saved["metadata"]["has_reference"] else None
+        self.reference = WeightReference(state=saved["reference"],fixed=True) if saved["metadata"]["has_reference"] else None
         self.teacher = WeightReference(state=saved["teacher"]) if saved["metadata"]["has_teacher"] else None
-        self.state = saved["trainer"]["state"]
         self.rng.setstate(saved["trainer"]["sampler_rng"])
         self.ledger.load_state_dict(saved["ledger"])
+        self._restore_training_log()
+        self._saved_checkpoint_path = self.checkpoint_path.resolve()
+        self._saved_model_version = int(saved["metadata"]["model_version"])
         checkpoint.restore_rng(saved["rng"],self.gpu_ids)
 
     def close(self):

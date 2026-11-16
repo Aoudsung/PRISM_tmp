@@ -75,7 +75,8 @@ class CausalPolicy(nn.Module):
                  activation_offload: bool = False, benchmark: str = "alfworld",
                  max_context_tokens: int | None = None, max_new_tokens: int | None = None,
                  cache_initial_capacity: int = 1024, representation_token_budget: int = 8192,
-                 representation_batch_size: int = 8, working_memory_gib: float = 6.):
+                 representation_batch_size: int = 8, working_memory_gib: float = 6.,
+                 checkpoint_shard_mib: float = 1024.):
         super().__init__()
         from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
         # These are the actual compute devices. The Engine/ledger separately
@@ -125,6 +126,11 @@ class CausalPolicy(nn.Module):
         self.representation_batch_size = int(representation_batch_size)
         if min(self.cache_initial_capacity, self.representation_token_budget, self.representation_batch_size) < 1:
             raise ValueError("Cache and representation batch budgets must be positive")
+        if not math.isfinite(float(checkpoint_shard_mib)) or float(checkpoint_shard_mib) <= 0:
+            raise ValueError("checkpoint_shard_mib must be finite and positive")
+        self.checkpoint_shard_bytes = int(float(checkpoint_shard_mib) * 1024 * 1024)
+        if self.checkpoint_shard_bytes < 1:
+            raise ValueError("Checkpoint shard size must be at least one byte")
         self._phase_depth = 0
         self.eos_token_ids = (151645, 151643)
         self.sampling_temperature = 1.
@@ -137,6 +143,7 @@ class CausalPolicy(nn.Module):
                          "representation_token_budget": self.representation_token_budget,
                          "representation_batch_size": self.representation_batch_size,
                          "working_memory_reserve_gib": float(working_memory_gib),
+                         "checkpoint_shard_bytes": self.checkpoint_shard_bytes,
                          "trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad)}
 
     @property
@@ -548,6 +555,12 @@ class CausalPolicy(nn.Module):
         return ids,logprobs
 
     def save_model(self, directory):
-        self.model.save_pretrained(directory,state_dict={k:v.detach().cpu() for k,v in self.model.state_dict().items()},
-                                   safe_serialization=True,max_shard_size="4GB")
+        # Keep only detached device aliases here. Transformers first groups
+        # them into shards; safetensors moves the current shard to CPU during
+        # serialization. An individual tensor larger than the configured
+        # shard budget occupies its own shard. The official save path retains
+        # config, generation_config, tied-weight handling and index metadata.
+        self.synchronize()
+        self.model.save_pretrained(directory,state_dict=self.model.state_dict(),
+                                   safe_serialization=True,max_shard_size=self.checkpoint_shard_bytes)
         self.tokenizer.save_pretrained(directory)

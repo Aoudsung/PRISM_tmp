@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import random
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -154,6 +155,8 @@ class AppWorldEnv:
         self.AppWorld = AppWorld
         self.run_dir = Path(run_dir)
         self.experiment_name = 'fgpo/' + self.run_dir.name + '-' + uuid.uuid4().hex
+        self._experiment_output_dir = Path(path_store.experiment_outputs).resolve() / self.experiment_name
+        self._episode_output_dir = None
         self.world = None
         self.splits = {}
         self.steps = 0
@@ -174,26 +177,36 @@ class AppWorldEnv:
         self.close()
         self.task_id = task_id
         self.steps, self.done = 0, False
-        self.world = self.AppWorld(task_id=task_id, experiment_name=self.experiment_name + '/' + uuid.uuid4().hex,
-            random_seed=int(initial_seed), max_interactions=100, max_api_calls_per_interaction=1000,
-            timeout_seconds=10, load_ground_truth=True, ground_truth_mode='minimal',
-            raise_on_failure=True, raise_on_extra_parameters=True, show_api_response_schemas=True)
-        task = self.world.task
-        supervisor = task.supervisor
-        public_supervisor = {key: supervisor.get(key) if isinstance(supervisor, Mapping)
-                             else getattr(supervisor, key, None)
-                             for key in ('first_name', 'last_name', 'email', 'phone_number')}
-        docs = []
-        for name in self.BOOTSTRAP:
-            app, api = name.split('.')
-            docs.append({**task.api_docs[app][api], 'app_name': app, 'api_name': api})
-        observation = json.dumps({'supervisor': public_supervisor, 'datetime': str(task.datetime),
-            'apps': dict(task.app_descriptions), 'bootstrap_apis': list(self.BOOTSTRAP),
-            'bootstrap_api_docs': docs}, ensure_ascii=False)
-        from appworld.task import task_id_to_generator_id
-        return {'benchmark': self.benchmark, 'task_id': task_id,
-                'scenario_id': task_id_to_generator_id(task_id), 'instruction': str(task.instruction),
-                'observation': observation, 'action_schema': deepcopy(self.action_schema)}
+        episode_id = uuid.uuid4().hex
+        episode_output_dir = self._experiment_output_dir / episode_id
+        # Claim exactly one new episode directory before AppWorld can write it.
+        # The official output root also covers versions with different task subpaths.
+        episode_output_dir.mkdir(parents=True, exist_ok=False)
+        self._episode_output_dir = episode_output_dir
+        try:
+            self.world = self.AppWorld(task_id=task_id, experiment_name=self.experiment_name + '/' + episode_id,
+                random_seed=int(initial_seed), max_interactions=100, max_api_calls_per_interaction=1000,
+                timeout_seconds=10, load_ground_truth=True, ground_truth_mode='minimal',
+                raise_on_failure=True, raise_on_extra_parameters=True, show_api_response_schemas=True)
+            task = self.world.task
+            supervisor = task.supervisor
+            public_supervisor = {key: supervisor.get(key) if isinstance(supervisor, Mapping)
+                                 else getattr(supervisor, key, None)
+                                 for key in ('first_name', 'last_name', 'email', 'phone_number')}
+            docs = []
+            for name in self.BOOTSTRAP:
+                app, api = name.split('.')
+                docs.append({**task.api_docs[app][api], 'app_name': app, 'api_name': api})
+            observation = json.dumps({'supervisor': public_supervisor, 'datetime': str(task.datetime),
+                'apps': dict(task.app_descriptions), 'bootstrap_apis': list(self.BOOTSTRAP),
+                'bootstrap_api_docs': docs}, ensure_ascii=False)
+            from appworld.task import task_id_to_generator_id
+            return {'benchmark': self.benchmark, 'task_id': task_id,
+                    'scenario_id': task_id_to_generator_id(task_id), 'instruction': str(task.instruction),
+                    'observation': observation, 'action_schema': deepcopy(self.action_schema)}
+        except BaseException:
+            self.close()
+            raise
 
     def step_native(self, action):
         if self.world is None or self.done:
@@ -232,6 +245,15 @@ class AppWorldEnv:
         if self.world is not None:
             self.world.close()
             self.world = None
+        elif self._episode_output_dir is not None:
+            # A failed constructor can leave process-local DB/API/time state
+            # without returning an object. Each worker owns only this world.
+            self.AppWorld.close_all()
+        if self._episode_output_dir is not None:
+            # Both collectors copy official metrics before releasing the lease.
+            # Remove only this instance's claimed episode, after closing its DBs.
+            shutil.rmtree(self._episode_output_dir)
+            self._episode_output_dir = None
 
 
 class EnvironmentProcess:

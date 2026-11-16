@@ -62,6 +62,23 @@ def compute_allocation(physical_ids, model_physical_ids=None):
 
 
 def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_ids=None, resume=False):
+    """Reserve the full CPU training footprint before loading or sampling."""
+    require_protocol(config)
+    output = Path(output_dir)
+    arguments = dict(method=method, benchmark=benchmark, seed=seed, gpu_ids=gpu_ids,
+                     model_gpu_ids=model_gpu_ids, resume=resume)
+    if resume and (output / 'cell_summary.json').is_file():
+        return _run_cell(config, output, **arguments)
+    from .resources import reserve_host_memory
+    options = resolve_method_config(dict(config, method=method, benchmark=benchmark, seed=int(seed)))
+    compute = gpu_ids if model_gpu_ids is None else model_gpu_ids
+    with reserve_host_memory(options, model_gpu_count=len(compute),
+                             resume_checkpoint=output / 'checkpoint' if resume and output.exists() else None) as allocation:
+        return _run_cell(config, output, **arguments, resource_allocation=allocation)
+
+
+def _run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_ids=None,
+              resume=False, resource_allocation=None):
     require_protocol(config)
     # Resolve physical allocation before importing any Engine/CUDA code.
     logical_ids, visible_mask = isolate_gpus(gpu_ids, config['excluded_gpu_ids'])
@@ -69,6 +86,8 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
     from .engine import Engine
     output = Path(output_dir)
     cell_config = resolve_method_config(dict(config,method=method,benchmark=benchmark,seed=int(seed)))
+    if resource_allocation is not None:
+        cell_config['host_memory_reservation'] = resource_allocation
     require_protocol(cell_config)
     cell_config.update(gpu_ids=logical_ids, physical_gpu_ids=list(gpu_ids),
                        logical_gpu_ids=logical_ids, cuda_visible_devices=visible_mask,
@@ -126,7 +145,13 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
         # Each method executes its declared complete recipe once per study cell.
         training_path = output / 'training_summary.json'
         training = json.loads(training_path.read_text()) if resume_from and training_path.is_file() else None
-        if training is None or training.get('status') != 'complete':
+        reusable_training = (training is not None and training.get('status') == 'complete'
+            and engine.state.completed
+            and training.get('rounds_completed') == engine.state.round
+            and training.get('optimizer_steps') == engine.optimizer.steps
+            and all(training.get(key) == cell_config[key]
+                    for key in ('protocol', 'method', 'benchmark', 'seed')))
+        if not reusable_training:
             training = engine.train(train_tasks, env_factory)
         checkpoint = engine.save_checkpoint(output / 'checkpoint')
         write_json(training_path, training)
@@ -142,6 +167,8 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
                 require_identity(completed_evaluation, cell_config)
                 if completed_evaluation['split'] != split:
                     raise ValueError('Saved official evaluation split differs.')
+                if completed_evaluation.get('model_version', engine.optimizer.steps) != engine.optimizer.steps:
+                    raise ValueError('Saved official evaluation belongs to a different final model version.')
                 if completed_evaluation['dataset_complete']:
                     scores[split] = completed_evaluation
                     continue
@@ -150,7 +177,8 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
             # Official evaluation is already finalized by the actor/Engine exactly once.
             summary = official_summary(benchmark, records, tasks)
             summary.update(protocol=config['protocol'],method=method, benchmark=benchmark, seed=seed,
-                           model_path=cell_config['model_path'], split=split)
+                           model_path=cell_config['model_path'], split=split,
+                           model_version=engine.optimizer.steps)
             write_json(output / split / 'evaluation_records.json', records)
             write_json(summary_path, summary)
             if evaluation.get('status') == 'interrupted':

@@ -269,7 +269,11 @@ class OffloadedAdamW:
         self._transfer_slots.clear()
 
     def gradient_state(self):
-        return {name:p.grad.detach().to(device="cpu", copy=True) for name,p in self.params if p.grad is not None}
+        # checkpoint.save serializes synchronously. torch.save stages each
+        # storage on CPU in turn; retaining device aliases here avoids an
+        # additional full-gradient CPU copy at an interrupted minibatch.
+        # checkpoint.load explicitly restores these tensors on CPU.
+        return {name:p.grad.detach() for name,p in self.params if p.grad is not None}
 
     def restore_gradients(self, values):
         self.zero_grad()
@@ -277,32 +281,84 @@ class OffloadedAdamW:
         for name,value in values.items():
             params[name].grad = value.to(params[name])
 
+    def reference_restore_sources(self, model, initial_weights):
+        """Borrow actor sources; uninitialized parameters are still initial.
+
+        The engine changes actor parameters only through this optimizer.
+        Every updated parameter therefore has a persistent FP32 master; a
+        parameter without optimizer state has never been updated. The caller
+        must supply the immutable initial reference, not an EMA reference.
+        Validate all sources before installing any reference parameters.
+        """
+        parameters, owned = dict(model.named_parameters()), dict(self.params)
+        if any(parameters.get(name) is not parameter for name,parameter in self.params):
+            raise ValueError("Reference restoration requires this actor's optimizer")
+        sources = {}
+        for name,initial in initial_weights.items():
+            parameter = parameters[name]
+            if parameter.requires_grad and owned.get(name) is not parameter:
+                raise ValueError("Every trainable reference parameter must belong to the actor optimizer")
+            state = self.state.get(name)
+            source = initial if state is None else state["master"]
+            expected_dtype = parameter.dtype if state is None else torch.float32
+            if (source.device.type != "cpu" or source.shape != parameter.shape or
+                source.dtype != expected_dtype or not source.is_contiguous() or
+                not parameter.is_contiguous()):
+                raise ValueError("Reference restoration requires matching contiguous CPU source tensors")
+            sources[name] = source
+        return sources
+
+    @torch.no_grad()
+    def restore_reference_parameter(self, parameter, source):
+        # Match step() exactly: round FP32 master -> actor dtype on CPU,
+        # then transfer that dtype to the actor. A cross-device FP32 copy
+        # would move rounding to CUDA. Temporary storage is one CPU bucket.
+        size = max(1,self.bucket_bytes // parameter.element_size())
+        target, values = parameter.view(-1), source.view(-1)
+        for start in range(0,parameter.numel(),size):
+            end = min(start+size,parameter.numel())
+            rounded = values[start:end].to(dtype=parameter.dtype)
+            target[start:end].copy_(rounded)
+            del rounded
+
 
 class WeightReference:
-    def __init__(self, model=None, *, trainable_only=False, state=None):
+    def __init__(self, model=None, *, trainable_only=False, state=None, fixed=False):
         self.weights = (state if state is not None else {name:p.detach().to(device="cpu", copy=True)
                         for name,p in model.named_parameters() if not trainable_only or p.requires_grad})
+        self.fixed = bool(fixed)
 
     @contextmanager
-    def activate(self, model):
-        current,previous = {},model.training
+    def activate(self, model, *, optimizer=None):
+        if optimizer is not None and not self.fixed:
+            raise ValueError("Master-weight restoration requires an immutable initial reference")
+        current = (optimizer.reference_restore_sources(model,self.weights) if optimizer is not None else {})
+        installed,previous = [],model.training
         try:
             with torch.no_grad():
                 for name,p in model.named_parameters():
                     if name in self.weights:
-                        current[name] = p.detach().to(device="cpu", copy=True)
+                        if optimizer is None:
+                            current[name] = p.detach().to(device="cpu", copy=True)
+                        # Register before copy_: finally restores even if
+                        # installing this parameter fails part-way through.
+                        installed.append((name,p))
                         p.copy_(self.weights[name])
             model.eval()
             yield
         finally:
             with torch.no_grad():
-                for name,p in model.named_parameters():
-                    if name in current:
+                for name,p in installed:
+                    if optimizer is None:
                         p.copy_(current[name])
+                    else:
+                        optimizer.restore_reference_parameter(p,current[name])
             model.train(previous)
 
     @torch.no_grad()
     def update_ema(self, model, decay=.99):
+        if self.fixed:
+            raise ValueError("The initial reference must remain immutable")
         for name,p in model.named_parameters():
             if name in self.weights:
                 self.weights[name].mul_(decay).add_(p.detach().cpu(),alpha=1-decay)
