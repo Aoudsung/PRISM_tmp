@@ -29,6 +29,98 @@ class KVState:
     right_padded: bool = True
 
 
+class _DecodeWorkspace:
+    """One response's bounded, exclusively owned device input buffers.
+
+    Each draw completes its existing packed CPU readback before these mutable
+    buffers are reused. All writes/consumers on each device use its current
+    stream; cached selection tensors are immutable until the active set changes.
+    """
+    def __init__(self, policy, state, max_tokens):
+        self.batch = len(state.lengths)
+        self.device = policy.device
+        self.start = state.valid_mask.shape[1]
+        self.steps = 0
+        self.max_appends = max(0, int(max_tokens) - 1)
+        self.ids = torch.empty((self.batch, 1), dtype=torch.long, device=self.device)
+        self.positions = torch.empty_like(self.ids)
+        self.lengths = torch.tensor(state.lengths, dtype=torch.long, device=self.device)
+        self.mask = torch.empty((self.batch, self.start + self.max_appends),
+                                dtype=torch.bool, device=self.device)
+        self.mask[:, :self.start].copy_(state.valid_mask)
+        self.cache_positions = torch.arange(self.start, self.start + self.max_appends,
+                                            dtype=torch.long, device=self.device)
+        self.sample_input = torch.empty(self.batch, dtype=torch.long, device=self.device)
+        self.sample_gather = torch.empty(self.batch, dtype=torch.long, device=state.next_logits.device)
+        self.pad_token_id = policy.tokenizer.pad_token_id
+        self.selections, self.zero_columns = {}, {}
+        self.sampled_tokens, self.sampled_rows = None, ()
+
+    def indices(self, rows, device, purpose="rows"):
+        rows, device = tuple(rows), torch.device(device)
+        key = purpose, device
+        previous = self.selections.get(key)
+        if previous is None or previous[0] != rows:
+            previous = rows, torch.tensor(rows, dtype=torch.long, device=device)
+            self.selections[key] = previous
+        return previous[1]
+
+    def zeros(self, count, device):
+        device = torch.device(device)
+        if device not in self.zero_columns:
+            self.zero_columns[device] = torch.zeros(self.batch, dtype=torch.long, device=device)
+        return self.zero_columns[device][:count]
+
+    def retain(self, tokens, rows):
+        if self.sampled_tokens is not None:
+            raise RuntimeError("Consume the retained draw before sampling again")
+        self.sampled_tokens, self.sampled_rows = tokens, tuple(rows)
+
+    def clear_sample(self):
+        self.sampled_tokens, self.sampled_rows = None, ()
+
+    def prepare(self, state, continuing):
+        continuing = tuple(continuing)
+        if self.sampled_tokens is None or not continuing:
+            raise ValueError("One-token append requires a retained draw and continuing rows")
+        if self.steps >= self.max_appends or state.valid_mask.shape[1] != self.start + self.steps:
+            raise ValueError("One-token workspace must follow its response's physical cache positions")
+        keep = set(continuing)
+        selected = tuple(i for i, row in enumerate(self.sampled_rows) if row in keep)
+        if tuple(self.sampled_rows[i] for i in selected) != continuing:
+            raise ValueError("Continuing rows must preserve the retained draw's slot order")
+        if continuing == self.sampled_rows:
+            tokens = self.sampled_tokens
+        else:
+            positions = self.indices(selected, self.sampled_tokens.device, "sample_positions")
+            tokens = self.sample_gather[:len(continuing)]
+            torch.index_select(self.sampled_tokens, 0, positions, out=tokens)
+        rows = self.indices(continuing, self.device)
+        self.sample_input[:len(continuing)].copy_(tokens)
+        self.ids.fill_(self.pad_token_id)
+        self.ids.index_copy_(0, rows, self.sample_input[:len(continuing), None])
+        physical = self.start + self.steps
+        valid = self.mask[:, physical]
+        valid.zero_()
+        valid.index_fill_(0, rows, True)
+        # Match the general width-one path for both real and padded queries:
+        # real rows use their old length, inactive rows use max(old length-1,0).
+        self.positions[:, 0].copy_(self.lengths)
+        self.positions[:, 0].sub_(1).add_(valid).clamp_min_(0)
+        self.lengths.add_(valid)
+        cache_position = self.cache_positions[self.steps:self.steps + 1]
+        self.steps += 1
+        additions = tuple(int(row in keep) for row in range(self.batch))
+        return (self.ids, self.mask[:, :physical + 1], self.positions, cache_position, additions)
+
+    def close(self):
+        self.clear_sample()
+        self.selections.clear()
+        self.zero_columns.clear()
+        self.ids = self.positions = self.lengths = self.mask = None
+        self.cache_positions = self.sample_input = self.sample_gather = None
+
+
 class _LayerCaptured(Exception):
     """Internal control flow for a no-grad intermediate-layer representation."""
 
@@ -75,7 +167,8 @@ class CausalPolicy(nn.Module):
                  activation_offload: bool = False, benchmark: str = "alfworld",
                  max_context_tokens: int | None = None, max_new_tokens: int | None = None,
                  cache_initial_capacity: int = 1024, representation_token_budget: int = 8192,
-                 representation_batch_size: int = 8, working_memory_gib: float = 6.):
+                 representation_batch_size: int = 8, working_memory_gib: float = 6.,
+                 checkpoint_shard_mib: float = 1024.):
         super().__init__()
         from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
         # These are the actual compute devices. The Engine/ledger separately
@@ -125,6 +218,11 @@ class CausalPolicy(nn.Module):
         self.representation_batch_size = int(representation_batch_size)
         if min(self.cache_initial_capacity, self.representation_token_budget, self.representation_batch_size) < 1:
             raise ValueError("Cache and representation batch budgets must be positive")
+        if not math.isfinite(float(checkpoint_shard_mib)) or float(checkpoint_shard_mib) <= 0:
+            raise ValueError("checkpoint_shard_mib must be finite and positive")
+        self.checkpoint_shard_bytes = int(float(checkpoint_shard_mib) * 1024 * 1024)
+        if self.checkpoint_shard_bytes < 1:
+            raise ValueError("Checkpoint shard size must be at least one byte")
         self._phase_depth = 0
         self.eos_token_ids = (151645, 151643)
         self.sampling_temperature = 1.
@@ -133,10 +231,13 @@ class CausalPolicy(nn.Module):
                          "compute_logical_gpu_ids":list(self.gpu_ids),
                          "attention": "sdpa", "device_map": dict(self.device_map),
                          "kv_cache": "geometric_arena", "cache_initial_capacity": self.cache_initial_capacity,
+                         "rollout_batching": "turn_barrier_owned_cohort_merge",
+                         "rollout_decode_inputs": "retained_device_tokens_bounded_workspace_v2",
                          "activation_offload": self.activation_offload,
                          "representation_token_budget": self.representation_token_budget,
                          "representation_batch_size": self.representation_batch_size,
                          "working_memory_reserve_gib": float(working_memory_gib),
+                         "checkpoint_shard_bytes": self.checkpoint_shard_bytes,
                          "trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad)}
 
     @property
@@ -446,6 +547,30 @@ class CausalPolicy(nn.Module):
         state.valid_spans = ()
 
     @torch.no_grad()
+    def merge_cache(self, states):
+        """Consume compact sibling states without recomputing any model token."""
+        states = tuple(states)
+        if not states:
+            raise ValueError("Cache merging requires at least one owned state")
+        if len(states) == 1:
+            return states[0]
+        if any(not state.right_padded or state.valid_mask.shape[1] != max(state.lengths)
+               for state in states):
+            raise ValueError("Merge complete compacted prefixes at the turn barrier")
+        lengths = tuple(length for state in states for length in state.lengths)
+        spans = tuple(row for state in states for row in state.valid_spans)
+        width = max(lengths)
+        counts = torch.tensor(lengths, device=self.device)
+        valid = torch.arange(width, device=self.device)[None, :] < counts[:, None]
+        logits = torch.cat([state.next_logits for state in states], dim=0)
+        try:
+            cache = ArenaCache.merge_owned([state.cache for state in states])
+            return KVState(cache, valid, logits, lengths, spans, True)
+        finally:
+            for state in states:
+                self.release_cache(state)
+
+    @torch.no_grad()
     def compact_cache(self, state: KVState):
         """Compact real padding only; retained arena capacity is reusable."""
         length = max(state.lengths, default=0)
@@ -490,12 +615,43 @@ class CausalPolicy(nn.Module):
         positions = torch.minimum(previous[:, None] + offsets[None, :],
                                   (previous + added - 1)[:, None]).clamp_min(0)
         physical = state.valid_mask.shape[1]
+        active = tuple(i for i, count in enumerate(lengths) if count)
+        return self._append_prepared_cache(state, ids, mask, positions,
+            torch.arange(physical,physical+width,device=self.device),
+            lengths=lengths, totals=totals, active=active, role=role)
+
+    @torch.no_grad()
+    def decode_workspace(self, state: KVState, max_tokens):
+        return _DecodeWorkspace(self, state, max_tokens)
+
+    @torch.no_grad()
+    def append_sampled_cache(self, state: KVState, workspace, continuing, *, role="rollout.decode"):
+        """Append retained GPU samples; EOS/cap decisions remain with the caller."""
+        if self.model.training:
+            self.model.eval()
+        continuing = tuple(continuing)
+        keep = set(continuing)
+        totals = tuple(old + int(row in keep) for row, old in enumerate(state.lengths))
+        if max(totals) > self.max_context_tokens:
+            raise ValueError("Cache append exceeds the logical context capacity")
+        try:
+            ids, mask, positions, cache_position, lengths = workspace.prepare(state, continuing)
+            return self._append_prepared_cache(state, ids, mask, positions, cache_position,
+                lengths=lengths, totals=totals, active=continuing, role=role, workspace=workspace)
+        finally:
+            workspace.clear_sample()
+
+    def _append_prepared_cache(self, state, ids, mask, positions, cache_position, *,
+                               lengths, totals, active, role, workspace=None):
+        batch, width = ids.shape
+        physical = state.valid_mask.shape[1]
         hidden,_,cache = self.body(ids,attention_mask=mask,position_ids=positions,cache=state.cache,
-            cache_position=torch.arange(physical,physical+width,device=self.device),use_cache=True,role=role,
+            cache_position=cache_position,use_cache=True,role=role,
             actual_tokens=sum(lengths), logical_length=max(totals))
-        active = [i for i, count in enumerate(lengths) if count]
-        indices = torch.tensor(active, dtype=torch.long, device=hidden.device)
-        last = torch.tensor([lengths[i] - 1 for i in active], device=hidden.device)
+        indices = (torch.tensor(active, dtype=torch.long, device=hidden.device) if workspace is None else
+                   workspace.indices(active, hidden.device))
+        last = (torch.tensor([lengths[i] - 1 for i in active], device=hidden.device) if workspace is None else
+                workspace.zeros(len(active), hidden.device))
         selected = hidden[indices, last]
         projected = self.head(selected, role=role+".head")
         if len(active) == batch:
@@ -506,7 +662,9 @@ class CausalPolicy(nn.Module):
             # caller, so it can be updated without cloning a full vocabulary
             # table or projecting padding tokens for completed responses.
             logits = state.next_logits
-            logits.index_copy_(0, indices.to(logits.device), projected)
+            target_indices = (indices.to(logits.device) if workspace is None else
+                              workspace.indices(active, logits.device))
+            logits.index_copy_(0, target_indices, projected)
         right_padded = state.right_padded and all(not n or state.lengths[i] == physical
                                                 for i, n in enumerate(lengths))
         spans = tuple(old if not count else
@@ -516,8 +674,8 @@ class CausalPolicy(nn.Module):
         return KVState(cache,mask,logits,totals,spans,right_padded)
 
     @torch.no_grad()
-    def draw_tokens(self, state: KVState, active, generators, *, temperature=None, top_p=1.0):
-        """Draw from each slot's temperature-scaled law and return its log-prob."""
+    def draw_tokens(self, state: KVState, active, generators, *, temperature=None, top_p=1.0, workspace=None):
+        """Return the same CPU draw and optionally retain its device token IDs."""
         active, generators = tuple(active), tuple(generators)
         if len(active) != len(generators):
             raise ValueError("Each active trajectory requires its own random generator")
@@ -528,7 +686,8 @@ class CausalPolicy(nn.Module):
             raise ValueError("Sampling temperature must be finite and positive")
         if float(top_p) != 1.:
             raise ValueError("The published sampling protocol uses top_p=1.0")
-        selected = torch.tensor(active, dtype=torch.long, device=state.next_logits.device)
+        selected = (torch.tensor(active, dtype=torch.long, device=state.next_logits.device) if workspace is None else
+                    workspace.indices(active, state.next_logits.device))
         logits = state.next_logits.index_select(0, selected).float()
         if temperature != 1.:
             logits.div_(temperature)
@@ -544,10 +703,18 @@ class CausalPolicy(nn.Module):
         sampled = torch.stack((tokens.double(), scores.double()), dim=1).cpu().tolist()
         ids = [int(row[0]) for row in sampled]
         logprobs = [row[1] for row in sampled]
+        if workspace is not None:
+            workspace.retain(tokens, active)
         self.record("model","rollout.draw",output_tokens=len(ids),seconds=0.)
         return ids,logprobs
 
     def save_model(self, directory):
-        self.model.save_pretrained(directory,state_dict={k:v.detach().cpu() for k,v in self.model.state_dict().items()},
-                                   safe_serialization=True,max_shard_size="4GB")
+        # Keep only detached device aliases here. Transformers first groups
+        # them into shards; safetensors moves the current shard to CPU during
+        # serialization. An individual tensor larger than the configured
+        # shard budget occupies its own shard. The official save path retains
+        # config, generation_config, tied-weight handling and index metadata.
+        self.synchronize()
+        self.model.save_pretrained(directory,state_dict=self.model.state_dict(),
+                                   safe_serialization=True,max_shard_size=self.checkpoint_shard_bytes)
         self.tokenizer.save_pretrained(directory)

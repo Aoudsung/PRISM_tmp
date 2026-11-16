@@ -315,7 +315,7 @@ def collect_native_trajectory(policy,env_factory,*,task_id,initial_seed,sampling
             policy.encode(goal),policy.encode(_pure(initial_raw)),pinned,tuple(steps),tuple(segments),tuple(segments),
             success,metrics,tuple(policy.ledger.records[start_cost:]),
             int(config["history"]) if method in PUBLISHED_RECIPES else 2 if method=="bipace_q" else None)
-        if config.get("artifact_dir"):
+        if config.get("retain_training_artifacts",False) and config.get("artifact_dir"):
             directory = Path(config["artifact_dir"])
             directory.mkdir(parents=True,exist_ok=True)
             torch.save(trajectory,directory/(trajectory_id+".pt"))
@@ -441,10 +441,8 @@ def _collect_published_group(policy,env_factory,*,task_id,initial_seed,slot_seed
                 seeds[slot],item["goal"],policy.encode(item["goal"]),policy.encode(_pure(item["initial_raw"])),
                 item["pinned"],tuple(item["steps"]),tuple(item["segments"]),tuple(item["segments"]),bool(metrics["success"]),
                 metrics,tuple(item["costs"]),int(config["history"]))
-            if config.get("artifact_dir"):
-                directory = Path(config["artifact_dir"])
-                directory.mkdir(parents=True,exist_ok=True)
-                torch.save(trajectory,directory/(trajectory.trajectory_id+".pt"))
+            # Optional training persistence belongs to Engine's GroupRecord;
+            # its embedded trajectories already contain these exact rows.
             trajectories.append(trajectory)
         return GroupRecord(group_id,task_id,policy.benchmark,initial_seed,tuple(trajectories),tuple(ledger.records[start:]))
     finally:

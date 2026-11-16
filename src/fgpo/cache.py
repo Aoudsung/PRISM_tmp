@@ -141,6 +141,53 @@ class ArenaCache(Cache):
                       for _ in range(int(num_layers))]
         super().__init__(layers=layers)
 
+    @classmethod
+    def merge_owned(cls, caches):
+        """Consume sibling caches into one right-padded batch, layer by layer."""
+        caches = tuple(caches)
+        if not caches:
+            raise ValueError("Cache merging requires at least one owned cache")
+        if len(caches) == 1:
+            return caches[0]
+        first = caches[0].layers[0]
+        merged = cls(len(caches[0].layers), initial_capacity=first.initial_capacity,
+                     growth_limit=first.growth_limit)
+        try:
+            for index, target in enumerate(merged.layers):
+                sources = [cache.layers[index] for cache in caches]
+                source = sources[0]
+                width = max(layer._length for layer in sources)
+                target.dtype, target.device = source.dtype, source.device
+                target.max_batch_size = sum(layer.max_batch_size for layer in sources)
+                target.num_heads, target.head_dim = source.num_heads, source.head_dim
+                target.is_initialized = True
+                # Retain useful arena headroom without increasing the largest
+                # source capacity or presenting spare columns to attention.
+                capacity = max(width, min(target.growth_limit, max(layer._capacity for layer in sources)))
+                target._reserve(max(1, capacity))
+                start = 0
+                for cache, source in zip(caches, sources, strict=True):
+                    stop = start + source.max_batch_size
+                    count = source._length
+                    target._key_storage[start:stop, :, :count].copy_(source.keys)
+                    target._value_storage[start:stop, :, :count].copy_(source.values)
+                    target._key_storage[start:stop, :, count:width].zero_()
+                    target._value_storage[start:stop, :, count:width].zero_()
+                    # No old layer or arena capacity survives into allocation
+                    # of the next layer; callers relinquish all input owners.
+                    cache.layers[index] = None
+                    source.keys = source.values = None
+                    source._key_storage = source._value_storage = None
+                    source._capacity = source._length = 0
+                    source.is_initialized = False
+                    start = stop
+                target._length = width
+                target._refresh_views()
+            return merged
+        except BaseException:
+            merged.layers.clear()
+            raise
+
     def _row_selections(self, indices):
         """Upload each row selection once per device, shared by its layers."""
         device_indices = {}

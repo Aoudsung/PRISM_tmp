@@ -54,6 +54,9 @@ def _link_tree(source,target):
             _link_tree(child,target/child.name)
         else:
             os.link(child,target/child.name)
+    # Callers sync legacy source files once before linking them. Normal reuse
+    # therefore only needs to flush these new directory entries.
+    _sync_directory(target)
 
 
 def snapshot_directory(root):
@@ -74,44 +77,70 @@ def save(root,*,policy,optimizer,reference,teacher,trainer_state,ledger_state,rn
     snapshots = root/"snapshots"
     snapshots.mkdir(parents=True,exist_ok=True)
     previous,previous_metadata = (snapshot_directory(root) if (root/"CURRENT").exists() else (None,None))
+    if previous is not None:
+        if not previous_metadata.get("parameters_synced",False):
+            # Older v3 writers did not sync parameter files before publishing.
+            # Adopt their complete snapshot durably once before reusing links.
+            _sync_tree(previous)
+        _sync_file(root/"CURRENT")
+        _sync_directory(snapshots)
+        _sync_directory(root)
+        # One cell has one writer. Discard abandoned UUIDs before allocating
+        # another full model/Adam generation, keeping CURRENT intact.
+        _reclaim_superseded_snapshots(root,previous.name)
     identity = uuid.uuid4().hex
     directory = snapshots/identity
     directory.mkdir()
     same_model = previous_metadata is not None and previous_metadata["model_version"] == model_version
-    if same_model:
-        _link_tree(previous/"model",directory/"model")
-    else:
-        policy.save_model(directory/"model")
-    if optimizer is not None:
+    try:
         if same_model:
-            os.link(previous/"optimizer.pt",directory/"optimizer.pt")
+            _link_tree(previous/"model",directory/"model")
         else:
-            torch.save(optimizer.state_dict(),directory/"optimizer.pt")
-        torch.save(optimizer.gradient_state(),directory/"gradients.pt")
-    if reference is not None:
-        if previous is not None and (previous/"reference.pt").exists():
-            os.link(previous/"reference.pt",directory/"reference.pt")
-        else:
-            torch.save(reference.weights,directory/"reference.pt")
-    if teacher is not None:
-        if same_model:
-            os.link(previous/"teacher.pt",directory/"teacher.pt")
-        else:
-            torch.save(teacher.weights,directory/"teacher.pt")
-    policy.record("checkpoint","checkpoint.serialize_parameters",seconds=time.clock_gettime(time.CLOCK_MONOTONIC)-started,
-                  details={"model_version":model_version,"reused_parameter_files":same_model})
-    actual_ledger_state = {**ledger_state,**policy.ledger.state_dict()}
-    torch.save({"trainer":trainer_state,"ledger":actual_ledger_state,"rng":rng_state},directory/"state.pt")
-    metadata = {"format":FORMAT,"model_version":model_version,"base_model_path":policy.model_path,
-                "adaptation":policy.adaptation,"model":policy.metadata,
-                "has_optimizer":optimizer is not None,"has_reference":reference is not None,
-                "has_teacher":teacher is not None}
-    (directory/"metadata.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
-    temporary = root/("CURRENT."+identity)
-    temporary.write_text(json.dumps({"snapshot":identity})+"\n",encoding="utf-8")
-    os.replace(temporary,root/"CURRENT")
-    if previous is not None and previous != directory:
-        shutil.rmtree(previous)
+            policy.save_model(directory/"model")
+            _sync_tree(directory/"model")
+        if optimizer is not None:
+            if same_model:
+                os.link(previous/"optimizer.pt",directory/"optimizer.pt")
+            else:
+                torch.save(optimizer.state_dict(),directory/"optimizer.pt")
+                _sync_file(directory/"optimizer.pt")
+            torch.save(optimizer.gradient_state(),directory/"gradients.pt")
+            _sync_file(directory/"gradients.pt")
+        if reference is not None:
+            if previous is not None and (previous/"reference.pt").exists():
+                os.link(previous/"reference.pt",directory/"reference.pt")
+            else:
+                torch.save(reference.weights,directory/"reference.pt")
+                _sync_file(directory/"reference.pt")
+        if teacher is not None:
+            if same_model:
+                os.link(previous/"teacher.pt",directory/"teacher.pt")
+            else:
+                torch.save(teacher.weights,directory/"teacher.pt")
+                _sync_file(directory/"teacher.pt")
+        policy.record("checkpoint","checkpoint.serialize_parameters",seconds=time.clock_gettime(time.CLOCK_MONOTONIC)-started,
+                      details={"model_version":model_version,"reused_parameter_files":same_model})
+        actual_ledger_state = {**ledger_state,**policy.ledger.state_dict()}
+        if policy.ledger.path is not None:
+            _sync_file(policy.ledger.path)
+        torch.save({"trainer":trainer_state,"ledger":actual_ledger_state,"rng":rng_state},directory/"state.pt")
+        _sync_file(directory/"state.pt")
+        metadata = {"format":FORMAT,"model_version":model_version,"base_model_path":policy.model_path,
+                    "parameters_synced":True,
+                    "adaptation":policy.adaptation,"model":policy.metadata,
+                    "has_optimizer":optimizer is not None,"has_reference":reference is not None,
+                    "has_teacher":teacher is not None}
+        (directory/"metadata.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        _sync_file(directory/"metadata.json")
+        _sync_directory(directory)
+        _sync_directory(snapshots)
+        _sync_directory(root)
+        _sync_directory(root.parent)
+        _publish_pointer(root,identity)
+    except BaseException:
+        _discard_unpublished(root,directory,identity)
+        raise
+    _reclaim_superseded_snapshots(root,identity)
     return directory
 
 
@@ -137,13 +166,17 @@ def _sync_directory(path):
         os.close(descriptor)
 
 
+def _sync_file(path):
+    with Path(path).open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
 def _sync_tree(directory):
     for child in directory.iterdir():
         if child.is_dir():
             _sync_tree(child)
         else:
-            with child.open("rb") as handle:
-                os.fsync(handle.fileno())
+            _sync_file(child)
     _sync_directory(directory)
 
 
@@ -157,6 +190,36 @@ def _publish_pointer(root,identity):
     _sync_directory(root)
 
 
+def _discard_unpublished(root,directory,identity):
+    """Remove only this call's unfinished snapshot; never unlink CURRENT data."""
+    pointer = root/"CURRENT"
+    if pointer.exists() and json.loads(pointer.read_text(encoding="utf-8"))["snapshot"] == identity:
+        # The atomic rename succeeded; a later directory-sync failure must
+        # leave both complete snapshots available rather than remove CURRENT.
+        return
+    incoming = root/("CURRENT."+identity)
+    if incoming.exists():
+        incoming.unlink()
+    if directory.exists():
+        shutil.rmtree(directory)
+    _sync_directory(directory.parent)
+    _sync_directory(root)
+
+
+def _reclaim_superseded_snapshots(root,current):
+    """Collect this writer's other UUID directories while keeping durable CURRENT."""
+    snapshots = root/"snapshots"
+    for directory in snapshots.iterdir():
+        name = directory.name
+        if (name == current or len(name) != 32 or
+                any(character not in "0123456789abcdef" for character in name)):
+            continue
+        if directory.is_symlink() or not directory.is_dir():
+            continue
+        shutil.rmtree(directory)
+    _sync_directory(snapshots)
+
+
 def prepare_completed(full_root,final_root,*,provenance):
     """Publish final deployment artifacts while the full resume tree still exists."""
     full_root,final_root = Path(full_root),Path(final_root)
@@ -165,6 +228,8 @@ def prepare_completed(full_root,final_root,*,provenance):
         full_root.is_symlink() or final_root.is_symlink() or full_root.parent.resolve()!=cell):
         raise ValueError("Completed-cell finalization is confined to this cell's checkpoint directories")
     source,metadata = snapshot_directory(full_root)
+    if not metadata.get("parameters_synced",False):
+        _sync_tree(source)
     previous = None
     if (final_root/"CURRENT").exists():
         old = json.loads((final_root/"CURRENT").read_text(encoding="utf-8"))["snapshot"]
@@ -172,31 +237,67 @@ def prepare_completed(full_root,final_root,*,provenance):
         old_metadata = json.loads((previous/"metadata.json").read_text(encoding="utf-8"))
         if old_metadata["format"]!=COMPLETED_FORMAT or old_metadata["cell_root"]!=str(cell):
             raise ValueError("Existing final artifacts belong to a different completion contract")
+        if not old_metadata.get("parameters_synced",False):
+            _sync_tree(previous)
+        _sync_file(final_root/"CURRENT")
+        _sync_directory(previous.parent)
+        _sync_directory(final_root)
+        _reclaim_superseded_snapshots(final_root,old)
     identity = uuid.uuid4().hex
     directory = final_root/"snapshots"/identity
     directory.mkdir(parents=True)
-    _link_tree(source/"model",directory/"model")
-    # state.pt contains config, trainer provenance, RNG and the ledger cursor;
-    # Adam masters/moments, fixed reference and gradients are separate files.
-    os.link(source/"state.pt",directory/"state.pt")
-    if metadata["has_teacher"]:
-        os.link(source/"teacher.pt",directory/"ema_teacher.pt")
-    completed_metadata = {**metadata,"format":COMPLETED_FORMAT,"cell_root":str(cell),
-        "training_resume_supported":False,"has_optimizer":False,"has_reference":False,
-        "has_teacher":False,"ema_teacher_retained":bool(metadata["has_teacher"]),
-        "source_full_snapshot":source.name,"state_contents":"config_trainer_provenance_rng_ledger",
-        "official_results":"cell_summary.json and evaluation journals in the owning cell"}
-    (directory/"metadata.json").write_text(json.dumps(completed_metadata,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
-    (directory/"provenance.json").write_text(json.dumps(provenance,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
-    _sync_tree(directory)
-    _sync_directory(directory.parent)
-    _publish_pointer(final_root,identity)
-    _sync_directory(cell)
-    if previous is not None and previous!=directory:
-        shutil.rmtree(previous)
+    try:
+        _link_tree(source/"model",directory/"model")
+        # These files have already been synced by save(). Reuse their bytes;
+        # the new metadata and hard-link directory entries still need a sync.
+        os.link(source/"state.pt",directory/"state.pt")
+        if metadata["has_teacher"]:
+            os.link(source/"teacher.pt",directory/"ema_teacher.pt")
+        completed_metadata = {**metadata,"format":COMPLETED_FORMAT,"cell_root":str(cell),
+            "parameters_synced":True,
+            "training_resume_supported":False,"has_optimizer":False,"has_reference":False,
+            "has_teacher":False,"ema_teacher_retained":bool(metadata["has_teacher"]),
+            "retain_training_artifacts":bool(provenance.get("retain_training_artifacts",True)),
+            "source_full_snapshot":source.name,"state_contents":"config_trainer_provenance_rng_ledger",
+            "official_results":"cell_summary.json and evaluation journals in the owning cell"}
+        (directory/"metadata.json").write_text(json.dumps(completed_metadata,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        (directory/"provenance.json").write_text(json.dumps(provenance,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        _sync_file(directory/"metadata.json")
+        _sync_file(directory/"provenance.json")
+        _sync_directory(directory)
         _sync_directory(directory.parent)
+        _sync_directory(final_root)
+        _sync_directory(cell)
+        _publish_pointer(final_root,identity)
+    except BaseException:
+        _discard_unpublished(final_root,directory,identity)
+        raise
+    _reclaim_superseded_snapshots(final_root,identity)
     return {"path":str(final_root.resolve()),"format":COMPLETED_FORMAT,"snapshot":identity,
-            "source_full_snapshot":source.name,"training_resume_supported":False}
+            "source_full_snapshot":source.name,"training_resume_supported":False,
+            "retain_training_artifacts":bool(provenance.get("retain_training_artifacts",True))}
+
+
+def _reclaim_training_artifacts(cell):
+    """Reclaim only the owning cell's declared optional raw training outputs."""
+    reclaimed = False
+    for name in ("groups","trajectories"):
+        directory = cell/name
+        if directory.is_symlink():
+            raise ValueError(f"Raw artifact cleanup refuses linked directory {directory}")
+        if directory.exists():
+            if not directory.is_dir():
+                raise ValueError(f"Raw artifact directory is not a directory: {directory}")
+            shutil.rmtree(directory)
+            reclaimed = True
+    for path in cell.glob("reference-round-*.pt"):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Raw artifact cleanup requires a direct regular file: {path}")
+        path.unlink()
+        reclaimed = True
+    if reclaimed:
+        _sync_directory(cell)
+    return reclaimed
 
 
 def reclaim_completed_resume_state(summary_path):
@@ -219,6 +320,9 @@ def reclaim_completed_resume_state(summary_path):
     if (metadata["format"]!=COMPLETED_FORMAT or metadata["cell_root"]!=str(cell) or
         metadata["source_full_snapshot"]!=artifact["source_full_snapshot"]):
         raise ValueError("Completed checkpoint ownership differs from the published cell")
+    retain_raw = bool(artifact.get("retain_training_artifacts",True))
+    if retain_raw != bool(metadata.get("retain_training_artifacts",True)):
+        raise ValueError("Completed summary and retained snapshot have different raw-artifact policies")
     _sync_directory(cell)
     full_root = cell/"checkpoint"
     reclaiming = cell/(".completed_resume_state."+artifact["source_full_snapshot"])
@@ -230,10 +334,13 @@ def reclaim_completed_resume_state(summary_path):
             raise ValueError("Full resume state has changed since completion; it remains retained")
         os.replace(full_root,reclaiming)
         _sync_directory(cell)
-    if not reclaiming.exists():
-        return False
+    reclaimed = False
     if reclaiming.is_symlink():
         raise ValueError("A linked checkpoint tree cannot be reclaimed by cell finalization")
-    shutil.rmtree(reclaiming)
-    _sync_directory(cell)
-    return True
+    if reclaiming.exists():
+        shutil.rmtree(reclaiming)
+        _sync_directory(cell)
+        reclaimed = True
+    if not retain_raw:
+        reclaimed = _reclaim_training_artifacts(cell) or reclaimed
+    return reclaimed

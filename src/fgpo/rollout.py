@@ -9,6 +9,7 @@ an isolated official process. Training passes independent slot seeds; evaluation
 The complete-group callback is a durable collection boundary.
 Completed responses dispatch environment requests while other slots decode.
 Requests drain at a turn boundary; only the caller writes ordered cost rows.
+Window-rollover siblings merge back into one batch at that same boundary.
 """
 from __future__ import annotations
 
@@ -108,22 +109,25 @@ def _sample_turn(policy, cohort, generators, max_tokens, *, on_response=None):
     ids = [[] for _ in cohort.slots]
     logprobs = [[] for _ in cohort.slots]
     active = list(range(len(cohort.slots)))
+    workspace = policy.decode_workspace(state, max_tokens)
     try:
         for position in range(max_tokens):
             tokens, scores = policy.draw_tokens(state, active,
-                [generators[cohort.slots[row]] for row in active])
-            continuing, rows = [], [() for _ in cohort.slots]
+                [generators[cohort.slots[row]] for row in active], workspace=workspace)
+            continuing = []
             for row, token, score in zip(active, tokens, scores, strict=True):
                 ids[row].append(int(token))
                 logprobs[row].append(float(score))
                 if token not in TERMINATORS and position + 1 < max_tokens:
                     continuing.append(row)
-                    rows[row] = (int(token),)
                 elif on_response is not None:
                     on_response(cohort.slots[row], tuple(ids[row]))
             if not continuing:
                 break
-            state = _append_owned(policy, state, rows, role="rollout.decode")
+            previous = state
+            state = policy.append_sampled_cache(state, workspace, continuing, role="rollout.decode")
+            if state is not previous:
+                policy.release_cache(previous)
             active = continuing
         return state, ids, logprobs
     except BaseException:
@@ -132,6 +136,8 @@ def _sample_turn(policy, cohort, generators, max_tokens, *, on_response=None):
         policy.release_cache(state)
         cohort.state = None
         raise
+    finally:
+        workspace.close()
 
 
 def _execute_response(tokenizer, tokenizer_lock, environment, benchmark, response, goal):
@@ -205,6 +211,27 @@ def _advance_cohort(policy, root, cohort, sampled_state, advances, *, history_le
         for completed in result:
             _release_cohort(policy, completed)
         raise
+
+
+def _merge_cohorts(policy, cohorts, *, history_length):
+    if len(cohorts) <= 1:
+        return cohorts
+    slots = tuple(slot for cohort in cohorts for slot in cohort.slots)
+    state = suffix = None
+    try:
+        with policy.phase("rollout.merge_cohorts"):
+            state = policy.merge_cache([cohort.state for cohort in cohorts])
+            if history_length == 2:
+                suffix = policy.merge_cache([cohort.suffix for cohort in cohorts])
+        return [_Cohort(slots, state, suffix)]
+    except BaseException:
+        for owned in (state, suffix):
+            if owned is not None:
+                policy.release_cache(owned)
+        raise
+    finally:
+        for cohort in cohorts:
+            _release_cohort(policy, cohort)
 
 
 def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot_seeds,
@@ -322,7 +349,8 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
             _raise_request_error(evaluation_results)
             for slot, (request, _) in evaluation_results.items():
                 official[slot] = dict(request.value)
-            cohorts = next_cohorts
+            cohorts = _merge_cohorts(policy, next_cohorts, history_length=history_length)
+            next_cohorts = []
             if not cohorts:
                 break
     except BaseException as error:

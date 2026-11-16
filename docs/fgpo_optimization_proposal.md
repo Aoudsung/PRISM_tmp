@@ -8,7 +8,7 @@
 
 优化围绕三个实际阶段展开：有效采样、固定参考评分和模型更新。先消除无用投影、重复前向、长期保留的张量与细粒度日志开销，再将可用容量用于完整上下文和有效批量。显存分配量本身不作为效果指标；报告实际任务结果以及取得结果所用的资源。
 
-正式记录包含完整轨迹与官方成功数、环境步、生成和 teacher-forced token、optimizer step、实际墙钟和 GPU 小时，以及各阶段 CUDA allocated/reserved/peak bytes。ALFWorld 最终模型使用官方 success rate，AppWorld 最终模型使用官方 TGC/SGC。已发表方法保留各自来源配方的训练轮数、prompt、输出和更新预算，终点结果同时标明这些预算。曲线只使用每轮已有行为采样日志中的训练成功率，在共同覆盖的累计轨迹、token 或墙钟区间解释；官方测试仅在最终模型执行，不增加中途评测。
+正式记录包含完整轨迹的数量与官方成功数、环境步、生成和 teacher-forced token、optimizer step、实际墙钟和 GPU 小时，以及各阶段 CUDA allocated/reserved/peak bytes。当前轮的完整轨迹服务于更新和恢复，历史原始记录按显式保留选项存储。ALFWorld 最终模型使用官方 success rate，AppWorld 最终模型使用官方 TGC/SGC。已发表方法保留各自来源配方的训练轮数、prompt、输出和更新预算，终点结果同时标明这些预算。曲线只使用每轮已有行为采样日志中的训练成功率，在共同覆盖的累计轨迹、token 或墙钟区间解释；官方测试仅在最终模型执行，不增加中途评测。
 
 `CausalPolicy.phase` 在阶段边界同步设备，记录 `synchronized_wall` 和峰值。`head/body` 的 `time_basis=host_dispatch` 记录主机提交耗时。嵌套显存范围标记为 `enclosing_phase`；端到端时间使用实际运行墙钟，环境与 GPU 的重叠阶段不重复求和。PPO 前向、反向、AdamW、采样组与参考计算均有对应阶段日志。
 
@@ -29,6 +29,10 @@
 | `cache.py / policy.py` KV | arena 几何增长，按有效前缀取 view，必要时 compact，crop 保留容量 | padding mask、物理跨度与逻辑 RoPE 位置分别维护；移除历史后重新 prefill |
 | `rollout.py / envs.py` 环境 | 持久进程池和独占 lease；F-GPO 每个响应完成后提交 native step | 真实反馈先于下一动作，下一轮保留 barrier，每集重置原生状态 |
 | `records.py / rollout.py / baselines.py` 日志 | 按一次采样操作和 role 聚合模型调用，完成或异常时落盘 | calls、token、投影位置及 host dispatch 总量保留；环境和同步阶段独立记录 |
+| `engine.py / checkpoint.py` 恢复快照 | 初始、每 8 轮、结束及托管停止保存一致快照；同版本复用硬链接 | 新 actor/Adam 不与旧 trainer 混搭；硬回退同时回退轮统计，实际成本保留 |
+| `policy.py / optimization.py` CPU 副本 | 官方逐片模型导出；固定参考从已有 master 分桶恢复；梯度按 storage 写出 | FP32 master/moments 与 CPU BF16 舍入路径保持相同 |
+| `engine.py / baselines.py / envs.py` 原始产物 | 默认只留 claim 日志；组内轨迹单一持久化；episode 结束后回收独占目录 | 官方指标先复制到结果记录，当前恢复数据始终存在于完整快照 |
+| `resources.py / runner.py` 主机并发 | 加载前按 header 计算 CPU 预算，同一用户通过文件锁共同预留 | 全参数 Adam、参考、恢复梯度、序列化和环境余量提前计入 |
 
 主干 activation checkpoint 继续启用。`activation_offload=false` 为默认值；显式开启时使用非锁页 CPU 保存激活。GPU 放置、缓存容量、head chunk、参考微批和 staging 桶按实际资源设置，这些资源选项不改变动作序列所有权、优势公式或更新分母。
 
@@ -60,7 +64,7 @@ L=\sum_c L_c(g_W(Q_c)).
 
 PPO/k3 小图负责裁剪分支和 $g_\ell$；F-GPO 熵项提供 $g_H=-\mathrm{entropy\_coef}/Z$，已发表基线采用其 virtual rank/microbatch 的逐响应损失系数。反向只原位修改新建临时量，保存的 logits 不变；熵系数为零时，临时 log-prob 张量直接原位指数化。该接口使用 `once_differentiable`，明确支持一阶训练。它去掉长期保留的通用 softmax 损失图，不改变定义中的完整词表归一化。
 
-默认 `head_chunk_tokens=64`。target IDs、旧策略分数、参考分数和优势一次传到输出设备；每块完成后释放词表图。chunk 改变及解析反向会改变浮点运算顺序，数值容差需随服务器正式真实记录核对并记录；本次未生成实测梯度误差或加速结论，也不为此增加单独的合成实验矩阵。
+源码默认 `head_chunk_tokens=64`；当前 Host B 与 Colab 配置采用已部署的 `256`，Host A 保留 `64`。target IDs、旧策略分数、参考分数和优势一次传到输出设备；每块完成后释放词表图。全部真实目标位置与完整词表、loss 分母、熵/KL、微批和 optimizer step 数保持相同。分块改变会影响矩阵形状与 BF16 梯度累计边界的舍入，峰值和耗时随正式运行日志记录；本次未生成实测梯度误差或单项加速结论，也不为此增加单独的合成实验矩阵。
 
 ## 参考评分与特征生命周期
 
@@ -80,11 +84,29 @@ FP32 master、`exp_avg` 和 `exp_avg_sq` 常驻普通 CPU 内存。每个 stagin
 
 CPU 梯度桶转换到 FP32 后原位缩放，桶更新结束立即释放转换临时量。CPU 参数直更新路径显式复制梯度，保持原始 `p.grad`。每参数 Adam 步数、bias correction、weight decay 与 FP32 master/m/v 的 checkpoint 格式保持不变。已发表方法可使用相同运行组件，但学习配方按各自来源解析；共享实现本身不要求共享信用定义、损失分母或训练轮数。
 
+固定参考切换通过 `activate(model, optimizer=...)` 借用已存在的 FP32 master 作为 actor 恢复源，不保存第二份完整 BF16 actor。未初始化 Adam 状态的参数还没有更新，恢复源为不可变初始 reference。每个恢复块先在 CPU 转为 actor dtype，再复制到设备，与 `step()` 的 CPU host-weight 舍入位置一致；异常路径恢复已经安装的参数。此路径只适用于 `fixed=True` 的初始参考，不用于 EMA。
+
+`save_model()` 将设备上的 state_dict 别名交给标准 `save_pretrained`，由 Transformers 按 `checkpoint_shard_mib=1024` 先分片，再由 safetensors 处理当前分片。config、generation_config、tokenizer、绑权处理与索引格式继续使用官方实现。单个 tensor 可以独占超出预算的分片，旧版 safetensors 还会同时保留分片 bytes 和当前 tensor 的 CPU 副本。Qwen2.5-7B 的 embedding/head 单个 BF16 tensor 约 1.09 GB，所以不能把 1024 MiB 分片写成严格 RSS 上限。中断时 `gradient_state()` 借用设备上的 detached 梯度，由同步 `torch.save` 逐 storage 序列化；恢复仍按 `map_location="cpu"` 读取梯度，再装回对应设备。
+
+设参数量为 $P$，Adam master/m/v 的常驻量为 $12P$，固定 BF16 reference 为 $2P$。当前模型的这两项合计约 106.62 GB；原先 reference 切换或保存时另外产生的约 15.23 GB 整 actor 副本已移除。恢复未完成 minibatch 时，`torch.load` 仍可能短时持有完整 CPU 梯度字典，主机预算显式覆盖该部分。
+
+公共 runner 在模型导入及 cell 初始化前读取 safetensors header 计算 $P$ 和最大单 tensor，预留
+
+\[
+M_{\mathrm{cell}}=14P+\max\{2\max(S,L),G+L\}+4BD+4B+W.
+\]
+
+其中 $S$ 是模型分片预算，$L$ 是最大 BF16 tensor，$G$ 是待恢复 gradients.pt 的文件大小（新训练为零），$B$ 是传输桶大小，$D$ 是计算 GPU 数，$W$ 是 `host_runtime_reserve_gib`，默认 16 GiB。该式保留序列化/恢复与环境余量，不改变 optimizer 状态精度。通过 `/tmp/fgpo-host-memory-<uid>` 的文件锁串行登记活动 cell；进程 PID、启动时间和存活状态用于回收退出后残留的预留。多个有效配置共用其中最小的 `host_memory_fraction × MemTotal` 上限，默认 fraction 为 0.85；同时检查 `MemAvailable` 与活动 cell 尚未实际分配的预算。容量不足在采样前报出具体预算，完成或异常退出后释放自己的登记。预算针对同一原生 Linux 主机、同一用户通过公共 runner 启动的合作进程；未参与预留的新外部负载仍需由主机调度控制。环境和轨迹的实际工作集由正式日志确定，必要时增大 $W$。
+
 ## 采样、KV 与运行日志
 
 每条轨迹使用独立 generator。原生 baseline collector 将同一决策轮的完整 prompt 批量 prefill，完全相同的 prompt 先复用一次根计算再复制缓存。不同长度 prompt 显式右侧 padding，采用有效 mask 和每行最后一个真实位置获得下一 token 分布；后续追加保持逻辑 RoPE 位置。结束槽及时释放 KV 行。增量 head 只投影有新增 token 的行，未变化行保留已有分布。
 
 Arena 只向注意力提供实际已用前缀的 K/V view，预留容量不增加逻辑长度。主机维护每行有效跨度，压紧不依赖逐行 GPU 形状回传。缓存的选择、复制与消费具有明确所有权；窗口丢弃旧历史后重新 prefill 保留的完整轮次，以保持新的行为条件。
+
+当前共同实现 `common-efficiency-v2` 由 `cache.py`、`policy.py`、`rollout.py`、`resources.py` 四文件整体组成。窗口滚动后的存活兄弟在既有 turn barrier 按层消费式合并完整 K/V，及时释放旧层存储，并保持 slot ID 与原 generator 的对应关系。单响应有界 workspace 保留同次 multinomial 产生的设备整数 token，直接供后续 decode 使用；CPU token/log-prob 接口、EOS 与预算派发顺序不变。输入、位置、mask 与选择索引复用受原有 packed CPU readback 和各设备 current stream 顺序约束，不增加逐 token synchronize、随机操作或精度转换。合并搬运记录在 `rollout.merge_cohorts` phase。
+
+恢复时主机预算一次读取 `checkpoint/CURRENT`，以对应 `snapshots/<snapshot>/model` 的 safetensors header 与同一 snapshot 的 gradients 文件建立 inventory；新 seed 继续读取配置中的基础模型路径。预算公式、模型路径身份、加载及 checkpoint 格式保持相同。公共 runner 同时保留主机预算登记和逐 cell 文件锁；共享 suite 的 `study_summary.json` 在锁内重新读取并合并，支持互不重叠 cell 并行写入。
 
 以 [Qwen2.5-7B 官方配置](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/config.json)中的 28 层、4 个 KV heads、head dimension 128 和 bf16 估算，单个缓存批的原始存储为
 
@@ -95,6 +117,8 @@ M_{KV}=28\times2\times B\times4\times S\times128\times2\ \mathrm{bytes}.
 $B=8,S=4096$ 时约 1.75 GiB，$S=32768$ 时约 14 GiB。模型约 $7.615\times10^9$ 参数对应 bf16 权重约 14.18 GiB。这些估算尚未包含梯度、激活、词表中间量、共享根副本、arena 扩容过程和 allocator reserved；部署容量由实际阶段峰值决定。正式模型逻辑上下文上限仍为 32768，已发表 ALFWorld prompt 上限按各自来源配方设置。
 
 持久环境池为各槽独立租用进程，每集重新初始化原生环境与随机种子，AppWorld 使用独立实验目录。F-GPO 的一个响应完成后立即提交 CPU 环境执行，其他槽继续解码；所有真实反馈收齐后进入下一决策轮。异常路径先收齐已提交操作，再关闭 episode 和 KV。
+
+AppWorld 的输出根从实际 `path_store.experiment_outputs` 获取，每次 reset 独占创建并登记一个 UUID episode 目录。collector 先调用官方 evaluator 并复制结果，再关闭 world/数据库，最后删除该实例拥有的 episode 目录；构造中断、reset 和 worker release 走同一清理路径。共享基础数据、其他 episode 与既有历史运行不做扫描删除。默认完整矩阵将执行 206,700 个 AppWorld episodes，其正常完成的输出随 episode 回收，持续产物保留在 cell 的官方结果与 claim 日志中。
 
 `aggregate_model_calls` 在操作内按 role 聚合反复模型调用。聚合保留实际工作量、calls、padded compute token、词表投影位置和 host dispatch 总量，并在正常结束、异常及需要独立事件的边界刷新。环境转移和同步阶段继续单独记录，供官方效果与成本 claim 使用。由此减少逐 token JSONL 写入和 Python 记录分配，同时保持本次论文所需的计量字段。
 
@@ -126,8 +150,26 @@ AppWorld 明确标为本研究的 benchmark 迁移：原生 Python 动作、固�
 
 主配置继承已有模型、Python 和官方数据资产路径，源码目录使用独立的 `fgpo-r3`。GPU 由正式运行命令显式分配；旧资源快照不作为当前可用资源。CPU 核心数、设备内存与互联条件、软件版本、批量与并发配置随服务器正式运行记录。
 
-`checkpoint_interval_groups=16` 默认在完整采样轮保存，托管停止仍在操作边界保存；保存频率可按服务器停机需求设置。未变化的模型/Adam 参数文件继续使用硬链接。恢复锁定 `fgpo-r3-published-v3`、方法、来源配方、模型、任务、种子、历史、输出、奖励、信用、PPO 和 Adam 语义。缓存容量、head chunk、参考微批和 staging 桶属于资源设置；响应行 minibatch、采样温度和更新分母属于训练身份。旧 `fgpo-r3-success-v2` 及更早协议的待执行更新不续入本 study。
+本轮执行仅选择 comparison suite 的 F-GPO：Host B 执行 AppWorld 三种子，Colab 执行 ALFWorld 三种子；baseline 与自身消融源码及规划保留。Host B 保持每 8 轮保存完整快照；Colab 使用 `checkpoint_interval_rounds=60`，两端同样保留首次采样前、训练结束及托管停止的保存语义。Colab 的1024 MiB导出分片、关闭raw训练产物与主机内存预算字段衔接956实现，路径与机器资源配置独立保留。
+
+完整恢复快照由 `checkpoint_interval_rounds=8` 控制：首次采样前、每 8 轮、训练结束以及 SIGINT/SIGTERM 的安全边界保存。`checkpoint_interval_groups=16` 仅在当前 actor/Adam model version 已保存时更新采样进度，reference 完成边界遵守同一条件。优雅停止保存已采样组、参考概率、优势、pending gradients、PPO cursor 与 RNG；强制终止恢复最近已发布快照，最多重做一个保存间隔的工作。训练结果按 `training_log_offset` 截断到恢复点，物理成本接纳全部完整实际事件，避免重算工作从成本统计中消失。最后一条半写成本事件被截去并标记 `usage_complete=false`。最终评估只复用同一最终模型版本，训练摘要同时核对完成状态、轮数和 optimizer steps。
+
+`checkpoint.save` 在 CURRENT 原子切换前同步新写文件、所需日志和目录；已持久化的 actor/Adam/reference 硬链接只需同步新目录项。写入失败保留先前有效 CURRENT；一次成功发布后回收旧快照，同一 snapshots 下的自有 UUID 孤儿也由保存路径回收。完整官方工作结束、最终模型与 cell_summary 持久化之后才删除恢复状态。`retain_training_artifacts=false` 默认不生成历史 group、reference-round 与单条轨迹文件；显式 true 时训练 group 为原始轨迹的单一持久化来源。完成回收按 summary 中的策略清理本 cell 这些原始文件，旧完成 summary 缺少保留策略时维持其历史产物。
+
+以 [Qwen2.5-7B 官方权重索引](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/model.safetensors.index.json) 的 BF16 数据量 15,231,233,024 字节计算，$P=7,615,616,512$。忽略 trainer/log/file header、且没有额外中断保存，参数级累计写入量由 $(14R+4)P$ 降为 $(14\lceil R/8\rceil+4)P$：
+
+| 正式训练长度 | 原先累计写入 | 默认 8 轮周期 | 更新后模型/Adam 全量写入次数 |
+|---|---:|---:|---:|
+| 60 轮 F-GPO / 自身消融 | 6.43 TB | 0.88 TB | 8 |
+| 150 轮 GiGPO / GraphGPO | 16.02 TB | 2.06 TB | 19 |
+| 160 轮 HGPO | 17.09 TB | 2.16 TB | 20 |
+
+累计写入减少约 86–87%。原子替换仍同时持有新旧 actor 与 Adam，固定 reference 共享硬链接，参数级峰值为 $30P\approx228.47$ GB；磁盘还需容纳 trainer state、日志和部署模型。此处保留精确 FP32 Adam 状态与有效旧恢复点，容量规划不得使用累计写入下降比例推导峰值下降。
+
+恢复锁定 `fgpo-r3-published-v3`、方法、来源配方、模型、任务、种子、历史、输出、奖励、信用、PPO 和 Adam 语义。保存周期、分片大小、raw 保留、主机预留、缓存容量、head chunk、参考微批和 staging 桶属于资源设置；响应行 minibatch、采样温度和更新分母属于训练身份。旧 `fgpo-r3-success-v2` 及更早协议的待执行更新不续入本 study。
+
+本次资源修订的正确性/完整性审计覆盖完整保存与恢复、同版本复用、PPO 梯度游标、训练统计回退与物理成本保留、最终结果复用、完成后文件回收、AppWorld 评分先于删除、参考权重恢复的 dtype 与所有权、分片导出的官方加载格式，以及并发 CPU 预算的登记/释放。审计采用源码逐路径审阅与独立交叉审阅，没有执行本地项目代码、测试或工具链；当前会话缺少 AGENTS.md 要求的 SSH_Document.md，服务器执行结果仍为空。
 
 本次没有运行服务器正式实验，方案中的内存数值仅为公式估算，未将性能建议中的速度倍数或 benchmark 提升写成实测结果。接下来的执行范围就是上述 33 个正式训练单元及其官方评价，数值、成本和机制证据均附着于这些真实任务记录。
 
-实现接口依据：[Transformers v4.57.1 Cache 源码](https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/cache_utils.py)、[PyTorch autograd](https://docs.pytorch.org/docs/stable/autograd.html)、[PyTorch CUDA 语义](https://docs.pytorch.org/docs/stable/notes/cuda.html)。服务器正式记录应保留实际安装版本。
+实现接口依据：[Transformers v4.57.1 Cache 源码](https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/cache_utils.py)、[Transformers save_pretrained](https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/modeling_utils.py)、[safetensors v0.5.3 torch 保存](https://github.com/safetensors/safetensors/blob/v0.5.3/bindings/python/py_src/safetensors/torch.py)、[PyTorch v2.8 序列化](https://github.com/pytorch/pytorch/blob/v2.8.0/torch/serialization.py)、[PyTorch autograd](https://docs.pytorch.org/docs/stable/autograd.html)、[PyTorch CUDA 语义](https://docs.pytorch.org/docs/stable/notes/cuda.html)、[AppWorld 输出与并行约定](https://github.com/StonyBrookNLP/appworld/blob/main/guides/parallelizing_worlds.md)。服务器正式记录应保留实际安装版本。

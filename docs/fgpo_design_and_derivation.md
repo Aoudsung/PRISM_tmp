@@ -290,6 +290,14 @@ AdamW 的 fp32 主权重、一阶和二阶矩保存在 CPU。默认 64 MiB 传�
 
 用户性能提案中的异步派发、持久环境、减少同步、批量表征、几何缓存、有界传输与分块输出头思路已按上述条件纳入。所有模块均以 r3 数学对象为准；旧三遍估计器的删除属于算法变更。理论容量计算与预计收益可以指导配置，具体加速倍数和 benchmark 增幅由服务器结果填写。
 
+### 6.6 持久化与主机内存生命周期
+
+固定参考的安装/恢复复用 optimizer 已有 FP32 master：已更新参数按原 Adam 写回路径先在 CPU 舍入为 BF16，再分桶写回 actor；未更新参数从不可变初始参考恢复。模型导出沿官方 Transformers/safetensors 分片路径执行，默认分片预算 1024 MiB，避免提前把整 actor 复制到 CPU。CPU Adam 的 master/moments 精度与更新关系保持相同。公共 runner 在加载模型前按实际权重 header 预留完整 CPU 工作集，同一用户的合作 cell 使用主机文件锁共同登记预算，包含梯度恢复和环境余量。
+
+完整恢复快照在初始、每 8 轮、训练结束与托管中断的安全边界保存；采样/reference 进度只在 actor/Adam 与已保存版本相同时更新。快照始终包含同版本参数、moments、pending gradients、轨迹、优势、cursor 和 RNG。强制终止会重做最近保存点之后的工作；恢复时截回训练统计，物理成本日志保留实际发生的完整事件。模型版本、日志字节游标、参数文件和 CURRENT 的发布顺序共同定义一致恢复点。
+
+默认持久产物为有效配置/来源、任务清单、组级 claim 诊断、成本、逐任务官方评估和最终模型。历史原始轨迹和逐 token reference 数据仅在显式 `retain_training_artifacts=true` 时另存，训练 group 为完整轨迹的单一持久化来源；当前恢复输入仍随快照保存。AppWorld 先完成官方评分并把结果复制进轨迹，关闭环境后删除当前实例创建的 episode 输出目录。最终模型与完成摘要持久化后再回收恢复状态及默认不保留的原始文件。上述实现约定不增加实验或改变研究 claim；容量公式与代码审计范围见 [优化方案](fgpo_optimization_proposal.md)。
+
 ## 7. 正式研究协议与实验解释
 
 ### 7.1 按 claim 保留最小实验
@@ -387,7 +395,7 @@ python -m fgpo.runner --config configs/fgpo-r3-host-a.json --output-dir outputs/
 
 Host B 使用 `configs/fgpo-r3-host-b.json`。`comparison` 是默认 suite；`--methods/--benchmarks/--seeds` 只选择该 suite 的计划子集，用于按完整 cell 分配服务器。新 suite 可以在已有 study 根目录中创建；`--resume` 只恢复当前所选 suite 的目录。旧协议及其 pending update 留在原 study，不迁入新的训练状态。
 
-恢复由 `effective_training_identity/require_training_identity` 约束：方法及发布配方来源、模型、任务、种子、历史、采样、信用、PPO 和 Adam 的有效语义保持一致。GPU 放置、KV 容量、offload、head/表示微批和 staging 等资源项可以调整；保存的 CUDA RNG 流数量保持一致。完成采集组、参考概率、优势与更新 cursor 在明确操作边界恢复。
+恢复由 `effective_training_identity/require_training_identity` 约束：方法及发布配方来源、模型、任务、种子、历史、采样、信用、PPO 和 Adam 的有效语义保持一致。GPU 放置、KV 容量、offload、head/表示微批、staging、保存周期/分片、原始文件保留与主机预留等资源项可以调整；保存的 CUDA RNG 流数量保持一致。完成采集组、参考概率、优势与更新 cursor 在明确操作边界恢复。
 
 当前交付是完整方案和对应源代码的静态修订与交叉审阅，尚未执行服务器训练、显存测量或正式 benchmark。仓库 [AGENTS.md](../AGENTS.md) 要求所有项目运行在指定服务器完成；当前会话没有 `SSH_Document.md`，已知 `mgt01` 入口在可用连接环境中无法解析。文中没有已执行的成功率、显存节省比例或加速倍数。正式连接恢复后直接执行上述 33 个必要训练单元及其官方评测，从相同日志形成任务表现、共享机制和实际成本的研究结论。
 

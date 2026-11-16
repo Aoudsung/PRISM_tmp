@@ -204,6 +204,8 @@ $$
 
 参考阶段每轮集中安装冻结权重，完成评分后恢复 actor。同段实际响应合并为一次目标上传和一次分数回传，词表投影仍按 chunk 执行，每块立即释放 logits。历史层 hook 只保留动作前所需位置；`fgpo_obs_only` 跳过历史表示。公开观测按 token 序列去重、按长度和 token 预算微批编码，纯表示前向可在指定中间层结束。信用及组诊断完成后调用 `ReferenceRound.release_features()` 释放 `z_hist/z_obs`，保留 PPO 所需的冻结 log-prob、已计算优势和诊断。尚待信用计算的断点保留其所需表示。
 
+固定参考通过 `WeightReference(fixed=True)` 声明不可变。actor 参数仅由 `OffloadedAdamW` 写入；已初始化参数从其 FP32 master 在 CPU 舍入为 actor dtype 后分桶复制回设备，与 Adam step 的 CPU 权重桶舍入路径相同。没有 Adam 状态的参数从初始参考恢复。安装前验证参数对象归属及源张量形状/dtype，异常退出也恢复已经安装的参数；普通 reference 切换不建立整 actor CPU 备份。EMA reference 保留独立接口，不能借用初始参考恢复约定。
+
 采样槽位独立拥有 generator，token 与对应行为 log-prob 合并读取。F-GPO 在响应结束后立即派发该槽的 CPU 环境调用，下一交互轮保留 turn barrier。已发表方法的完整原生 prompt 使用批量 prefill；完全相同的 prompt 先单次 prefill 再复制缓存，其他 prompt 显式右侧 padding，并按每行最后一个真实 token 取分布。结束槽及时移除；增量 head 只投影本次有新增 token 的行，未变化行保留已有分布。批处理保持各槽原有 generator、逻辑位置和 prompt token。
 
 arena cache 按容量几何增长，保留 padding mask、实际有效跨度与逻辑 position。`compact` 对需要压紧的布局移动数据；`crop` 只缩短逻辑视图并保留容量。丢弃有效历史后重新 prefill 新窗口。持久环境池复用进程，独占 lease 隔离轨迹，新的任务重新初始化原生环境对象。缓存、增量 logits 和环境句柄均有明确的消费与释放边界。
@@ -214,7 +216,7 @@ CPU AdamW 保存 FP32 master/m/v，先完成全局范数的设备归约与有限
 
 ## 8. 正式日志诊断
 
-对非空组，`advantages(..., diagnostics=output)` 将诊断写入 `output[group_id]`，同时返回 `{step_id: float_advantage}`。`engine.py` 将这些值写入正式 `training.jsonl` 的 `diagnostics.credit_groups`，保存冻结响应分数、优势及实际轨迹供解释正式结果；用于计算这些量的参考表示在信用完成后释放。
+对非空组，`advantages(..., diagnostics=output)` 将诊断写入 `output[group_id]`，同时返回 `{step_id: float_advantage}`。`engine.py` 将这些诊断写入正式 `training.jsonl` 的 `diagnostics.credit_groups`；当前更新与恢复状态保留冻结响应分数、优势及实际轨迹，用于计算这些量的参考表示在信用完成后释放。历史原始轨迹与逐 token 分数只在显式 `retain_training_artifacts=true` 时另存；默认日志中的支持、Brier、信用改变及成本字段完整保留，覆盖本方案 claim。
 
 | 日志字段 | 精确定义 |
 |---|---|
@@ -258,6 +260,10 @@ ALFWorld 保留发布算法与来源配方并披露上述 backbone 迁移；AppW
 最终模型的完整评测为 ALFWorld `valid_unseen` 的 134 任务，以及 AppWorld `test_normal` 的 168 任务与 `test_challenge` 的 417 任务。每个 AppWorld 训练单元在两个 split 评价，split 不重复计为训练单元。官方 success/TGC/SGC 与任务完成数一并记录，三个种子均完整报告。
 
 `effective_training_identity/require_training_identity` 约束恢复时相同的协议、方法、种子、模型、任务、上下文、生成、信用、PPO 和 Adam 有效参数，已发表方法同时保留来源与解析配方。GPU 放置、缓存容量、offload、传输桶及 head/representation 微批属于资源项，row minibatch 属于训练身份。CUDA RNG 流数量保持一致。旧 `fgpo-r3-success-v2` 及更早协议的待执行优势和优化状态禁止复用；中断恢复以已保存完整组、信用结果和更新 cursor 为单位。
+
+完整恢复快照默认在初始任务顺序确定后、每 8 轮、训练结束和托管中断的安全边界保存。采样/reference 进度保存只复用同一 optimizer model version 的 actor 与 Adam；有未保存更新时等待下一个完整保存点。`CURRENT` 发布前同步参数、trainer/RNG、训练与评估日志、实际成本游标。硬中断恢复时，训练统计截回 `EngineState.training_log_offset`；成本统计接纳游标之后完整的实际事件，重算成本另外记录。最后一条未完成的成本记录可以删除，其缺失必须标记 `usage_complete=false`。完整评测只复用同一最终 model version 的结果。
+
+`checkpoint_interval_rounds`、`checkpoint_interval_groups`、`checkpoint_shard_mib`、`retain_training_artifacts` 与主机内存预留属于资源/持久化选项，不改变训练身份。默认产物保留配置、来源、任务、claim 诊断、成本、官方评估和最终模型；AppWorld 在复制评估结果并关闭该 episode 后回收其独占输出。完成摘要及最终模型持久化后才删除恢复状态和默认不保留的原始文件。恢复所需的当前组、reference、优势、梯度与 cursor 始终随完整快照一起保存。
 
 | 文件 | 负责的契约 |
 |---|---|

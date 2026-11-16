@@ -86,11 +86,17 @@ PPO 只计算当前 minibatch 所拥有响应所需的因果前缀。输出头�
 
 资源默认值包括 `head_chunk_tokens=64`、`optimizer_bucket_mib=64`、`cache_initial_capacity=1024`、`representation_token_budget=8192`、`representation_batch_size=8`、`environment_pool_size=8`、`working_memory_gib=6`、`activation_offload=false`。实际峰值由正式运行记录；几何容量、逻辑长度和 allocator reserved bytes 分别报告。
 
+模型导出使用 `checkpoint_shard_mib=1024` 的官方 safetensors 分片路径，不预先复制整个 actor 到 CPU。固定参考评分结束后，从 Adam 已有的 FP32 master 在 CPU 分桶舍入为 BF16 并恢复 actor；尚未更新的参数从不可变初始参考恢复。优化器公式、moments 精度和训练配方保持原样。单个大 tensor 可以超过分片预算，因此该值不等同于进程 RSS 上限。
+
+公共 runner 在加载模型、创建 cell 输出和采样前，以同一 Linux 用户的主机级文件锁登记 CPU 内存预算。预算覆盖全参数 FP32 Adam、固定参考、序列化/恢复临时量、传输桶以及 `host_runtime_reserve_gib=16` 的环境与轨迹余量；所有合作 cell 共用 `host_memory_fraction=0.85` 的主机上限，并检查当前 `MemAvailable`。容量不足时直接报告所需与已预留容量。该预算按模型 header 计算，随进程退出释放；未使用该 runner 的其他程序不参与预留。资源余量可按正式任务日志调整。
+
 ## 交付与记录状态
 
-每个 cell 保存有效配置与 baseline 来源、官方任务清单、真实轨迹、概率/优势、训练与成本日志、逐任务官方评测及最终模型。`costs.jsonl` 区分 `host_dispatch` 和阶段 `synchronized_wall`；端到端效率使用 `wall_seconds`、`allocated_device_seconds`，有重叠的事件耗时分别解释。分块和批形状优化保持数学对象与词元所有权，浮点舍入及离散采样结果可能随执行形状改变。
+每个 cell 默认保存有效配置与 baseline 来源、官方任务清单、训练 claim 诊断、成本日志、逐任务官方评测及最终模型。当前恢复点仍包含其所需完整轨迹、概率、优势和更新 cursor。`retain_training_artifacts=false` 关闭历史 group、reference-round 和单条轨迹的重复归档；设为 true 时保留训练 group 与每轮参考数据，baseline 的组内轨迹只保存在 group 中。AppWorld 在官方结果复制进轨迹后关闭数据库并删除本 episode 独占的输出目录，共享基础数据保留。`costs.jsonl` 区分 `host_dispatch` 和阶段 `synchronized_wall`；端到端效率使用 `wall_seconds`、`allocated_device_seconds`，有重叠的事件耗时分别解释。
 
-续训身份包括协议、有效方法配方、任务、采样、信用、PPO 和 Adam 语义。完成组、参考概率、优势、更新 cursor、optimizer/master/moments 与 RNG 在明确边界恢复。完整训练和官方评测完成后保留最终部署模型、复现元数据和原始结果，并回收已无用途的完整训练状态。
+续训身份包括协议、有效方法配方、任务、采样、信用、PPO 和 Adam 语义。默认 `checkpoint_interval_rounds=8`：首组采样前、每 8 轮、训练结束及托管停止时保存完整一致快照。组/reference 边界只在 actor/Adam 版本已保存时复用参数文件保存进度。SIGINT/SIGTERM 在安全边界保存待更新梯度和 cursor；强制终止从最近完整快照恢复，最多重做一个 8 轮间隔内的工作。训练统计回到快照的字节游标，成本日志保留已实际发生的完整事件；损坏的最后半行被移除并将成本完整性标为 false。新快照文件和日志同步后发布 CURRENT，随后回收旧快照。
+
+完整训练与官方评测完成、最终模型和完成摘要持久化后，回收恢复状态；按记录在完成摘要中的保留策略清理本 cell 的历史原始文件。默认 8 轮周期下，Qwen2.5-7B 的主要 checkpoint 累计写入估算从每 cell 约 6.43/16.02/17.09 TB 降至 0.88/2.06/2.16 TB，分别对应 60/150/160 轮。原子替换仍短暂保留新旧恢复点，参数级磁盘峰值约 228.47 GB；需另外容纳当前 trainer state 与日志。详细容量公式与审计范围见 [优化方案](docs/fgpo_optimization_proposal.md)。
 
 **当前结果是可审阅的方案与静态实现。** 当前会话没有仓库要求的 `SSH_Document.md`，已知 `mgt01` 入口在可用连接环境中无法解析，正式服务器运行尚未开始。本分支没有已执行 benchmark、显存节省比例或加速倍数；这些数值由上述必要实验的真实日志填写。
 
