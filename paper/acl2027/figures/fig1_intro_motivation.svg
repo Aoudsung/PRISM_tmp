@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 364" width="640" height="364" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#eb6834"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#2a78d6"/>
+    </marker>
+  </defs>
+
+  <!-- Outer Card Surface -->
+  <rect x="0" y="0" width="640" height="364" fill="#fcfcfb" stroke="#e5e4df" stroke-width="1" rx="4"/>
+
+  <!-- ================= TOP LAYER: SAMPLING COVERAGE STRIP (y=10..84) ================= -->
+  <rect x="14" y="10" width="612" height="74" fill="#f5f4f0" rx="4"/>
+  <text x="24" y="26" font-size="11" font-weight="600" fill="#0b0b0b">(a) Same-Origin Contrastive Coverage during Rollout Sampling (AppWorld)</text>
+
+  <!-- Row 1: On-Policy Sampling -->
+  <text x="24" y="47" font-size="10" font-weight="500" fill="#52514e">On-Policy Sampling</text>
+  <rect x="136" y="36" width="229" height="15" fill="#c7c5bd" rx="2"/>
+  <text x="250" y="47" font-size="9.5" fill="#0b0b0b" text-anchor="middle">Both Execute 68.5% (No Probing)</text>
+  <rect x="367" y="36" width="95" height="15" fill="#2a78d6"/>
+  <text x="414" y="47" font-size="9.5" fill="#ffffff" text-anchor="middle">Contrastive 28.5%</text>
+  <rect x="464" y="36" width="10" height="15" fill="#9a9890" rx="2"/>
+  <text x="484" y="47" font-size="10" font-weight="600" fill="#0b0b0b">71.5% Lack Contrast</text>
+
+  <!-- Row 2: Stratified Sampling -->
+  <text x="24" y="69" font-size="10" font-weight="600" fill="#0b0b0b">Stratified (SPAR)</text>
+  <rect x="136" y="58" width="338" height="15" fill="#2a78d6" rx="2"/>
+  <text x="305" y="69" font-size="9.5" font-weight="600" fill="#ffffff" text-anchor="middle">100% Same-Origin Probe vs. Execute Contrastive Rollouts</text>
+  <text x="484" y="69" font-size="10" font-weight="600" fill="#0b0b0b">Full Coverage</text>
+
+  <!-- ================= BOTTOM LAYER: COST vs UTILITY PHASE PLANE (y=94..356) ================= -->
+  <text x="24" y="106" font-size="11" font-weight="600" fill="#0b0b0b">(b) Single-Trajectory Interaction Cost vs. Budget-Aware Task Utility</text>
+
+  <!-- Bubble Size Legend (natural language, no math symbols) -->
+  <circle cx="424" cy="102" r="3" fill="#8a8880"/>
+  <circle cx="436" cy="102" r="5.5" fill="#8a8880"/>
+  <text x="448" y="106" font-size="9.5" fill="#52514e">Bubble Size = Feedback Utilization Gain</text>
+
+  <!-- Plot Area: x=72..612 (width=540), y=118..312 (height=194) -->
+  <!-- Horizontal Gridlines -->
+  <line x1="72" y1="156" x2="612" y2="156" stroke="#eae9e4" stroke-width="1"/>
+  <line x1="72" y1="192" x2="612" y2="192" stroke="#eae9e4" stroke-width="1"/>
+  <line x1="72" y1="228" x2="612" y2="228" stroke="#eae9e4" stroke-width="1"/>
+  <line x1="72" y1="264" x2="612" y2="264" stroke="#eae9e4" stroke-width="1"/>
+  <line x1="72" y1="300" x2="612" y2="300" stroke="#eae9e4" stroke-width="1"/>
+  <line x1="72" y1="312" x2="612" y2="312" stroke="#cfceca" stroke-width="1"/>
+
+  <!-- Vertical Gridlines -->
+  <line x1="72" y1="118" x2="72" y2="312" stroke="#cfceca" stroke-width="1"/>
+  <line x1="207" y1="118" x2="207" y2="312" stroke="#eae9e4" stroke-width="1"/>
+  <line x1="342" y1="118" x2="342" y2="312" stroke="#eae9e4" stroke-width="1"/>
+  <line x1="477" y1="118" x2="477" y2="312" stroke="#eae9e4" stroke-width="1"/>
+  <line x1="612" y1="118" x2="612" y2="312" stroke="#eae9e4" stroke-width="1"/>
+
+  <!-- Y-Axis Ticks & Natural Language Label -->
+  <text x="65" y="159" font-size="9.5" fill="#52514e" text-anchor="end">0.36</text>
+  <text x="65" y="195" font-size="9.5" fill="#52514e" text-anchor="end">0.35</text>
+  <text x="65" y="231" font-size="9.5" fill="#52514e" text-anchor="end">0.34</text>
+  <text x="65" y="267" font-size="9.5" fill="#52514e" text-anchor="end">0.33</text>
+  <text x="65" y="303" font-size="9.5" fill="#52514e" text-anchor="end">0.32</text>
+  <text x="20" y="216" font-size="10.5" font-weight="600" fill="#0b0b0b" transform="rotate(-90 20 216)" text-anchor="middle">Interaction Cost (↓ Lower is Better)</text>
+
+  <!-- X-Axis Ticks & Natural Language Label -->
+  <text x="72" y="327" font-size="9.5" fill="#52514e" text-anchor="middle">0.25</text>
+  <text x="207" y="327" font-size="9.5" fill="#52514e" text-anchor="middle">0.35</text>
+  <text x="342" y="327" font-size="9.5" fill="#52514e" text-anchor="middle">0.45</text>
+  <text x="477" y="327" font-size="9.5" fill="#52514e" text-anchor="middle">0.55</text>
+  <text x="612" y="327" font-size="9.5" fill="#52514e" text-anchor="middle">0.65</text>
+  <text x="342" y="348" font-size="10.5" font-weight="600" fill="#0b0b0b" text-anchor="middle">Budget-Aware Task Utility (↑ Higher is Better)</text>
+
+  <!-- ================= ISSUE 1 CLUSTER: ON-POLICY STAGNATION (Left Region) ================= -->
+  <rect x="86" y="168" width="200" height="96" fill="#9a9890" fill-opacity="0.10" stroke="#9a9890" stroke-width="1" stroke-dasharray="3,3" rx="4"/>
+
+  <!-- Issue 1 Caption cleanly below the box (natural language) -->
+  <text x="88" y="282" font-size="9.5" font-weight="600" fill="#0b0b0b">Issue 1: On-Policy Exploration Stagnation</text>
+  <text x="88" y="295" font-size="9" fill="#52514e">Rarely probes (19%–24%); weak feedback use</text>
+
+  <!-- 1. Frozen Base -->
+  <circle cx="102" cy="211" r="3.8" fill="#52514e" stroke="#fcfcfb" stroke-width="1.5"/>
+  <text x="102" y="225" font-size="9" font-weight="600" fill="#0b0b0b" text-anchor="middle">Base</text>
+
+  <!-- 2. AREW -->
+  <circle cx="137" cy="186" r="4.0" fill="#8a8880" stroke="#fcfcfb" stroke-width="1.5"/>
+  <text x="137" y="177" font-size="9" fill="#52514e" text-anchor="middle">AREW</text>
+
+  <!-- 3. RLOO -->
+  <circle cx="194" cy="220" r="4.5" fill="#8a8880" stroke="#fcfcfb" stroke-width="1.5"/>
+  <line x1="189" y1="216" x2="177" y2="207" stroke="#8a8880" stroke-width="1"/>
+  <text x="174" y="206" font-size="9" fill="#52514e" text-anchor="end">RLOO</text>
+
+  <!-- 4. GiGPO -->
+  <circle cx="206" cy="228" r="4.7" fill="#8a8880" stroke="#fcfcfb" stroke-width="1.5"/>
+  <line x1="206" y1="234" x2="206" y2="245" stroke="#8a8880" stroke-width="1"/>
+  <text x="206" y="255" font-size="9" fill="#52514e" text-anchor="middle">GiGPO</text>
+
+  <!-- 5. Natural 2-Branch -->
+  <circle cx="262" cy="243" r="5.2" fill="#78766f" stroke="#fcfcfb" stroke-width="1.5"/>
+  <text x="256" y="231" font-size="9" fill="#52514e" text-anchor="middle">Natural 2-B</text>
+
+  <!-- ================= TWO-STEP CAUSAL TRANSITION ARROWS ================= -->
+  <!-- Step 1 Arrow: From On-Policy Cluster to Forced Branching (Unweighted) -->
+  <path d="M 288 204 Q 395 184 510 164" fill="none" stroke="#eb6834" stroke-width="1.6" stroke-dasharray="4,3" marker-end="url(#arrow-orange)"/>
+  <text x="392" y="170" font-size="8.8" font-weight="600" fill="#52514e" text-anchor="middle">+ Forced Branching</text>
+
+  <!-- Step 2 Arrow: From Unweighted to SPAR -->
+  <line x1="527" y1="173" x2="557" y2="253" stroke="#2a78d6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <text x="533" y="212" font-size="8.8" font-weight="600" fill="#0b0b0b" text-anchor="end">+ Aligned Reweighting</text>
+  <text x="533" y="224" font-size="8.5" fill="#52514e" text-anchor="end">Cost −8.0% · Feedback Gain +28.6%</text>
+
+  <!-- ================= ISSUE 2 POINT: FORCED BRANCHING (UNWEIGHTED) ================= -->
+  <circle cx="523" cy="162" r="7.8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+  <text x="604" y="132" font-size="9.5" font-weight="600" fill="#0b0b0b" text-anchor="end">Issue 2: Forced Branching (Unweighted)</text>
+  <text x="604" y="145" font-size="8.8" fill="#52514e" text-anchor="end">Over-probing inflates cost (0.358) &amp; hurts utility</text>
+
+  <!-- ================= SPAR (OURS): OPTIMAL POINT ================= -->
+  <circle cx="562" cy="266" r="9.5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+  <rect x="332" y="258" width="212" height="38" fill="#f0f6fd" stroke="#2a78d6" stroke-width="1.2" rx="3"/>
+  <line x1="544" y1="270" x2="551" y2="268" stroke="#2a78d6" stroke-width="1.2"/>
+  <text x="340" y="273" font-size="9.5" font-weight="600" fill="#0b0b0b">SPAR (Ours: Stratified + Aligned)</text>
+  <text x="340" y="287" font-size="8.8" fill="#52514e">Lowest cost (0.330) · Highest utility (0.613)</text>
+</svg>

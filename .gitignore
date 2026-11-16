@@ -6,6 +6,7 @@ __pycache__/
 .venv-*/
 .research/
 .research-published/
+.pi/
 .external/
 .DS_Store
 ._*
