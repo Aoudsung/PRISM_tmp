@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -61,6 +63,28 @@ def compute_allocation(physical_ids, model_physical_ids=None):
     return compute, [allocated.index(gpu) for gpu in compute]
 
 
+@contextmanager
+def _file_lock(path, *, nonblocking=False, error_message=None):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
+    with path.open('a+') as handle:
+        try:
+            fcntl.flock(handle.fileno(), mode)
+        except BlockingIOError as exc:
+            raise RuntimeError(error_message or f'Resource is locked by another process: {path}') from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _validate_suite_cells(cells, config, suite):
+    if any(saved['protocol'] != config['protocol'] or saved['method'] not in SUITE_METHODS[suite]
+           or saved['benchmark'] not in SUITE_BENCHMARKS[suite] for saved in cells):
+        raise ValueError('Existing suite summary belongs to another experiment definition')
+
+
 def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_ids=None, resume=False):
     require_protocol(config)
     # Resolve physical allocation before importing any Engine/CUDA code.
@@ -83,6 +107,16 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
         cell_config['gpu_free_memory_gib'] = {
             logical: physical_memory[physical] if physical in physical_memory else physical_memory[str(physical)]
             for logical, physical in enumerate(gpu_ids)}
+    with _file_lock(output.parent / f'.{output.name}.lock', nonblocking=True,
+                    error_message=f'Cell is already locked by another active worker: {output}'):
+        return _run_locked_cell(
+            config, cell_config, output,
+            method=method, benchmark=benchmark, seed=seed,
+            Engine=Engine, resume=resume,
+        )
+
+
+def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, Engine, resume):
     resume_from = None
     if output.exists():
         if not resume:
@@ -254,40 +288,45 @@ def main(argv=None):
     isolate_gpus(args.gpu, config['excluded_gpu_ids'])
     compute_allocation(args.gpu, args.model_gpu)
     suite_dir = args.output_dir / args.suite
+    selected = [(benchmark, method, seed, suite_dir / benchmark / method / f'seed-{seed}')
+                for benchmark in benchmarks for method in methods for seed in seeds]
     if args.resume:
         if not suite_dir.is_dir():
             raise FileNotFoundError('Explicit --resume requires the existing selected suite directory.')
     else:
-        suite_dir.mkdir(parents=True, exist_ok=False)
+        suite_dir.mkdir(parents=True, exist_ok=True)
+        existing = next((path for _, _, _, path in selected if path.exists()), None)
+        if existing is not None:
+            raise FileExistsError(f'Existing cell requires explicit --resume: {existing}')
     study_path = suite_dir / 'study_summary.json'
-    cells = json.loads(study_path.read_text())['cells'] if args.resume and study_path.is_file() else []
-    if any(saved['protocol'] != config['protocol'] or saved['method'] not in SUITE_METHODS[args.suite]
-           or saved['benchmark'] not in SUITE_BENCHMARKS[args.suite] for saved in cells):
-        raise ValueError('Existing suite summary belongs to another experiment definition')
-    for benchmark in benchmarks:
-        for method in methods:
-            for seed in seeds:
-                output = suite_dir / benchmark / method / f'seed-{seed}'
-                cell = run_cell(config, output, method=method, benchmark=benchmark,
-                                seed=seed, gpu_ids=args.gpu, model_gpu_ids=args.model_gpu,
-                                resume=args.resume and output.exists())
-                cell.update(method_role=METHOD_ROLES[method],suite=args.suite)
-                position = next((index for index, saved in enumerate(cells)
-                                 if (saved['method'], saved['benchmark'], saved['seed'])
-                                 == (method, benchmark, seed)), None)
-                if position is None:
-                    cells.append(cell)
-                else:
-                    cells[position] = cell
-                references,reference_aggregates = (reused_fgpo_results(args.output_dir,cells,config)
-                    if args.suite=='ablation' else ([],[]))
-                write_json(study_path, {
-                    'protocol': config['protocol'], 'suite':args.suite,'experiment_plan':plan,
-                    'cells': cells,'aggregates':aggregate_cells(cells),
-                    'reference_cells':references,'reference_aggregates':reference_aggregates,
-                    'design': 'docs/fgpo_design_and_derivation.md'})
-                if cell['status'] == 'interrupted':
-                    return 130
+    lock_path = suite_dir / '.study_summary.lock'
+    with _file_lock(lock_path):
+        if study_path.is_file():
+            _validate_suite_cells(json.loads(study_path.read_text())['cells'], config, args.suite)
+    for benchmark, method, seed, output in selected:
+        cell = run_cell(config, output, method=method, benchmark=benchmark,
+                        seed=seed, gpu_ids=args.gpu, model_gpu_ids=args.model_gpu,
+                        resume=args.resume and output.exists())
+        cell.update(method_role=METHOD_ROLES[method], suite=args.suite)
+        with _file_lock(lock_path):
+            cells = json.loads(study_path.read_text())['cells'] if study_path.is_file() else []
+            _validate_suite_cells(cells, config, args.suite)
+            position = next((index for index, saved in enumerate(cells)
+                             if (saved['method'], saved['benchmark'], saved['seed'])
+                             == (method, benchmark, seed)), None)
+            if position is None:
+                cells.append(cell)
+            else:
+                cells[position] = cell
+            references, reference_aggregates = (reused_fgpo_results(args.output_dir, cells, config)
+                if args.suite == 'ablation' else ([], []))
+            write_json(study_path, {
+                'protocol': config['protocol'], 'suite': args.suite, 'experiment_plan': plan,
+                'cells': cells, 'aggregates': aggregate_cells(cells),
+                'reference_cells': references, 'reference_aggregates': reference_aggregates,
+                'design': 'docs/fgpo_design_and_derivation.md'})
+        if cell['status'] == 'interrupted':
+            return 130
     return 0
 
 

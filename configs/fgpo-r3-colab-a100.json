@@ -1,0 +1,172 @@
+{
+  "protocol": "fgpo-r3-published-v3",
+  "local_files_only": true,
+  "benchmarks": [
+    "alfworld",
+    "appworld"
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "methods": [
+    "fgpo",
+    "gigpo",
+    "hgpo",
+    "graphgpo"
+  ],
+  "experiment_suites": {
+    "comparison": {
+      "methods": [
+        "fgpo",
+        "gigpo",
+        "hgpo",
+        "graphgpo"
+      ],
+      "benchmarks": [
+        "alfworld",
+        "appworld"
+      ],
+      "planned_cells": 24,
+      "claims": [
+        "C1_method_level_official_success",
+        "C5_actual_end_to_end_cost"
+      ],
+      "necessity": "Compare the complete proposed method with three published predecessors on both official benchmarks.",
+      "interpretation": "Released-source ALFWorld recipes; AppWorld is an explicit native-code transfer. Report recipe cost beside final performance.",
+      "checkpoint_selection": "final_predeclared_training_round_only"
+    },
+    "ablation": {
+      "methods": [
+        "fgpo_obs_only",
+        "fgpo_no_transfer",
+        "fgpo_no_support_weight"
+      ],
+      "benchmarks": [
+        "alfworld"
+      ],
+      "planned_additional_cells": 9,
+      "reference_method": "fgpo",
+      "reference_suite": "comparison",
+      "reuse_reference": true,
+      "claim_by_method": {
+        "fgpo_obs_only": "C2_history_conditioned_matching",
+        "fgpo_no_transfer": "C3_next_state_peer_continuation",
+        "fgpo_no_support_weight": "C4_support_weighted_transfer"
+      },
+      "necessity": "Each own-method deletion tests one retained mechanism claim; reuse the three main FGPO ALFWorld cells.",
+      "interpretation": "Mechanistic conclusions apply to ALFWorld; no separate cross-benchmark mechanism claim.",
+      "additional_diagnostic_rollouts": 0
+    }
+  },
+  "evaluation_splits": {
+    "alfworld": [
+      "valid_unseen"
+    ],
+    "appworld": [
+      "test_normal",
+      "test_challenge"
+    ]
+  },
+  "official_task_counts": {
+    "valid_unseen": 134,
+    "test_normal": 168,
+    "test_challenge": 417
+  },
+  "horizons": {
+    "alfworld": 50,
+    "appworld": 100
+  },
+  "groups": 16,
+  "trajectories": 8,
+  "max_context_tokens": 32768,
+  "activation_offload": false,
+  "gpu_id_semantics": "CLI_physical_allocation_with_isolated_process_local_CUDA_indices",
+  "method_configs": {
+    "fgpo": {
+      "rounds": 60,
+      "training_window_source": "predeclared_fgpo_60_rounds",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      }
+    },
+    "fgpo_obs_only": {
+      "rounds": 60,
+      "training_window_source": "same_as_main_fgpo",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      }
+    },
+    "fgpo_no_transfer": {
+      "rounds": 60,
+      "training_window_source": "same_as_main_fgpo",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      }
+    },
+    "fgpo_no_support_weight": {
+      "rounds": 60,
+      "training_window_source": "same_as_main_fgpo",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      }
+    },
+    "gigpo": {
+      "training_window_source": "released_source_150_rounds"
+    },
+    "hgpo": {
+      "training_window_source": "released_source_160_rounds"
+    },
+    "graphgpo": {
+      "training_window_source": "released_source_150_rounds"
+    }
+  },
+  "published_recipe_source": {
+    "module": "fgpo.baseline_specs",
+    "repository": "https://github.com/langfengQ/verl-agent",
+    "commit": "20bd331bdbc9026a5668e11362178e10ab7400c8",
+    "resolution": "Source recipe sets all published semantic defaults; common resource options remain configurable."
+  },
+  "adaptations": [
+    "fresh_published_v3_study_no_v1_or_v2_resume",
+    "Qwen2.5_7B_backbone_and_full_official_evaluation",
+    "published_ALFWorld_credit_prompt_reward_and_training_recipes",
+    "AppWorld_native_Python_transfer_not_original_paper_experiment",
+    "PyTorch_batch_rollout_and_CPU_FP32_master_AdamW_runtime",
+    "released_copy_balance_virtual_microbatch_weights_for_published_PPO",
+    "GiGPO_published_1_5B_full_finetune_recipe_transferred_to_study_7B",
+    "own_fixed_trajectory_loss_and_undiscounted_terminal_success",
+    "own_ablations_only_on_ALFWorld_reusing_main_FGPO",
+    "diagnostics_reuse_formal_records_no_additional_rollouts"
+  ],
+  "environment_pool_size": 8,
+  "cache_initial_capacity": 1024,
+  "representation_token_budget": 8192,
+  "representation_batch_size": 8,
+  "working_memory_gib": 6,
+  "head_chunk_tokens": 64,
+  "optimizer_bucket_mib": 64,
+  "optimizer_pin_memory": true,
+  "checkpoint_interval_groups": 16,
+  "reward_scale": 10,
+  "credit_radius": 0.1,
+  "credit_prior_weight": 1,
+  "credit_transfer_max": 1,
+  "ppo_clip_ratio": 0.2,
+  "ppo_dual_clip": 3,
+  "entropy_coef": 0.001,
+  "kl_coef": 0.01,
+  "max_grad_norm": 1,
+  "install_root": "/content/fgpo-r3",
+  "python_executable": "/content/venvs/fgpo-main/bin/python",
+  "alfworld_python_executable": "/content/venvs/alfworld/bin/python",
+  "model_path": "/content/models/Qwen2.5-7B-Instruct",
+  "alfworld_data_root": "/content/data/alfworld",
+  "appworld_data_root": "/content/data/appworld-root",
+  "excluded_gpu_ids": []
+}
