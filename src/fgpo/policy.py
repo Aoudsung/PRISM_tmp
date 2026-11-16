@@ -1,14 +1,15 @@
-"""Qwen full-softmax causal execution, explicit CUDA layer shards and exact KV state."""
+"""Qwen causal execution with bounded workspace and reusable inference KV storage."""
 from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-import math
 import time
 from typing import Any, Mapping, Sequence
 
 import torch
 from torch import nn
+
+from .cache import ArenaCache, ArenaLayer
 
 
 def clock() -> float:
@@ -20,9 +21,18 @@ class KVState:
     cache: Any
     valid_mask: torch.Tensor
     next_logits: torch.Tensor
+    lengths: tuple[int, ...]
+    # Half-open physical column ranges.  Host-known ranges let compaction build
+    # gather indices without torch.nonzero's device-to-host shape readback.
+    valid_spans: tuple[tuple[tuple[int, int], ...], ...]
+    right_padded: bool = True
 
 
-def layer_device_map(config, gpu_ids, free_gib=None, *, full_training=True):
+class _LayerCaptured(Exception):
+    """Internal control flow for a no-grad intermediate-layer representation."""
+
+
+def layer_device_map(config, gpu_ids, free_gib=None, *, full_training=True, working_memory_gib=6.):
     if not gpu_ids:
         raise ValueError("Qwen requires an explicitly allocated healthy CUDA device")
     capacities = [float(free_gib[g]) if free_gib and g in free_gib else
@@ -32,7 +42,7 @@ def layer_device_map(config, gpu_ids, free_gib=None, *, full_training=True):
     width = 4 if full_training else 2
     layer_size = (2*h*h + 2*h*kv + 3*h*intermediate + 4*h) * width / 2**30
     embedding = int(config.vocab_size) * h * width / 2**30
-    capacities = [v - 3. for v in capacities]
+    capacities = [v - float(working_memory_gib) for v in capacities]
     capacities[0] -= embedding
     if not config.tie_word_embeddings:
         capacities[-1] -= embedding
@@ -61,7 +71,10 @@ class CausalPolicy(nn.Module):
     def __init__(self, model_path: str, *, gpu_ids: Sequence[int], ledger,
                  trainable: bool = True, adaptation: str | None = None,
                  checkpoint: str | None = None, free_memory_gib: Mapping[int, float] | None = None,
-                 activation_offload: bool = True, benchmark: str = "alfworld"):
+                 activation_offload: bool = False, benchmark: str = "alfworld",
+                 max_context_tokens: int | None = None, max_new_tokens: int | None = None,
+                 cache_initial_capacity: int = 1024, representation_token_budget: int = 8192,
+                 representation_batch_size: int = 8, working_memory_gib: float = 6.):
         super().__init__()
         from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
         # These are the actual compute devices. The Engine/ledger separately
@@ -75,7 +88,7 @@ class CausalPolicy(nn.Module):
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.device_map = layer_device_map(cfg, self.gpu_ids, free_memory_gib,
-                                          full_training=trainable and adaptation is None)
+            full_training=trainable and adaptation is None, working_memory_gib=working_memory_gib)
         source = checkpoint if checkpoint and adaptation is None else model_path
         self.model = AutoModelForCausalLM.from_pretrained(source, local_files_only=True,
             trust_remote_code=False, torch_dtype=torch.bfloat16, attn_implementation="sdpa",
@@ -101,13 +114,27 @@ class CausalPolicy(nn.Module):
         self.model.config.use_cache = False
         self.model.eval()
         self.activation_offload = bool(activation_offload)
-        self.max_context_tokens = min(32768, int(cfg.max_position_embeddings))
-        self.max_new_tokens = 256 if benchmark == "alfworld" else 1024
+        supported_context = min(32768, int(cfg.max_position_embeddings))
+        self.max_context_tokens = supported_context if max_context_tokens is None else int(max_context_tokens)
+        self.max_new_tokens = (256 if benchmark == "alfworld" else 1024) if max_new_tokens is None else int(max_new_tokens)
+        if not 0 < self.max_new_tokens < self.max_context_tokens <= supported_context:
+            raise ValueError("Generation/context limits must fit the configured Qwen context")
+        self.cache_initial_capacity = int(cache_initial_capacity)
+        self.representation_token_budget = int(representation_token_budget)
+        self.representation_batch_size = int(representation_batch_size)
+        if min(self.cache_initial_capacity, self.representation_token_budget, self.representation_batch_size) < 1:
+            raise ValueError("Cache and representation batch budgets must be positive")
+        self._phase_depth = 0
         self.eos_token_ids = (151645, 151643)
         self._reference_active = False
         self.metadata = {"base_model": model_path, "adaptation": adaptation, "dtype": "bfloat16",
                          "compute_logical_gpu_ids":list(self.gpu_ids),
                          "attention": "sdpa", "device_map": dict(self.device_map),
+                         "kv_cache": "geometric_arena", "cache_initial_capacity": self.cache_initial_capacity,
+                         "activation_offload": self.activation_offload,
+                         "representation_token_budget": self.representation_token_budget,
+                         "representation_batch_size": self.representation_batch_size,
+                         "working_memory_reserve_gib": float(working_memory_gib),
                          "trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad)}
 
     @property
@@ -136,6 +163,11 @@ class CausalPolicy(nn.Module):
     @contextmanager
     def phase(self, role):
         self.synchronize()
+        outermost = self._phase_depth == 0
+        if outermost:
+            for gpu in self.gpu_ids:
+                torch.cuda.reset_peak_memory_stats(gpu)
+        self._phase_depth += 1
         start, status = clock(), "OK"
         try:
             yield
@@ -144,7 +176,16 @@ class CausalPolicy(nn.Module):
             raise
         finally:
             self.synchronize()
-            self.record("compute", role, seconds=clock()-start, details={"status": status})
+            self._phase_depth -= 1
+            memory = {str(gpu): {"allocated_bytes": torch.cuda.memory_allocated(gpu),
+                                "reserved_bytes": torch.cuda.memory_reserved(gpu),
+                                "peak_allocated_bytes": torch.cuda.max_memory_allocated(gpu),
+                                "peak_reserved_bytes": torch.cuda.max_memory_reserved(gpu)}
+                      for gpu in self.gpu_ids}
+            self.record("compute", role, seconds=clock()-start,
+                        details={"status": status, "time_basis": "synchronized_wall",
+                                 "memory_scope": "phase" if outermost else "enclosing_phase",
+                                 "cuda_memory": memory})
 
     def encode(self, text: str) -> tuple[int, ...]:
         return tuple(self.tokenizer.encode(text, add_special_tokens=False, split_special_tokens=True))
@@ -155,87 +196,125 @@ class CausalPolicy(nn.Module):
         return generator
 
     def head(self, hidden: torch.Tensor, *, role="vocabulary_projection"):
-        self.synchronize()
         started, status = clock(), "OK"
         try:
             module = self.model.get_output_embeddings()
-            value = module(hidden.to(module.weight.device)).float()
-            self.synchronize()
-            return value
+            return module(hidden.to(module.weight.device)).float()
         except BaseException:
             status = "ERROR"
             raise
         finally:
             self.record("model", role, seconds=clock()-started,
-                        details={"status": status, "projection_continuation": True, "positions": hidden.shape[-2]})
+                        details={"status": status, "time_basis": "host_dispatch",
+                                 "projection_continuation": True,
+                                 "positions": hidden.numel() // hidden.shape[-1]})
 
     def body(self, input_ids, *, attention_mask=None, position_ids=None, cache=None,
-             cache_position=None, use_cache=False, hidden_layer=None, role="forward", teacher_forced=False):
+             cache_position=None, use_cache=False, hidden_layer=None, role="forward", teacher_forced=False,
+             actual_tokens=None, logical_length=None, stop_at_hidden_layer=False):
         ids = torch.as_tensor(input_ids, dtype=torch.long, device=self.device)
         if ids.ndim == 1:
             ids = ids.unsqueeze(0)
-        mask = (torch.ones_like(ids) if attention_mask is None else attention_mask.to(self.device))
+        if ids.ndim != 2 or ids.shape[1] == 0:
+            raise ValueError("A causal forward requires a nonempty batch of token sequences")
+        if attention_mask is None:
+            past = cache.get_seq_length() if cache is not None else 0
+            mask = torch.ones((ids.shape[0], past + ids.shape[1]), dtype=torch.bool, device=self.device)
+            if logical_length is None:
+                logical_length = past + ids.shape[1]
+            if actual_tokens is None:
+                actual_tokens = ids.numel()
+        else:
+            mask = attention_mask.to(self.device)
         if position_ids is None:
             position_ids = (mask.long().cumsum(-1)-1).clamp_min(0)[:, -ids.shape[1]:]
         else:
             position_ids = position_ids.to(self.device)
-        if int(position_ids.max()) >= self.max_context_tokens:
+        # The rollout passes lengths already known on the host.  No per-token
+        # scalar readback is needed for capacity checks or work accounting.
+        if logical_length is None:
+            logical_length = int(position_ids.max()) + 1
+        if logical_length > self.max_context_tokens:
             raise ValueError("Exact Qwen context capacity exceeded")
+        if actual_tokens is None:
+            actual_tokens = int(mask[:, -ids.shape[1]:].sum())
+        if stop_at_hidden_layer and (hidden_layer is None or use_cache or torch.is_grad_enabled()):
+            raise ValueError("Layer early exit is restricted to no-grad, uncached representation forwards")
         captures = []
         hook = None
         if hidden_layer is not None:
             layers = self.base.model.layers
             index = len(layers) + hidden_layer if hidden_layer < 0 else hidden_layer
+            if not 0 <= index < len(layers):
+                raise ValueError("Representation layer is outside the model")
             def capture(_module, _args, output):
                 captures.append(output[0] if isinstance(output, tuple) else output)
+                if stop_at_hidden_layer:
+                    raise _LayerCaptured
             hook = layers[index].register_forward_hook(capture)
         kwargs = dict(input_ids=ids, attention_mask=mask, position_ids=position_ids,
                       past_key_values=cache, use_cache=use_cache)
         if cache_position is not None:
             kwargs["cache_position"] = cache_position.to(self.device)
-        self.synchronize()
         start, status = clock(), "OK"
         try:
             with self.activation_saving():
                 output = self.base.model(**kwargs)
-            self.synchronize()
             selected = captures[0] if captures else None
             return output.last_hidden_state, selected, output.past_key_values if use_cache else None
+        except _LayerCaptured:
+            return captures[0], captures[0], None
         except BaseException:
             status = "ERROR"
             raise
         finally:
             if hook is not None:
                 hook.remove()
-            actual = int(mask[:, -ids.shape[1]:].sum())
             sampling_cache = use_cache and not teacher_forced
-            self.record("model", role, input_tokens=actual if sampling_cache else 0,
-                        forward_tokens=0 if sampling_cache else actual, seconds=clock()-start,
-                        details={"status": status, "padded_compute_tokens": ids.numel(), "use_cache": use_cache})
+            self.record("model", role, input_tokens=actual_tokens if sampling_cache else 0,
+                        forward_tokens=0 if sampling_cache else actual_tokens, seconds=clock()-start,
+                        details={"status": status, "time_basis": "host_dispatch",
+                                 "padded_compute_tokens": ids.numel(), "use_cache": use_cache,
+                                 "executed_decoder_layers": index + 1 if stop_at_hidden_layer else len(self.base.model.layers)})
 
     def packed_segment_hidden(self, token_ids, *, hidden_layer=-8, role="packed_segment"):
         return self.body(tuple(token_ids)[:-1], hidden_layer=hidden_layer, role=role)[:2]
 
     @torch.no_grad()
     def observation_embeddings(self, rows, *, role="reference.observation_embedding", layer=-8):
-        from torch.nn import ModuleList, Identity
-        original_layers,original_norm = self.base.model.layers,self.base.model.norm
-        stop = len(original_layers)+layer+1 if layer < 0 else layer+1
-        try:
-            self.base.model.layers = ModuleList(list(original_layers[:stop]))
-            self.base.model.norm = Identity()
-            width = max(len(row) for row in rows)
-            ids = torch.full((len(rows),width),self.tokenizer.pad_token_id,dtype=torch.long,device=self.device)
-            valid = torch.zeros_like(ids,dtype=torch.bool)
-            for i,row in enumerate(rows):
-                ids[i,:len(row)] = torch.tensor(row,device=self.device)
-                valid[i,:len(row)] = True
-            hidden,_,_ = self.body(ids,attention_mask=valid,role=role)
-            vectors = hidden[torch.arange(len(rows),device=hidden.device),
-                             torch.tensor([len(row)-1 for row in rows],device=hidden.device)]
-            return torch.nn.functional.normalize(vectors.float(),dim=-1).cpu()
-        finally:
-            self.base.model.layers,self.base.model.norm = original_layers,original_norm
+        rows = tuple(tuple(row) for row in rows)
+        if not rows:
+            return torch.empty((0, self.base.config.hidden_size), dtype=torch.float32)
+        if any(not row or len(row) > self.max_context_tokens for row in rows):
+            raise ValueError("Observation representations require nonempty in-context token sequences")
+        ordered = sorted(range(len(rows)), key=lambda i: len(rows[i]))
+        batches, current = [], []
+        for index in ordered:
+            width = len(rows[index])
+            if current and (len(current) >= self.representation_batch_size or
+                            width * (len(current) + 1) > self.representation_token_budget):
+                batches.append(current)
+                current = []
+            current.append(index)
+        if current:
+            batches.append(current)
+        result = torch.empty((len(rows), self.base.config.hidden_size), dtype=torch.float32)
+        for indices in batches:
+            selected_rows = [rows[i] for i in indices]
+            lengths = [len(row) for row in selected_rows]
+            width = max(lengths)
+            ids = torch.tensor([row + (self.tokenizer.pad_token_id,) * (width - len(row))
+                                for row in selected_rows], dtype=torch.long, device=self.device)
+            valid = torch.arange(width, device=self.device)[None, :] < torch.tensor(lengths, device=self.device)[:, None]
+            hidden, _, _ = self.body(ids, attention_mask=valid, hidden_layer=layer,
+                stop_at_hidden_layer=True, actual_tokens=sum(lengths), logical_length=width, role=role)
+            vectors = hidden[torch.arange(len(indices), device=hidden.device),
+                             torch.tensor(lengths, device=hidden.device) - 1]
+            result[indices] = torch.nn.functional.normalize(vectors.float(), dim=-1).cpu()
+            # Release this batch before evaluating the next RHS: assignment to
+            # `hidden` alone would retain the previous full output meanwhile.
+            del hidden, vectors, ids, valid
+        return result
 
     @torch.no_grad()
     def prefill_root(self, token_ids, *, role="rollout.root"):
@@ -243,35 +322,37 @@ class CausalPolicy(nn.Module):
         ids = tuple(token_ids)
         if not ids:
             raise ValueError("A causal root needs at least one prompt token")
-        hidden, _, cache = self.body(ids, use_cache=True, role=role)
+        cache = ArenaCache(len(self.base.model.layers), initial_capacity=self.cache_initial_capacity,
+                           growth_limit=self.max_context_tokens)
+        hidden, _, cache = self.body(ids, cache=cache, use_cache=True, role=role,
+                                     actual_tokens=len(ids), logical_length=len(ids))
         logits = self.head(hidden[:, -1], role=role+".head")
-        return KVState(cache, torch.ones((1,len(ids)), dtype=torch.bool, device=self.device), logits)
+        return KVState(cache, torch.ones((1,len(ids)), dtype=torch.bool, device=self.device),
+                       logits, (len(ids),), (((0, len(ids)),),))
 
     def cache_tensors(self, cache):
         return [(entry[0],entry[1]) for entry in cache]
 
+    @torch.no_grad()
     def restore_cache(self, tensors):
-        from transformers import DynamicCache
-        from transformers.cache_utils import DynamicLayer
-        result = DynamicCache()
+        layers = []
         for i, (key, value) in enumerate(tensors):
             device = next(self.base.model.layers[i].parameters()).device
             key, value = key.to(device), value.to(device)
-            # DynamicLayer.update concatenates even its initially empty KV.
-            # These tensors already contain the complete layer: transfer them
-            # directly, preserving the installed layer's initialization state.
-            layer = DynamicLayer()
-            layer.lazy_initialization(key)
-            layer.keys, layer.values = key, value
-            result.layers.append(layer)
-        return result
+            layer = ArenaLayer(initial_capacity=self.cache_initial_capacity, growth_limit=self.max_context_tokens)
+            layer.update(key, value)
+            layers.append(layer)
+        return ArenaCache(layers=layers)
 
     @torch.no_grad()
     def fork_cache(self, root: KVState, copies=8):
-        tensors = ((layer.keys.repeat_interleave(copies, 0), layer.values.repeat_interleave(copies, 0))
-                   for layer in root.cache.layers)
-        return KVState(self.restore_cache(tensors), root.valid_mask.repeat_interleave(copies,0),
-                       root.next_logits.repeat_interleave(copies,0))
+        if copies < 1:
+            raise ValueError("Cache fork requires at least one copy")
+        indices = torch.arange(len(root.lengths), dtype=torch.long).repeat_interleave(copies)
+        return KVState(root.cache.copy_rows(indices), root.valid_mask.repeat_interleave(copies,0),
+                       root.next_logits.repeat_interleave(copies,0),
+                       tuple(n for n in root.lengths for _ in range(copies)),
+                       tuple(spans for spans in root.valid_spans for _ in range(copies)), root.right_padded)
 
     @torch.no_grad()
     def select_cache(self, state: KVState, indices, *, consume=False):
@@ -282,87 +363,108 @@ class CausalPolicy(nn.Module):
         """
         indices = tuple(int(index) for index in indices)
         selection = torch.tensor(indices, dtype=torch.long)
+        lengths = tuple(state.lengths[index] for index in indices)
+        spans = tuple(state.valid_spans[index] for index in indices)
         if consume:
             if indices == tuple(range(state.valid_mask.shape[0])):
                 return state
-            for layer in state.cache.layers:
-                layer.keys = layer.keys.index_select(0, selection.to(layer.keys.device))
-                layer.values = layer.values.index_select(0, selection.to(layer.values.device))
+            state.cache.batch_select_indices(selection)
             state.valid_mask = state.valid_mask.index_select(0, selection.to(state.valid_mask.device))
             state.next_logits = state.next_logits.index_select(0, selection.to(state.next_logits.device))
+            state.lengths = lengths
+            state.valid_spans = spans
             return state
-        tensors = ((layer.keys.index_select(0, selection.to(layer.keys.device)),
-                    layer.values.index_select(0, selection.to(layer.values.device)))
-                   for layer in state.cache.layers)
-        return KVState(self.restore_cache(tensors),
+        return KVState(state.cache.copy_rows(selection),
                        state.valid_mask.index_select(0, selection.to(state.valid_mask.device)),
-                       state.next_logits.index_select(0, selection.to(state.next_logits.device)))
+                       state.next_logits.index_select(0, selection.to(state.next_logits.device)),
+                       lengths, spans, state.right_padded)
 
     def release_cache(self, state: KVState):
         """Relinquish an obsolete KVState without modifying any transferred cache."""
         state.cache = state.valid_mask = state.next_logits = None
+        state.lengths = ()
+        state.valid_spans = ()
 
     @torch.no_grad()
     def compact_cache(self, state: KVState):
-        """Pack valid positions in owned layer storage, without a second full KV.
-
-        Each row gather is copied back before the next row.  The shortened
-        views keep exact K/V and RoPE values; the next normal cache append
-        replaces their backing storage layer by layer with its concatenation.
-        """
-        counts = state.valid_mask.sum(-1)
-        length = int(counts.max())
-        positions = [torch.where(row)[0] for row in state.valid_mask]
-        valid = torch.arange(length,device=self.device)[None,:] < counts.to(self.device)[:,None]
-        if state.valid_mask.shape[1] == length and torch.equal(state.valid_mask.to(self.device), valid):
+        """Compact real padding only; retained arena capacity is reusable."""
+        length = max(state.lengths, default=0)
+        if state.right_padded and state.valid_mask.shape[1] == length:
             return state
-        for layer in state.cache.layers:
-            key, value = layer.keys, layer.values
-            for row, idx in enumerate(positions):
-                n = len(idx)
-                key[row,:,:n].copy_(key[row].index_select(1,idx.to(key.device)))
-                value[row,:,:n].copy_(value[row].index_select(1,idx.to(value.device)))
-                key[row,:,n:length].zero_()
-                value[row,:,n:length].zero_()
-            layer.keys, layer.values = key[:,:,:length], value[:,:,:length]
-        state.valid_mask = valid
+        if state.right_padded:
+            state.cache.crop(length)
+        else:
+            positions = [torch.cat([torch.arange(start, stop, device=self.device)
+                                    for start, stop in spans]) if spans else
+                         torch.empty(0, dtype=torch.long, device=self.device)
+                         for spans in state.valid_spans]
+            state.cache.compact(positions, state.lengths)
+        counts = torch.tensor(state.lengths, device=self.device)
+        state.valid_mask = torch.arange(length, device=self.device)[None, :] < counts[:, None]
+        state.valid_spans = tuple(((0, count),) if count else () for count in state.lengths)
+        state.right_padded = True
         return state
 
     @torch.no_grad()
     def append_cache(self, state: KVState, rows: Sequence[Sequence[int]], *, role="rollout.increment"):
         self.model.eval()
         lengths = [len(row) for row in rows]
+        if len(lengths) != len(state.lengths):
+            raise ValueError("Cache append rows must match the owned trajectory slots")
         width = max(lengths, default=0)
         if width == 0:
             return state
         batch = len(rows)
-        ids = torch.full((batch,width),self.tokenizer.pad_token_id,dtype=torch.long,device=self.device)
-        valid = torch.zeros_like(ids,dtype=torch.bool)
-        for i,row in enumerate(rows):
-            if row:
-                ids[i,:len(row)] = torch.tensor(row,device=self.device)
-                valid[i,:len(row)] = True
+        totals = tuple(old + new for old, new in zip(state.lengths, lengths, strict=True))
+        if max(totals) > self.max_context_tokens:
+            raise ValueError("Cache append exceeds the logical context capacity")
+        ids = torch.tensor([tuple(row) + (self.tokenizer.pad_token_id,) * (width-len(row))
+                            for row in rows], dtype=torch.long, device=self.device)
+        added = torch.tensor(lengths, device=self.device)
+        offsets = torch.arange(width, device=self.device)
+        valid = offsets[None, :] < added[:, None]
         mask = torch.cat((state.valid_mask.to(self.device),valid),dim=1)
-        positions = (mask.long().cumsum(-1)-1).clamp_min(0)[:,-width:]
+        previous = torch.tensor(state.lengths, device=self.device)
+        positions = torch.minimum(previous[:, None] + offsets[None, :],
+                                  (previous + added - 1)[:, None]).clamp_min(0)
         physical = state.valid_mask.shape[1]
         hidden,_,cache = self.body(ids,attention_mask=mask,position_ids=positions,cache=state.cache,
-            cache_position=torch.arange(physical,physical+width,device=self.device),use_cache=True,role=role)
+            cache_position=torch.arange(physical,physical+width,device=self.device),use_cache=True,role=role,
+            actual_tokens=sum(lengths), logical_length=max(totals))
         last = torch.tensor([max(0,n-1) for n in lengths],device=hidden.device)
         selected = hidden[torch.arange(batch,device=hidden.device),last]
         logits = self.head(selected,role=role+".head")
-        for i,n in enumerate(lengths):
-            if not n:
-                logits[i] = state.next_logits[i]
-        return KVState(cache,mask,logits)
+        inactive = [i for i, n in enumerate(lengths) if not n]
+        if inactive:
+            indices = torch.tensor(inactive, dtype=torch.long, device=logits.device)
+            logits.index_copy_(0, indices, state.next_logits.index_select(0, indices))
+        right_padded = state.right_padded and all(not n or state.lengths[i] == physical
+                                                for i, n in enumerate(lengths))
+        spans = tuple(old if not count else
+                      old[:-1] + ((old[-1][0], physical + count),)
+                      if old and old[-1][1] == physical else old + ((physical, physical + count),)
+                      for old, count in zip(state.valid_spans, lengths, strict=True))
+        return KVState(cache,mask,logits,totals,spans,right_padded)
 
     @torch.no_grad()
     def draw_tokens(self, state: KVState, active, generators):
-        ids, logprobs = [], []
-        for row,generator in zip(active,generators):
-            logp = torch.log_softmax(state.next_logits[row].float(),dim=-1)
-            token = int(torch.multinomial(logp.exp(),1,generator=generator))
-            ids.append(token)
-            logprobs.append(float(logp[token]))
+        active, generators = tuple(active), tuple(generators)
+        if len(active) != len(generators):
+            raise ValueError("Each active trajectory requires its own random generator")
+        if not active:
+            return [], []
+        selected = torch.tensor(active, dtype=torch.long, device=state.next_logits.device)
+        logp = torch.log_softmax(state.next_logits.index_select(0, selected).float(), dim=-1)
+        probabilities = logp.exp()
+        tokens = torch.cat([torch.multinomial(probabilities[row], 1, generator=generator)
+                            for row, generator in enumerate(generators)])
+        scores = logp.gather(1, tokens[:, None]).squeeze(1)
+        # The CPU needs termination decisions before dispatching environments.
+        # One packed readback replaces per-slot int/float synchronization while
+        # multinomial still consumes each slot's independent generator stream.
+        sampled = torch.stack((tokens.double(), scores.double()), dim=1).cpu().tolist()
+        ids = [int(row[0]) for row in sampled]
+        logprobs = [row[1] for row in sampled]
         self.record("model","rollout.draw",output_tokens=len(ids),seconds=0.)
         return ids,logprobs
 

@@ -4,11 +4,11 @@ collect_group(policy, env_factory, *, task_id, benchmark, initial_seed,
               slot_seeds, group_id, history_length=None, ledger=None,
               on_complete=None) -> GroupRecord
 
-env_factory(task_id, initial_seed, trajectory_id) returns a fresh isolated
-official process.  Training passes eight slot seeds; evaluation passes one.
+env_factory(task_id, initial_seed, trajectory_id) returns an exclusive lease on
+an isolated official process. Training passes independent slot seeds; evaluation passes one.
 The complete-group callback is a durable collection boundary.
-Independent environment requests run in a slot-bounded thread pool, then drain
-at a policy barrier; only the caller writes their ordered physical-cost rows.
+Completed responses dispatch environment requests while other slots decode.
+Requests drain at a turn boundary; only the caller writes ordered cost rows.
 """
 from __future__ import annotations
 
@@ -16,9 +16,10 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
+from threading import Lock
 
 from .filtration import TokenFiltration
-from .public import HORIZONS, OUTPUT_LIMITS, TERMINATORS, encode_text, pinned_prompt, parse_native_response, project_public_observation
+from .public import HORIZONS, TERMINATORS, encode_text, pinned_prompt, parse_native_response, project_public_observation
 from .records import GroupRecord, StepRecord, TrajectoryRecord, monotonic_seconds
 
 
@@ -44,16 +45,10 @@ def _environment_request(call):
         return _RequestResult(None, error, monotonic_seconds() - started)
 
 
-def _parallel_requests(pool, jobs, ledger, role, *, env_steps=0):
-    """Drain actual requests before recording their fees in stable slot order."""
-    submitted = []
-    submission_error = None
-    try:
-        for slot, call, details in jobs:
-            submitted.append((slot, details, pool.submit(_environment_request, call)))
-    except BaseException as error:
-        submission_error = error
-    completed = [(slot, details, future.result()) for slot, details, future in submitted]
+def _drain_requests(submitted, ledger, role, *, env_steps=0):
+    """Join outstanding requests and record their actual work in slot order."""
+    completed = [(slot, details, future.result())
+                 for slot, details, future in sorted(submitted, key=lambda item: item[0])]
     results = {}
     for slot, details, result in completed:
         receipt = dict(details)
@@ -63,6 +58,18 @@ def _parallel_requests(pool, jobs, ledger, role, *, env_steps=0):
         cost = ledger.record("environment", role, seconds=result.seconds,
                              env_steps=env_steps, details=receipt)
         results[slot] = (result, cost)
+    return results
+
+
+def _parallel_requests(pool, jobs, ledger, role, *, env_steps=0):
+    submitted = []
+    submission_error = None
+    try:
+        for slot, call, details in jobs:
+            submitted.append((slot, details, pool.submit(_environment_request, call)))
+    except BaseException as error:
+        submission_error = error
+    results = _drain_requests(submitted, ledger, role, env_steps=env_steps)
     if submission_error is not None:
         raise submission_error.with_traceback(submission_error.__traceback__)
     return results
@@ -86,26 +93,59 @@ def _append_owned(policy, state, rows, *, role):
     return updated
 
 
-def _sample_turn(policy, cohort, generators, max_tokens):
+def _release_cohort(policy, cohort):
+    if cohort is not None:
+        if cohort.state is not None:
+            policy.release_cache(cohort.state)
+            cohort.state = None
+        if cohort.suffix is not None:
+            policy.release_cache(cohort.suffix)
+            cohort.suffix = None
+
+
+def _sample_turn(policy, cohort, generators, max_tokens, *, on_response=None):
     state = cohort.state
     ids = [[] for _ in cohort.slots]
     logprobs = [[] for _ in cohort.slots]
     active = list(range(len(cohort.slots)))
-    for position in range(max_tokens):
-        tokens, scores = policy.draw_tokens(state, active,
-            [generators[cohort.slots[row]] for row in active])
-        continuing, rows = [], [() for _ in cohort.slots]
-        for row, token, score in zip(active, tokens, scores, strict=True):
-            ids[row].append(int(token))
-            logprobs[row].append(float(score))
-            if token not in TERMINATORS and position + 1 < max_tokens:
-                continuing.append(row)
-                rows[row] = (int(token),)
-        if not continuing:
-            break
-        state = _append_owned(policy, state, rows, role="rollout.decode")
-        active = continuing
-    return state, ids, logprobs
+    try:
+        for position in range(max_tokens):
+            tokens, scores = policy.draw_tokens(state, active,
+                [generators[cohort.slots[row]] for row in active])
+            continuing, rows = [], [() for _ in cohort.slots]
+            for row, token, score in zip(active, tokens, scores, strict=True):
+                ids[row].append(int(token))
+                logprobs[row].append(float(score))
+                if token not in TERMINATORS and position + 1 < max_tokens:
+                    continuing.append(row)
+                    rows[row] = (int(token),)
+                elif on_response is not None:
+                    on_response(cohort.slots[row], tuple(ids[row]))
+            if not continuing:
+                break
+            state = _append_owned(policy, state, rows, role="rollout.decode")
+            active = continuing
+        return state, ids, logprobs
+    except BaseException:
+        # A successful append has transferred storage out of cohort.state's
+        # original wrapper; the current owner lives in this local variable.
+        policy.release_cache(state)
+        cohort.state = None
+        raise
+
+
+def _execute_response(tokenizer, tokenizer_lock, environment, benchmark, response, goal):
+    """CPU-only parse, native transition and public projection for one slot."""
+    # Fast-tokenizer encode calls can update shared padding/truncation state.
+    # Serialize that short CPU section; native RPCs remain fully concurrent.
+    with tokenizer_lock:
+        text = tokenizer.decode(response, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+    action, syntax_valid = parse_native_response(benchmark, text)
+    result = environment.step_native(action)
+    with tokenizer_lock:
+        observation = project_public_observation(tokenizer, benchmark, str(result.observation),
+                                                action_schema=environment.action_schema, goal=goal)
+    return action, syntax_valid, result, observation
 
 
 def _advance_cohort(policy, root, cohort, sampled_state, advances, *, history_length):
@@ -115,46 +155,56 @@ def _advance_cohort(policy, root, cohort, sampled_state, advances, *, history_le
         advance = advances[slot]
         if advance.cache_mode != "terminal":
             groups.setdefault(advance.cache_mode, []).append(index)
-    cohort.state = None
-    append_state = None
-    if "append" in groups:
-        append_state = policy.select_cache(sampled_state, groups["append"], consume=True)
-    else:
-        policy.release_cache(sampled_state)
-    suffix_state, cohort.suffix = cohort.suffix, None
-    if "suffix" in groups:
-        if suffix_state is None:
-            raise RuntimeError("The exact two-turn policy needs its previously retained suffix cache.")
-        suffix_state = policy.select_cache(suffix_state, groups["suffix"], consume=True)
-    elif suffix_state is not None:
-        policy.release_cache(suffix_state)
-        suffix_state = None
+    append_state = suffix_state = state = suffix = None
     result = []
-    for mode, indices in groups.items():
-        slots = tuple(cohort.slots[index] for index in indices)
-        if mode == "append":
-            state, append_state = append_state, None
-            state = _append_owned(policy, state, [advances[slot].delta_ids for slot in slots],
-                                  role="rollout.turn_append")
-        elif mode == "suffix":
-            state, suffix_state = suffix_state, None
-            state = _append_owned(policy, state, [advances[slot].block.token_ids for slot in slots],
-                                  role="rollout.history2_extend")
+    try:
+        cohort.state = None
+        if "append" in groups:
+            append_state = policy.select_cache(sampled_state, groups["append"], consume=True)
         else:
-            state = policy.fork_cache(root, copies=len(slots))
-            state = _append_owned(policy, state, [advances[slot].delta_ids for slot in slots],
-                                  role="rollout.segment_replay")
-        state = policy.compact_cache(state)
-        suffix = None
-        if history_length == 2:
-            # Keep root+B_t independently from the two-turn actor cache.  Its
-            # hidden states never contain the evicted B_(t-1) prefix.
-            suffix = policy.fork_cache(root, copies=len(slots))
-            suffix = _append_owned(policy, suffix, [advances[slot].block.token_ids for slot in slots],
-                                   role="rollout.history2_suffix")
-            suffix = policy.compact_cache(suffix)
-        result.append(_Cohort(slots, state, suffix))
-    return result
+            policy.release_cache(sampled_state)
+        suffix_state, cohort.suffix = cohort.suffix, None
+        if "suffix" in groups:
+            if suffix_state is None:
+                raise RuntimeError("The exact two-turn policy needs its previously retained suffix cache.")
+            suffix_state = policy.select_cache(suffix_state, groups["suffix"], consume=True)
+        elif suffix_state is not None:
+            policy.release_cache(suffix_state)
+            suffix_state = None
+        for mode, indices in groups.items():
+            slots = tuple(cohort.slots[index] for index in indices)
+            if mode == "append":
+                state, append_state = append_state, None
+                state = _append_owned(policy, state, [advances[slot].delta_ids for slot in slots],
+                                      role="rollout.turn_append")
+            elif mode == "suffix":
+                state, suffix_state = suffix_state, None
+                state = _append_owned(policy, state, [advances[slot].block.token_ids for slot in slots],
+                                      role="rollout.history2_extend")
+            else:
+                state = policy.fork_cache(root, copies=len(slots))
+                state = _append_owned(policy, state, [advances[slot].delta_ids for slot in slots],
+                                      role="rollout.segment_replay")
+            state = policy.compact_cache(state)
+            if history_length == 2:
+                # Keep root+B_t independently from the two-turn actor cache.
+                # Its hidden states never contain the evicted B_(t-1) prefix.
+                suffix = policy.fork_cache(root, copies=len(slots))
+                suffix = _append_owned(policy, suffix, [advances[slot].block.token_ids for slot in slots],
+                                       role="rollout.history2_suffix")
+                suffix = policy.compact_cache(suffix)
+            result.append(_Cohort(slots, state, suffix))
+            state = suffix = None
+        return result
+    except BaseException:
+        # Some modes may have completed while a later mode fails.  None of
+        # these owners has been returned to the caller's next-cohort queue yet.
+        for owned in (sampled_state, append_state, suffix_state, state, suffix):
+            if owned is not None:
+                policy.release_cache(owned)
+        for completed in result:
+            _release_cohort(policy, completed)
+        raise
 
 
 def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot_seeds,
@@ -162,13 +212,13 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
     if benchmark not in HORIZONS or history_length not in (None, 2):
         raise ValueError("Select the declared F-GPO benchmark and full/two-turn filtration.")
     slot_seeds = tuple(int(seed) for seed in slot_seeds)
-    if len(slot_seeds) not in (1, 8) or len(set(slot_seeds)) != len(slot_seeds):
-        raise ValueError("Training has eight independently seeded slots; evaluation has one actual trajectory.")
+    if not slot_seeds or len(set(slot_seeds)) != len(slot_seeds):
+        raise ValueError("Each rollout slot requires its own sampling seed.")
     ledger = policy.ledger if ledger is None else ledger
     if ledger is not policy.ledger:
         raise ValueError("Actor and model forwards share the same actual cost ledger.")
     ledger.begin_group(group_id)
-    count, horizon, output_limit = len(slot_seeds), HORIZONS[benchmark], OUTPUT_LIMITS[benchmark]
+    count, horizon, output_limit = len(slot_seeds), HORIZONS[benchmark], policy.max_new_tokens
     ids = tuple(f"{group_id}:slot-{slot}" for slot in range(count))
     environments = [None for _ in slot_seeds]
     contexts, initials, pins = [], [], []
@@ -176,7 +226,12 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
     official = [None for _ in slot_seeds]
     generators = [policy.new_generator(seed) for seed in slot_seeds]
     pool = ThreadPoolExecutor(max_workers=count, thread_name_prefix="fgpo-environment")
+    tokenizer_lock = Lock()
     primary_error = None
+    submitted_steps = []
+    root, cohorts = None, []
+    sampled_cohorts, next_cohorts = deque(), []
+    cohort = sampled_state = None
 
     try:
         creation_results = _parallel_requests(pool, [
@@ -201,37 +256,38 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
             initials.append(initial)
             pins.append(pin)
             actor = TokenFiltration(policy.tokenizer, pin, ids[slot], max_new_tokens=output_limit,
-                                    history_length=history_length)
+                                    history_length=history_length, max_context_tokens=policy.max_context_tokens)
             actor_views.append(actor)
-            reference_views.append(actor if history_length is None else TokenFiltration(
-                policy.tokenizer, pin, ids[slot], max_new_tokens=output_limit, kind="full_reference"))
+            # r3 reference laws always condition on the actual actor view.
+            reference_views.append(actor)
         if any(pin != pins[0] for pin in pins[1:]):
             raise ValueError("Same-root sampling requires the actual seeded public goal/bootstrap to agree.")
         root = policy.prefill_root(pins[0], role="rollout.shared_root")
         cohorts = [_Cohort(tuple(range(count)), policy.fork_cache(root, copies=count))]
         for turn in range(horizon):
-            sampled_cohorts, actions, jobs = deque(), {}, []
+            sampled_cohorts = deque()
+
+            def dispatch(slot, response):
+                step_id = f"{ids[slot]}:step-{turn}"
+                call = partial(_execute_response, policy.tokenizer, tokenizer_lock, environments[slot], benchmark,
+                               response, str(contexts[slot]["instruction"]))
+                details = {"group_id": group_id, "slot": slot, "step_id": step_id,
+                           "task_id": task_id, "actual_step": True,
+                           "timing_scope": "parse_native_step_and_public_projection"}
+                submitted_steps.append((slot, details, pool.submit(_environment_request, call)))
+
             for cohort in cohorts:
                 model_cost_start = len(ledger.records)
-                sampled_state, responses, probabilities = _sample_turn(policy, cohort, generators, output_limit)
+                sampled_state, responses, probabilities = _sample_turn(
+                    policy, cohort, generators, output_limit, on_response=dispatch)
                 cohort.state = None
                 model_event_ids = tuple(row.event_id for row in ledger.records[model_cost_start:])
                 sampled_cohorts.append((cohort, sampled_state, responses, probabilities, model_event_ids))
-                for local_index, slot in enumerate(cohort.slots):
-                    step_id = f"{ids[slot]}:step-{turn}"
-                    response = tuple(responses[local_index])
-                    text = policy.tokenizer.decode(response, skip_special_tokens=True,
-                                                    clean_up_tokenization_spaces=False)
-                    action, syntax_valid = parse_native_response(benchmark, text)
-                    actions[slot] = (action, syntax_valid)
-                    jobs.append((slot, partial(environments[slot].step_native, action),
-                        {"group_id": group_id, "slot": slot, "step_id": step_id,
-                         "task_id": task_id, "actual_step": True}))
             cohorts.clear()
             # Every active slot returns its actual feedback before the next
             # policy round; model operations remain single-threaded batches.
-            step_results = _parallel_requests(pool, sorted(jobs, key=lambda job: job[0]),
-                                               ledger, "rollout.step_native", env_steps=1)
+            step_results = _drain_requests(submitted_steps, ledger, "rollout.step_native", env_steps=1)
+            submitted_steps.clear()
             _raise_request_error(step_results)
             next_cohorts, evaluation_jobs = [], []
             while sampled_cohorts:
@@ -240,11 +296,8 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
                 for local_index, slot in enumerate(cohort.slots):
                     step_id = f"{ids[slot]}:step-{turn}"
                     response = tuple(responses[local_index])
-                    action, syntax_valid = actions[slot]
                     request, environment_cost = step_results[slot]
-                    result = request.value
-                    observation = project_public_observation(policy.tokenizer, benchmark, str(result.observation),
-                        action_schema=environments[slot].action_schema, goal=str(contexts[slot]["instruction"]))
+                    action, syntax_valid, result, observation = request.value
                     terminal = bool(result.done or turn + 1 == horizon)
                     advance = actor_views[slot].append(step_id, response, observation, terminal=terminal)
                     canonical = (advance if reference_views[slot] is actor_views[slot] else
@@ -262,7 +315,7 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
                             {"group_id": group_id, "slot": slot, "task_id": task_id}))
                 next_cohorts.extend(_advance_cohort(policy, root, cohort, sampled_state, advances,
                                                    history_length=history_length))
-                del cohort, sampled_state
+                cohort = sampled_state = None
             evaluation_results = _parallel_requests(pool, sorted(evaluation_jobs, key=lambda job: job[0]),
                                                      ledger, "rollout.official_evaluation")
             _raise_request_error(evaluation_results)
@@ -276,6 +329,13 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
         raise
     finally:
         try:
+            # An exception during another slot's decode must not race a pending
+            # step RPC against close/release on the same worker channel.
+            if submitted_steps:
+                pending = _drain_requests(submitted_steps, ledger, "rollout.step_native", env_steps=1)
+                submitted_steps.clear()
+                if primary_error is None:
+                    _raise_request_error(pending)
             close_results = _parallel_requests(pool, [
                 (slot, environment.close, {"group_id": group_id, "slot": slot})
                 for slot, environment in enumerate(environments) if environment is not None],
@@ -283,7 +343,25 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
             if primary_error is None:
                 _raise_request_error(close_results)
         finally:
-            pool.shutdown(wait=True)
+            try:
+                pool.shutdown(wait=True)
+            finally:
+                # Ownership may be in a decode queue, the current advancement,
+                # or a completed next-turn queue when an environment/model
+                # operation fails.  Repeated release of a wrapper is harmless.
+                for pending_cohort, pending_state, *_ in sampled_cohorts:
+                    policy.release_cache(pending_state)
+                    _release_cohort(policy, pending_cohort)
+                sampled_cohorts.clear()
+                for pending_cohort in cohorts:
+                    _release_cohort(policy, pending_cohort)
+                for pending_cohort in next_cohorts:
+                    _release_cohort(policy, pending_cohort)
+                _release_cohort(policy, cohort)
+                if sampled_state is not None:
+                    policy.release_cache(sampled_state)
+                if root is not None:
+                    policy.release_cache(root)
     trajectories = tuple(TrajectoryRecord(ids[slot], group_id, slot, str(task_id), benchmark,
         int(initial_seed), slot_seeds[slot], str(contexts[slot]["instruction"]),
         encode_text(policy.tokenizer, str(contexts[slot]["instruction"])), initials[slot].pure_ids,

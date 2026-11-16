@@ -11,7 +11,7 @@ from .records import PublicObservation, SegmentRecord, TokenSpan, TurnBlock
 class Advance:
     prompt_length: int
     response_span: TokenSpan
-    observation_span: TokenSpan
+    observation_span: TokenSpan | None
     block: TurnBlock
     next_prompt_ids: tuple[int, ...]
     cache_mode: str
@@ -34,16 +34,16 @@ class _Segment:
 
 
 class TokenFiltration:
-    """A behavior view plus attached bounded feedback scoring suffixes.
+    """The actor's bounded history with unique ownership of sampled responses.
 
-    Replayed whole blocks in a new prompt have no owned response spans.  A
-    feedback-only segment likewise owns no PPO response, even though its fixed
-    context contains the actual generated action.
+    Replayed whole turns in a new prompt own no PPO response. Feedback appears
+    in a packed segment only when the actor consumes it at the next decision;
+    terminal feedback remains in the step/turn record without a scoring pass.
     """
     def __init__(self, tokenizer, pinned_ids, trajectory_id, *, max_new_tokens,
                  history_length=None, max_context_tokens=32768, kind="actor"):
         if history_length not in (None, 2):
-            raise ValueError("F-GPO uses full filtration or its exact two-turn ablation.")
+            raise ValueError("r3 uses bounded retained history or its two-turn ablation.")
         self.tokenizer, self.pinned_ids = tokenizer, tuple(pinned_ids)
         self.trajectory_id, self.history_length, self.kind = trajectory_id, history_length, kind
         self.max_context_tokens = int(max_context_tokens)
@@ -92,43 +92,38 @@ class TokenFiltration:
         self.current.behavior_closed_length = len(self.current.tokens)
         self.current.scoring_tail_start = None
         block = self._block(step_id, response_ids, observation)
-        tail = block.closure_ids + block.user_ids
-        if len(self.current.tokens) + len(tail) <= self.max_context_tokens:
-            self.current.scoring_tail_start = len(self.current.tokens)
-            self.current.tokens.extend(tail)
-            observation_span = TokenSpan(self.current.segment_id,
-                prompt_length + block.observation_offset, len(observation.pure_ids), step_id)
-            self.current.observation_spans.append(observation_span)
-        else:
-            # The approved bounded scoring branch retains pin + newest COMPLETE turns.
-            scoring = self._suffix([*self.blocks, block], self.rollover_limit)
-            prefix_length = len(scoring) - len(block.token_ids)
-            feedback = self._new_segment(scoring, self.kind + "_feedback")
-            feedback.behavior_closed_length = prefix_length + len(response_ids)
-            feedback.scoring_tail_start = feedback.behavior_closed_length
-            observation_span = TokenSpan(feedback.segment_id,
-                prefix_length + block.observation_offset, len(observation.pure_ids), step_id)
-            feedback.observation_spans.append(observation_span)
         self.blocks.append(block)
         if terminal:
-            return Advance(prompt_length, response, observation_span, block, (), "terminal", ())
+            return Advance(prompt_length, response, None, block, (), "terminal", ())
+        tail = block.closure_ids + block.user_ids
+        newest_length = len(self.pinned_ids) + len(block.token_ids)
+        if newest_length > self.prompt_limit:
+            raise ValueError("Pinned bootstrap and the complete newest atomic turn exceed the bounded context.")
+        # Reserve headroom after ordinary rollovers while retaining a legal
+        # newest turn even when the pin itself exceeds the headroom target.
+        window_limit = max(self.rollover_limit, newest_length)
         ordinary_next = self.prompt_ids + block.token_ids
         if self.history_length is None:
             next_prompt = ordinary_next if len(ordinary_next) <= self.prompt_limit else self._suffix(
-                self.blocks, self.rollover_limit)
+                self.blocks, window_limit)
         else:
             recent = self.blocks[-2:]
             next_prompt = self.pinned_ids + tuple(token for item in recent for token in item.token_ids)
             if len(next_prompt) > self.prompt_limit:
-                next_prompt = self._suffix(recent, self.rollover_limit)
+                next_prompt = self._suffix(recent, window_limit)
         if next_prompt == ordinary_next:
             mode = "append"
             delta = (response_ids[-1],) + tail
+            self.current.tokens.extend(tail)
         else:
             suffix_next = self.pinned_ids + tuple(token for item in self.blocks[-2:] for token in item.token_ids)
             mode = "suffix" if self.history_length == 2 and len(self.blocks) >= 3 and next_prompt == suffix_next else "rebuild"
             delta = block.token_ids if mode == "suffix" else next_prompt[len(self.pinned_ids):]
             self.current = self._new_segment(next_prompt, self.kind)
+        observation_span = TokenSpan(self.current.segment_id,
+            len(next_prompt) - len(block.token_ids) + block.observation_offset,
+            len(observation.pure_ids), step_id)
+        self.current.observation_spans.append(observation_span)
         self.prompt_ids = next_prompt
         return Advance(prompt_length, response, observation_span, block, next_prompt, mode, delta)
 

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fgpo"
-version = "1.0.0"
-description = "Filtration-DAG group policy optimization on official ALFWorld and AppWorld"
+version = "2.0.0"
+description = "Finite-horizon history-conditioned peer credit on official ALFWorld and AppWorld"
 readme = "README.md"
 requires-python = ">=3.11"
 

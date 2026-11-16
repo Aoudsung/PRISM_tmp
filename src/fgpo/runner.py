@@ -5,15 +5,11 @@ import argparse
 import json
 import os
 from pathlib import Path
-import uuid
 
-from .envs import make_env
+from .envs import make_env, EnvironmentPool
 from .metrics import official_summary
-
-
-METHODS = ('fgpo', 'fgpo_no_full_filtration', 'fgpo_no_befp', 'fgpo_no_dag_loo',
-           'gigpo', 'bipace_q', 'self', 'skill_disco', 'native_qwen')
-FGPO_METHODS = METHODS[:4]
+from .protocol import (METHODS, SHARED_FROZEN,
+                       require_protocol, require_training_identity)
 
 
 def write_json(path, value, *, durable=False):
@@ -35,7 +31,7 @@ def write_json(path, value, *, durable=False):
 
 
 def require_identity(saved, expected):
-    for key in ('method', 'benchmark', 'seed', 'model_path'):
+    for key in ('protocol', 'method', 'benchmark', 'seed', 'model_path'):
         if saved[key] != expected[key]:
             raise ValueError(f'Existing cell identity differs at {key}; no work was restarted.')
 
@@ -45,7 +41,7 @@ def isolate_gpus(physical_ids, excluded_ids):
     if not physical or len(set(physical)) != len(physical) or any(gpu < 0 for gpu in physical):
         raise ValueError('Select distinct nonnegative physical GPU IDs.')
     if any(gpu in excluded_ids for gpu in physical):
-        raise ValueError('The physical allocation includes a known faulty GPU (0 or 2).')
+        raise ValueError('The physical allocation includes a GPU excluded by this server configuration.')
     mask = ','.join(map(str, physical))
     existing = os.environ.get('CUDA_VISIBLE_DEVICES')
     if existing is not None and existing != mask:
@@ -64,6 +60,7 @@ def compute_allocation(physical_ids, model_physical_ids=None):
 
 
 def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_ids=None, resume=False):
+    require_protocol(config)
     # Resolve physical allocation before importing any Engine/CUDA code.
     logical_ids, visible_mask = isolate_gpus(gpu_ids, config['excluded_gpu_ids'])
     compute_physical, compute_logical = compute_allocation(gpu_ids, model_gpu_ids)
@@ -92,7 +89,7 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
         if not resume:
             raise FileExistsError(f'Existing cell requires explicit --resume: {output}')
         saved_config = json.loads((output / 'config.json').read_text())
-        require_identity(saved_config, cell_config)
+        require_training_identity(saved_config, cell_config)
         complete_path = output / 'cell_summary.json'
         if complete_path.is_file():
             complete = json.loads(complete_path.read_text())
@@ -115,31 +112,30 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
         write_json(output / 'config.json', cell_config)
         catalog = make_env(cell_config, benchmark, output / 'environments/catalog', seed=seed)
         try:
-            train_tasks = catalog.list_tasks('train') if method != 'native_qwen' else []
+            train_tasks = catalog.list_tasks('train') if method not in ('native_qwen',SHARED_FROZEN) else []
             evaluation_tasks = {split: catalog.list_tasks(split)
                                 for split in config['evaluation_splits'][benchmark]}
         finally:
             catalog.close()
         write_json(output / 'official_tasks.json', {'train': train_tasks, **evaluation_tasks})
 
-    def env_factory(task_id, initial_seed, trajectory_id):
-        # Each invocation has its own process, files and AppWorld experiment identity.
-        directory = output / 'environments' / (str(trajectory_id).replace('/', '_') + '-' + uuid.uuid4().hex)
-        return make_env(cell_config, benchmark, directory, seed=int(initial_seed))
-
-    engine = Engine(cell_config, output, resume_from=resume_from)
+    env_factory = EnvironmentPool(cell_config, benchmark, output / 'environments/pool',
+                                  size=int(cell_config.get('environment_pool_size',cell_config.get('trajectories',8))))
+    engine = None
     try:
+        engine = Engine(cell_config, output, resume_from=resume_from)
         # The method's own window/workflow is executed inside this single call;
         # offline skill induction is not wrapped in an outer round loop.
         training_path = output / 'training_summary.json'
         training = json.loads(training_path.read_text()) if resume_from and training_path.is_file() else None
         if training is None or training.get('status') != 'complete':
-            training = engine.train(train_tasks, env_factory) if method != 'native_qwen' else {
-                'status': 'complete', 'method': method, 'trained': False, 'initialization': 'frozen_base_qwen'}
+            training = engine.train(train_tasks, env_factory) if method not in ('native_qwen',SHARED_FROZEN) else {
+                'status': 'complete', 'protocol':config['protocol'], 'method': method,
+                'trained': False, 'initialization': 'frozen_base_qwen'}
         checkpoint = engine.save_checkpoint(output / 'checkpoint')
         write_json(training_path, training)
         if training.get('status') == 'interrupted':
-            return {'status': 'interrupted', 'method': method, 'benchmark': benchmark,
+            return {'status': 'interrupted', 'protocol':config['protocol'], 'method': method, 'benchmark': benchmark,
                     'seed': seed, 'model_path': cell_config['model_path'],
                     'checkpoint': str(checkpoint), 'training': training}
         scores = {}
@@ -157,27 +153,32 @@ def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_
             records = evaluation['records']
             # Official evaluation is already finalized by the actor/Engine exactly once.
             summary = official_summary(benchmark, records, tasks)
-            summary.update(method=method, benchmark=benchmark, seed=seed,
+            summary.update(protocol=config['protocol'],method=method, benchmark=benchmark, seed=seed,
                            model_path=cell_config['model_path'], split=split)
             write_json(output / split / 'evaluation_records.json', records)
             write_json(summary_path, summary)
             if evaluation.get('status') == 'interrupted':
                 checkpoint = engine.save_checkpoint(output / 'checkpoint')
-                return {'status': 'interrupted', 'method': method, 'benchmark': benchmark,
+                return {'status': 'interrupted', 'protocol':config['protocol'], 'method': method, 'benchmark': benchmark,
                         'seed': seed, 'model_path': cell_config['model_path'],
                         'checkpoint': str(checkpoint), 'evaluation': {**scores, split: summary}}
             scores[split] = summary
         completed_checkpoint = engine.prepare_completed_checkpoint(training, scores)
-        result = {'status': 'complete', 'method': method, 'benchmark': benchmark, 'seed': seed,
+        result = {'status': 'complete', 'protocol':config['protocol'], 'method': method, 'benchmark': benchmark, 'seed': seed,
                   'model_path': cell_config['model_path'],
                   'checkpoint': completed_checkpoint['path'], 'completed_checkpoint': completed_checkpoint,
                   'training_resume_supported': False,
-                  'training': training, 'evaluation': scores, 'costs': engine.ledger.snapshot()}
+                  'training': training, 'evaluation': scores, 'costs': engine.ledger.snapshot(),
+                  'environment_pool':env_factory.statistics()}
         write_json(output / 'cell_summary.json', result, durable=True)
         engine.reclaim_completed_checkpoint(output / 'cell_summary.json')
         return result
     finally:
-        engine.close()
+        try:
+            env_factory.close()
+        finally:
+            if engine is not None:
+                engine.close()
 
 
 def main(argv=None):
@@ -194,6 +195,7 @@ def main(argv=None):
     parser.add_argument('--resume', action='store_true', help='Continue saved F-GPO study state explicitly.')
     args = parser.parse_args(argv)
     config = json.loads(args.config.read_text())
+    require_protocol(config)
     os.environ['PYTHONPATH'] = str(Path(__file__).resolve().parents[1])
     isolate_gpus(args.gpu, config['excluded_gpu_ids'])
     compute_allocation(args.gpu, args.model_gpu)

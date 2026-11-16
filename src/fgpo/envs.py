@@ -16,6 +16,7 @@ import random
 import re
 import subprocess
 import sys
+import threading
 from typing import Any, Mapping
 import uuid
 
@@ -284,6 +285,10 @@ class EnvironmentProcess:
     def finalize_evaluation(self):
         return self._rpc('finalize_evaluation')
 
+    def release_episode(self):
+        """Dispose episode state while keeping imported benchmark modules alive."""
+        return self._rpc('release_episode')
+
     def _shutdown(self):
         self.closed = True
         if self.process.poll() is None:
@@ -309,6 +314,107 @@ def make_env(config, benchmark, run_dir, *, seed=0):
     return EnvironmentProcess(python, benchmark, config[benchmark + '_data_root'], run_dir, seed=seed)
 
 
+class _EnvironmentLease:
+    """Exclusive episode ownership of one persistent process and RPC channel."""
+    def __init__(self, pool, slot, environment):
+        self._pool, self._slot, self._environment = pool, slot, environment
+        self._released = False
+
+    @property
+    def action_schema(self):
+        return self._environment.action_schema
+
+    def reset(self, task_id, initial_seed=None, *, seed=None):
+        if self._released:
+            raise RuntimeError('Cannot reset a released environment lease.')
+        return self._environment.reset(task_id, initial_seed, seed=seed)
+
+    def step_native(self, action):
+        if self._released:
+            raise RuntimeError('Cannot step a released environment lease.')
+        return self._environment.step_native(action)
+
+    def finalize_evaluation(self):
+        if self._released:
+            raise RuntimeError('Cannot evaluate a released environment lease.')
+        return self._environment.finalize_evaluation()
+
+    def close(self):
+        if not self._released:
+            try:
+                self._environment.release_episode()
+            finally:
+                self._released = True
+                self._pool._release(self._slot)
+
+
+class EnvironmentPool:
+    """Bounded, lazy process pool reused across groups of a single study cell.
+
+Every lease has exclusive access until its episode has been closed. The pool
+never shares an AppWorld database or a mutable environment between trajectories.
+Failures propagate to the caller; workers are not silently restarted.
+"""
+    def __init__(self, config, benchmark, run_dir, *, size=8):
+        if int(size) < 1:
+            raise ValueError('An environment pool needs at least one process slot.')
+        self.config, self.benchmark = dict(config), benchmark
+        self.run_dir, self.size = Path(run_dir), int(size)
+        self._lock = threading.Lock()
+        self._workers, self._busy = [], set()
+        self._closed = False
+        self.acquisitions = 0
+
+    def __call__(self, task_id, initial_seed, trajectory_id):
+        with self._lock:
+            if self._closed:
+                raise RuntimeError('The environment pool is closed.')
+            slot = next((i for i in range(len(self._workers)) if i not in self._busy), None)
+            if slot is None:
+                if len(self._workers) >= self.size:
+                    raise RuntimeError('Concurrent environment leases exceed the configured slot count.')
+                slot = len(self._workers)
+                self._workers.append(None)
+            self._busy.add(slot)
+            self.acquisitions += 1
+            worker = self._workers[slot]
+        if worker is None:
+            try:
+                worker = make_env(self.config, self.benchmark, self.run_dir / f'slot-{slot}', seed=initial_seed)
+            except BaseException:
+                self._release(slot)
+                raise
+            with self._lock:
+                self._workers[slot] = worker
+        return _EnvironmentLease(self, slot, worker)
+
+    def _release(self, slot):
+        with self._lock:
+            self._busy.discard(slot)
+
+    def statistics(self):
+        with self._lock:
+            started = sum(worker is not None for worker in self._workers)
+            return {'scope': 'current_process_session',
+                    'processes_started': started, 'episode_leases': self.acquisitions,
+                    'process_reuses': max(0, self.acquisitions - started)}
+
+    def close(self):
+        with self._lock:
+            self._closed = True
+            workers = list(self._workers)
+        first_error = None
+        for worker in workers:
+            if worker is not None:
+                try:
+                    worker.close()
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+        if first_error is not None:
+            raise first_error
+
+
 def _worker():
     channel = sys.stdout
     environment = None
@@ -321,6 +427,9 @@ def _worker():
                     options = packet['kwargs']
                     cls = {'alfworld': ALFWorldEnv, 'appworld': AppWorldEnv}[options['benchmark']]
                     environment = cls(options['data_root'], run_dir=options['run_dir'])
+                    result = None
+                elif method == 'release_episode':
+                    environment.close()
                     result = None
                 elif method in ('list_tasks', 'reset', 'step_native', 'finalize_evaluation', 'close'):
                     result = getattr(environment, method)(*packet['args'], **packet['kwargs'])

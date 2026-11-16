@@ -1,5 +1,7 @@
 # F-GPO (`long-horizon-decision`) Colab A100 连接与操作手册
 
+> 历史文档：下文属于 `fgpo-official-v1` 的部署记录，未作为 r3 执行入口更新。r3 的方案、配置和指定服务器操作以 [README](../README.md)、[现行设计](fgpo_design_and_derivation.md) 与 [AGENTS.md](../AGENTS.md) 为准；本文不构成新增服务器的执行授权。
+
 本文档说明如何在 **Google Colab High-RAM A100（80 GB）** 上连接环境、核查资源、部署并运行当前项目 [`src/fgpo`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo) 的 **`fgpo`** 正式任务（AppWorld / ALFWorld），以及如何与 **Host B** 分工协同、回收结果并及时止损停机。
 
 > [!IMPORTANT]

@@ -260,7 +260,7 @@ class StepRecord:
     segment_id: str
     prompt_length: int
     response_span: TokenSpan
-    observation_span: TokenSpan
+    observation_span: TokenSpan | None
     response_ids: tuple[int, ...]
     old_token_logprobs: tuple[float, ...]
     observation_ids: tuple[int, ...]
@@ -275,7 +275,7 @@ class StepRecord:
     full_reference_segment_id: str
     full_reference_prompt_length: int
     full_reference_response_span: TokenSpan
-    full_reference_observation_span: TokenSpan
+    full_reference_observation_span: TokenSpan | None
     costs: tuple[CostRecord, ...] = ()
     environment_info: Mapping[str, Any] = field(default_factory=dict)
     shared_cost_event_ids: tuple[str, ...] = ()

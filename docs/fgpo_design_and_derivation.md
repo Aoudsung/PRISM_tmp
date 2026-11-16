@@ -1,226 +1,335 @@
-# F-GPO：基于因果滤子有向无环图与逐词元贝叶斯认识前沿的长时程智能体强化学习方案
+# F-GPO r3：有限时域、历史条件化的跨轨迹续值共享
 
-> [!IMPORTANT]
-> **核心主旨**：F-GPO（Filtration-DAG Group Policy Optimization）直接建立在仓库现有 `GiGPO` / `BiPACE_Q` 的全参数原生强化学习底座之上，移除死板的墙钟时间效用 $U_B$、资源状态向量 $\beta_t$ 与低配额训练熔断，直接最大化官方基准终局成功率 $\max_\theta \mathbb{E}_{\pi_\theta}[Y]$。方案仅凭标准公开交互历史滤子，从第一性原理闭环解决现有基线在部分可观测长时程环境中的三项结构难题：**跨百步记忆丢失与局部观测马尔可夫混叠、全零失败采样组的冷启动零梯度死锁、以及失败轨迹中优质信息收集前缀的跨轨迹正向信用回传**，全程零门控、零规则补丁、零校准、零环境特权钩子。
+版本日期：2026-11-16。执行协议：`fgpo-r3-success-v2`。核心算法标识：`r3_history_conditioned_peer_value_sharing`。
 
----
+本方案研究一个具体问题：在只有公开交互记录和终局成功信号的长时程任务中，怎样利用同任务的独立同伴轨迹改善中间动作的价值估计，并控制近似状态匹配造成的误差。r3 将研究对象收敛为**有限时域下、按实际可见历史匹配的同伴 Monte Carlo 续值共享**。终局成功定义训练目标，距离与同伴支持度决定共享量，实际行为前缀贯穿采样、参考评分和 PPO 更新。
 
-## 一、问题重构与现有基线的源码级第一性原理诊断
+本文与 [数学及实现契约](fgpo_math_contract.md) 共同定义现行方案，对应实现位于 `src/fgpo/`。旧 TF-BEFP、三遍图回传及随机 RMS 设计可以通过基准提交 `977bb86ac31a4b1f95ea26b7b53334be5cadf57e` 追溯。当前交付包含静态实现与源代码审阅；正式服务器训练、性能测量及完整 benchmark 结果待执行。本文中的性能收益和研究假设均与已完成实验结果分开陈述。
 
-家庭具身交互（**ALFWorld**，时域上限 $H=50$）与多应用数据库协同编程（**AppWorld**，时域上限 $H=100$）本质上是**终局二元奖励极度稀疏的部分可观测马尔可夫决策过程（POMDP）**。在每个任务实例中，智能体初始仅获知公开任务指令 $g$ 与初始环境观测 $o_0$，目标物体所在容器、业务数据库真实记录及接口隐式前置条件均隐藏在环境潜态 $s_0$ 中。步骤 $t$ 的真实信息状态由完整公开因果交互滤子（Filtration）唯一刻画：
+## 1. 2026 年研究进展与 2027 年研究定位
 
-$$\mathcal{F}_t = \sigma(g, o_0, y_0, o_1, \dots, y_{t-1}, o_t).$$
+[GiGPO，NeurIPS 2025](https://arxiv.org/abs/2505.10978) 将轨迹级相对优势与重复 anchor state 上的步级相对优势结合，建立了无需学习 critic 的多轮智能体训练路线。2026 年的工作已经深入到历史条件、近邻分组、跨轨迹图信用及小样本可靠性。因此，r3 的贡献需要由明确的估计对象、误差分析和同协议实验共同支撑。
 
-前中期的打开容器、检索接口文档、遍历分页记录与提取凭证均无即时环境奖励，唯有闭合整条信息获取与状态修改因果链并正确提交，官方评测器才在终局给出 $Y \in \{0, 1\}$。将优化目标纯粹回归官方成功率 $\max_\theta \mathbb{E}_{\pi_\theta}[Y]$ 并解除微预算饥饿截断，具有直接的仓库实证支撑：在历史实测记录 [host_b_qwen7b_baseline_reference.json](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/results/dcc-v2-r5-pilot-diagnostics-20261111/host_b_qwen7b_baseline_reference.json#L20-L32) 中，`8M` 前向计算词元上限使 `GiGPO` 在首轮 128 条轨迹中仅采完 16 条（消耗 `8,000,590` 词元）即被强行终止，实际完成梯度更新 `gradient_steps = 0`；早期路线（见 [README.md](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/results/dcc-v2-r5-pilot-diagnostics-20261111/README.md#L35-L45) 与 [native_policy.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_policy.py#L2965-L2996)）外挂脱离预训练分布的双模态门控与墙钟衰减目标 $U_B = Y(1-\tau/B)_+$，诱发短命令覆盖与重复动作死循环，致使表现低于冻结基座。
+| 工作与一手来源 | 2026 年的研究内容及方法 | r3 的对应研究边界 |
+|---|---|---|
+| [HGPO，ICLR 2026](https://arxiv.org/abs/2602.22817) | 按历史上下文一致性构造多级组，对各级优势自适应加权，处理同一局部状态下历史不同的问题。 | 历史条件化已有直接先例。r3 研究实际有界 actor 历史与同深度续值共享的组合，并记录历史表示对预测质量的影响。 |
+| [BiPACE，2026 预印本](https://arxiv.org/html/2606.25556v1) | 使用当前 actor 的 prompt 末位隐藏态近邻聚类；Q-style PACE 在簇内按动作聚合，形成局部动作值与状态值之差。 | 论文的 prompt 包含近期历史。r3 使用冻结参考表示、同深度匹配、整轨迹排除和下一状态续值；本地观察值消融的结果只说明自身设计。 |
+| [GraphGPO，ICML 2026](https://proceedings.mlr.press/v306/cheng26e.html) | 将多条轨迹合成状态转移图，用到成功目标的图距离变化分配动作信用。 | 失败轨迹前缀获得跨轨迹信用已有先例。r3 直接共享真实终局回报，避免将最短成功路径解释为策略平均续值。 |
+| [RewardFlow，NeurIPS 2026](https://arxiv.org/abs/2603.18859) | 通过共享状态连接轨迹，从成功节点沿图反向传播与最短路径距离有关的势函数，以势差形成动作级信号。 | 图传播与稠密信用已有直接竞争方案。r3 的共享值始终来自同伴的实际 Monte Carlo 结果。 |
+| [G2PO，2026 公开版本](https://arxiv.org/abs/2606.22995) | 合并相同观测形成全局转移图，聚合状态值，按边计算并标准化 TD 信用；包含 AppWorld 实验。 | r3 按剩余时域区分状态，并采用固定奖励尺度。会议归属以正式出版来源为准，当前所引公开页未标会议。 |
+| [ECPO，EMNLP 2026](https://aclanthology.org/2026.emnlp-main.172/) | 对规范动作的少量样本估计进行收缩，并依据动作内方差调节信用，处理偶然高回报与稀疏证据。 | 小样本信用可靠性已有专门工作。r3 只用可观测距离与支持质量控制共享，诊断来自正式日志，不增加校准器或额外训练目标。 |
+| [MCGPO，2026 年 10 月预印本](https://arxiv.org/abs/2610.13755) | 用动作前状态摘要和规则标注进度匹配上下文，固定分折隔离候选动作与定向偏好的终局证据，以支持权重缩放 GraphGPO 之外的成对学习项。 | 分折隔离与支持加权也已有近邻工作。r3 的估计对象是同深度平均续值，使用公开历史表示与单一 PPO 更新，无 rubric 标注或额外成对目标。 |
 
-直接在 [native_real_baselines.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baselines.py) 与 [native_real_baseline_training.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baseline_training.py) 的全参数原生策略主干上实施内生重构，能够完整继承预训练模型的 `<think>` 推理与自由 Python 代码生成能力，精准定位并攻克现有四类基线尚未解决的三重断层：
+这些工作共同说明，2027 年仍可推进的研究问题是：在固定采样预算、部分可观测性和有限上下文共同存在时，**哪些跨轨迹信息可以有效共享，共享多少，以及这种共享何时改善官方成功率**。r3 的具体候选贡献是同深度的留一轨迹续值估计、可解释的连续共享强度、与实际行为条件一致的训练实现，以及对应的误差与成本证据。
 
-### 1.1 短视窗口截断、契约错位与局部观测混叠偏置
+论文定位应围绕这组可检验的贡献展开。历史表示、留一基线、核权重和 PPO 本身属于已有工具；算法组合的价值由完整 benchmark、与强近年方法的关系及实际成本共同体现。当前代码接入的共享协议比较器是 GiGPO、BiPACE-Q 与冻结 Qwen；HGPO、GraphGPO、RewardFlow、G2PO、ECPO、MCGPO 是相关工作及后续直接比较对象，文献表不代表已经完成这些方法的实现或复现。
 
-在现有基线实现中，`_method_messages`（[native_real_baselines.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baselines.py#L287-L305)）将 `GiGPO` 与 `BiPACE_Q` 的上下文硬截断为最近两步 `history_length = 2`，两步前查明的 API 参数签名、登录令牌与已排查容器在 $t \ge 3$ 时彻底蒸发；同时首轮消息仅提取 `"instruction"` 而丢弃 [native_envs.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_envs.py#L580-L589) 构造的 AppWorld 初始引导观测 $o_0$（含 `supervisor` 档案、系统时间与引导 API 文档），并在 `train()`（[native_real_baselines.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baselines.py#L534)）中将 AppWorld 步限锁死为 `50`（官方时域为 `100`），且在 `run_episode`（[native_real_baselines.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baselines.py#L437)）中直接调用 `env.step(action)` 而未走原生执行入口 `step_native`（[native_envs.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_envs.py#L967-L971)）。
+## 2. 目标、信息边界与真实历史
 
-在信用分配层面，`group_advantages` 与 `anchor_embeddings`（[native_real_baseline_training.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baseline_training.py#L114-L138)、[native_real_baseline_training.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baseline_training.py#L267-L302)）仅依据瞬时观测 `row.anchor_obs` 聚类跨轨迹状态：子目标完成前后的相同房间文本、`stdout` 空字符串 `""` 或 `"Nothing happens."` 被强行归入同一状态簇。设初态隐藏潜变量 $Z \sim \mathrm{Uniform}(\{1,\dots,M\})$（$M \ge 2$），必要探索动作 $a_{\text{read}}$ 读取 $Z$ 后回到同构局部观测 $o_{\text{post}} = o_0$ 并确定性完成任务（读前步折扣回报 $10\gamma$，读后步 $10$）。按瞬时观测 $o_t$ 聚类会将读前步与读后步并入同一簇 $C(o_0)$，拉高簇均值至 $\widehat{V}_{\text{obs}}(C(o_0)) = 5(1+\gamma)$，导致促成成功的必要读取动作反而承受严格负优势：
+### 2.1 有限时域的官方成功目标
 
-$$\widehat{Q}_{\text{obs}}(C(o_0), a_{\text{read}}) - \widehat{V}_{\text{obs}}(C(o_0)) = 10\gamma - 5(1+\gamma) = -5(1-\gamma) < 0, \qquad \forall \gamma \in (0, 1).$$
+对任务实例及其初始环境状态，独立采样 $K$ 条轨迹。轨迹 $k$ 包含 $T_k\leq H$ 个动作，官方终局成功为 $Y_k\in\{0,1\}$。ALFWorld 的指定时域为 $H=50$，AppWorld 为 $H=100$。环境结束或达到时域上限都关闭轨迹。
 
-与此同时，单条失败轨迹若在前中期完成了正确的信息查询，随后在下游步骤失误导致 $Y_k=0$，`GiGPO` 与 `BiPACE_Q` 依赖单条轨迹自身的蒙特卡洛回报 `discounted_score`，无法将同伴轨迹在相同信息状态下取得的下游成功价值回传给该优质探索前缀。
+研究目标为
 
-### 1.2 全零采样组梯度坍缩、惩罚反相与事后蒸馏因果倒置
+$$
+J(\theta)=\mathbb E_{\pi_\theta}[Y],\qquad q_k=R Y_k,\qquad R=10,
+$$
 
-在复杂任务早期，同初态采样的 $K=8$ 条轨迹常出现全败（$Y_1 = \dots = Y_K = 0$）。此时 `Skill-DisCo`（[native_real_baselines.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baselines.py#L634-L639)）因成功轨迹集为空无法归纳任何技能且基座权重冻结；`GiGPO` 与 `BiPACE_Q` 在全合法动作下组内回报方差为零，整批百步交互产生零梯度；而一旦组内出现 1 个语法解析违规步（`assign_returns` 扣罚 `-0.1`，见 [native_real_baseline_training.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baseline_training.py#L70-L71)）与若干合法原地空转步（得分 `0.0`），`_sample_normalize` 会将全部合法空转步翻转为**正优势**，直接强化死循环。`SELF`（[native_real_baseline_training.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baseline_training.py#L448-L495)）虽利用环境反馈文本，但无差别最小化 $D_{\mathrm{KL}}(\pi_\theta(\cdot\mid h_t) \,\|\, \pi_{\text{EMA}}(\cdot\mid h_t, o_{t+1}))$：当 $o_{t+1}$ 含有隐藏潜态信息时迫使学生在读取前盲猜未来值，而当错误动作触发确定性异常堆栈 $o_{t+1}$ 时，教师由报错反推出该错误动作，反而驱动学生强化报错行为（且在 AppWorld 空 `stdout` 回合直接触发空目标异常）。
+$$
+r_{k,t}=q_k\mathbf 1[t=T_k-1],\qquad
+\gamma=1,\qquad G^{\mathrm{MC}}_{k,t}=q_k.
+$$
 
-### 1.3 二次方前缀重算、锁页内存耗尽与参考权重重复搬运
+官方成功提供训练奖励。语法解析结果保留为诊断，实际动作交给原生环境执行；r3 信用估计中没有单独的语法扣分。参考模型只提供响应概率和表示。目标重构似然、观测惊奇及 TF-BEFP 都退出奖励定义。
 
-现有采样与 `response_hidden`（[native_real_baseline_training.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baseline_training.py#L305-L332)）对轨迹每一步 $t$ 从头重跑完整前缀 Transformer，单条长轨迹产生 $2T_k$ 次完整前向，计算量膨胀至 $\Theta(T_k^2 \bar{L})$；`_activation_saving`（[native_real_baselines.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baselines.py#L190)）开启 `save_on_cpu(pin_memory=True)`，在变长长序列反向传播时耗尽 CUDA 锁页主机内存池；`WeightReference.activate`（[native_real_baseline_training.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baseline_training.py#L241-L258)、[L375](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baseline_training.py#L375)）在每个 minibatch 内往返搬运全模型权重，单轮 16 个 minibatch 累计产生逾 `700 GB` PCIe 拷贝。
+这一选择使奖励目标与官方成功率直接对应。即使附加信号始终落在 $[0,1)$，它仍可能改变策略期望回报的排序：两条策略成功概率为 $.51$ 和 $.50$，附加信号均值分别为 $0$ 和 $.9$ 时，$10Y+u$ 的期望分别为 $5.1$ 和 $5.9$。终局奖励尺度大于附加奖励并不能保证期望目标等价。r3 将跨轨迹信息放入显式估计器，并在第 4 节分析其更新偏差。
 
----
+固定 $R=10$ 便于统一记录与推导，优势最后除以同一个常数。不同任务之间不进行随机 RMS 缩放，因此每个任务的相对权重由采样协议和轨迹计数定义。
 
-## 二、机制一：干净公共投影、不可变词元滤子代数与线性计算等价性
+### 2.2 完整公开历史与实际 actor 输入
 
-为彻底消除历史遗忘、边界重分词漂移与 $\Theta(T^2 \bar{L})$ 重复计算，F-GPO 在不改动环境模拟器源码的前提下，于智能体入口建立干净公共观测投影与严格整数词元追加律。
+令公开历史为
 
-### 2.1 干净公共观测投影 $\Pi_{\text{pub}}$
+$$
+h_{k,t}=(g,o_{k,0},y_{k,0},o_{k,1},\ldots,y_{k,t-1},o_{k,t}),
+\qquad p_{k,t}=C(h_{k,t}),
+$$
 
-定义防特殊符注入分词算子 $\operatorname{enc}(s) \triangleq \mathrm{tokenizer.encode}(s,\; \texttt{add\_special\_tokens=False},\; \texttt{split\_special\_tokens=True})$，阻断环境返回文本伪造 ChatML 角色边界：
+其中 $y_{k,t}$ 是包含实际采样终止符的响应词元序列，$C$ 是实现中的序列化与有限窗口算子。理论分析可以条件化于完整 $h_t$，模型实际决策条件始终是 $p_t$。上下文上限默认 32,768 词元；完整公开记录超出此容量后，actor 输入保留初始锚定块与最近能够容纳的完整交互轮次。
 
-- **AppWorld（$H=100,\; M_{\text{gen}}=1024$）**：系统提示取 `m_sys = action_schema["native_system_prompt"]`（[native_policy.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_policy.py#L1254-L1258)，声明预置 `apis`、持久变量、`api_docs` 查询与 `supervisor.complete_task` 协议）；初始纯净观测 $\widetilde{o}_{k,0}$ 取 `context["observation"]`（完整保留 `supervisor`、系统时间与 4 份引导文档，且与任务指令 $g$ 分离）；$t \ge 1$ 时对超长 `stdout` 在入史时刻做一次性不可变首尾截断（超 1,024 词元时保留前 512 + `"\n...[truncated]...\n"` + 后 512 词元，空输出保留为空观测流且消息体记 `"[Empty stdout]"`）。首轮用户帧为 $\widetilde{u}_{k,0} = \mathrm{json}(\{\text{"task"}: g, \text{"observation"}: \widetilde{o}_{k,0}\})$，后续用户帧为 $\widetilde{u}_{k,t} = \widetilde{o}_{k,t}$。
-- **ALFWorld（$H=50,\; M_{\text{gen}}=256$）**：从 [native_text_envs.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_text_envs.py#L204-L218) 的 `_publish` JSON 信封中仅提取 `native_observation` 与公开 `available_actions`（剥离 64 位 SHA-256 `public_state_id`、`mode_actions` 与 `probe_actions`，消除哈希伪惊奇噪声与内部模式字段）；剥离首轮反馈中重复的 `"Your task is to: ..."` 行得到纯场景观测 $\widetilde{o}_{k,t}$；系统提示明确要求 `<think>...</think>\n<action>...</action>` 格式，与 `extract_native_text`（[native_text_actions.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_text_actions.py#L82-L86)）严密对齐。用户帧将静态可用命令置于前部、动态当前观测置于末尾：首轮 $\widetilde{u}_{k,0}$ 为 `"Task: {g}\nAdmissible commands: {cmds_0}\nCurrent observation:\n{obs_0}"`，后续 $\widetilde{u}_{k,t}$ 为 `"Admissible commands: {cmds_t}\nCurrent observation:\n{obs_t}"`，50 步总长约 $1.1 \times 10^4 < 32,768$ 词元，单段即可无损容纳全时程交互记忆。
+`public.py` 只接受标准公开输入。ALFWorld 使用环境公开观测和可用命令；AppWorld 保留初始任务、系统说明及初始 API 引导信息，后续过长 stdout 在入史时进行固定的首尾截取。空 stdout 在表示和消息中使用明确占位文本。内部状态哈希、评估器中间成功标签和隐藏数据库状态不进入模型或匹配特征。
 
-### 2.2 双终止符闭合词元滤子与整轮原子分段律
+`filtration.py` 在整数词元空间构建不可变块。给定生成预算 $M_{\mathrm{gen}}$，提示上限为 $C_{\mathrm{prompt}}=C_{\max}-M_{\mathrm{gen}}$；滚动时优先将最近完整轮次截到 $0.75C_{\mathrm{prompt}}$ 的水位。若初始锚定块与最新完整轮次超过这一预留水位，则保留这两个必要块，并允许使用至提示上限；超过提示上限时显式报错。整个过程按完整轮次处理。
 
-记 `Qwen/Qwen2.5-7B-Instruct` 词表为 $\Sigma$，`<|im_start|>` 为 $s_{\text{bos}}=151644$，`<|im_end|>` 为 $s_{\text{im\_end}}=151645$，`<|endoftext|>` 为 $s_{\text{eot}}=151643$，`\n` 为 $s_{\text{nl}}=198$，上下文容量 $C_{\max}=32768$，提示安全上限 $C_{\text{prompt}} = C_{\max} - M_{\text{gen}}$。
+每个真实响应只归属一个训练段。为构建新上下文而重播的历史响应没有新的损失所有权。反馈仅在下一次实际决策需要时进入 actor 段；终末反馈保存在步骤和轮次记录中，`observation_span=None`，没有额外 feedback-only 评分段。短历史消融 `fgpo_no_full_filtration` 保留初始锚定块和最近两轮完整交互，其实际前缀同时用于行为概率、参考概率、历史特征及 PPO。该 ID 沿用既有接口名称，正文称其为“两轮历史消融”。
 
-**定义 1（不可变词元滤子与原子分段律）**  
-首轮锚定词元块定义为 $\mathbf{B}_{\text{pin},k} \triangleq \operatorname{apply\_chat\_template}([m_{\text{sys}}, m_{\text{user}}(\widetilde{u}_{k,0})],\; \texttt{add\_generation\_prompt=True})$，初始提示 $\mathbf{p}_{k,0} \triangleq \mathbf{B}_{\text{pin},k}$。第 $t$ 步自回归采样响应词元序列 $\mathbf{y}_{k,t} = (z_{k,t,1}, \dots, z_{k,t,m_{k,t}}) \sim \pi_{\theta_{\text{old}}}(\cdot \mid \mathbf{p}_{k,t})$（同步记录采样对数概率 $\ell^{\text{old}}_{k,t,i}$）并执行动作获得 $\widetilde{u}_{k,t+1}$ 后，直接在整数词元空间构造闭合分隔符与原子轮次块：
+### 2.3 历史与局部观测表示
 
-$$\mathbf{d}_{k,t} \triangleq \begin{cases} (s_{\text{nl}}), & z_{k,t,m_{k,t}} = s_{\text{im\_end}}, \\ (s_{\text{im\_end}}, s_{\text{nl}}), & z_{k,t,m_{k,t}} \neq s_{\text{im\_end}}, \end{cases}$$
+在冻结参考模型上，取实际动作前提示末位的倒数第 8 层表示并归一化，得到 $z^h_{k,t}$。将当前公开局部观测单独编码，在相同层取末位表示并归一化，得到 $z^o_{k,t}$。前者包含本次决策真实可见的任务和历史；后者保留当前观测的局部相似性。两种向量均停止梯度。
 
-$$\mathbf{u}_{k,t+1} \triangleq (s_{\text{bos}}) \oplus \operatorname{enc}(\texttt{"user\n"}) \oplus \operatorname{enc}(\widetilde{u}_{k,t+1}) \oplus (s_{\text{im\_end}}, s_{\text{nl}}, s_{\text{bos}}) \oplus \operatorname{enc}(\texttt{"assistant\n"}),$$
+相同的局部观测词元序列在一轮中仅提取一次表示；按长度和词元预算组成微批。历史特征复用参考响应打包前向的中间层输出。独立观察值表示使用固定层钩子截取所需输出，不修改模型的层列表。
 
-$$\mathbf{B}_{k,t} \triangleq \mathbf{y}_{k,t} \oplus \mathbf{d}_{k,t} \oplus \mathbf{u}_{k,t+1}, \qquad \widetilde{\mathbf{o}}_{k,t+1} \triangleq \operatorname{enc}(\widetilde{o}_{k,t+1}) \in \Sigma^{L_{k,t+1}}.$$
+余弦距离是可计算的近似匹配依据。它与真实续值差之间的关系由实验研究，当前实现没有将其解释为已知的 bisimulation 距离或概率校准结果。
 
-当 $|\mathbf{p}_{k,t}| + |\mathbf{B}_{k,t}| \le C_{\text{prompt}}$ 时，单调追加 $\mathbf{p}_{k,t+1} \triangleq \mathbf{p}_{k,t} \oplus \mathbf{B}_{k,t}$ 并延伸当前连续段 $\mathbf{S}_{k,c}$（段闭合终态序列为 $\mathbf{S}_{k,c} = \mathbf{p}_{k,t_{\text{end}}} \oplus \mathbf{y}_{k,t_{\text{end}}}$）；若极长百步轨迹在某轮突破 $C_{\text{prompt}}$，则闭合 $\mathbf{S}_{k,c}$，直接在词元块空间拼接 $\mathbf{B}_{\text{pin},k} \oplus \bigoplus_{u=r(t)}^t \mathbf{B}_{k,u}$（取总长 $\le 0.75\, C_{\text{prompt}}$ 的最小轮次 $r(t)$）开启新段 $\mathbf{S}_{k,c+1}$，每步唯一归属单一段。
+## 3. 核心算法：同深度留一轨迹值共享
 
-**定理 1（段内严格整数前缀律与并行 `DynamicCache` 采样等价性）**  
-*在任意连续段 $\mathbf{S}_{k,c}$ 内，对一切段内步骤 $t < t'$ 恒有严格整数前缀包含关系 $\mathbf{p}_{k,t} \oplus \mathbf{y}_{k,t} \prec \mathbf{p}_{k,t'} \preceq \mathbf{S}_{k,c}$。在关闭 Dropout（`p = 0`）下：（i）同组 $K=8$ 条同初态轨迹单次预填充 $\mathbf{B}_{\text{pin},k}$ 产出根缓存 $\mathcal{C}_0$ 并克隆广播，结合独立槽位目录与二维有效掩码 `cache_valid_mask`、显式二维 RoPE 位置 `position_ids = (cache_valid_mask.long().cumsum(-1) - 1)` 批量增量推进 $\Delta^{\text{kv}}_{k,t+1} = (z_{k,t,m_{k,t}},) \oplus \mathbf{d}_{k,t} \oplus \mathbf{u}_{k,t+1}$，所得采样分布与逐轮独立全序列预填充逐位恒等；（ii）单轨迹采样预填充总词元数由 $\Theta(T_k^2 \bar{L})$ 降至 $\sum_{c=1}^{C_k} |\mathbf{S}_{k,c}| = \Theta(T_k \bar{L})$。*
+### 3.1 同伴集合与有限时域
 
-*证明*：定义 1 全程以整数词元块拼接，彻底杜绝文本重拼时 `<|im_start|>assistant\n` 末尾换行符（`198`）与响应首换行符（`198`）合并为双换行词元（`271`）的 BPE 边界漂移；无 Dropout 因果注意力在显式 `cache_valid_mask` 与连续非填充计数 `position_ids` 下，每个有效词元的 $(K, V)$ 投影及注意力权重仅依赖段内前序有效词元序列，故增量缓存解码与全序列重算严格同分布。$\blacksquare$
+对目标轨迹 $k$ 的第 $t$ 个动作前状态，同伴候选必须属于相同任务组、相同 benchmark、相同初始环境 seed，并在同一深度 $t$ 存在真实动作前状态。定义
 
-**定理 2（`packed_segment_hidden` 与逐轮 `response_hidden` 前反向精确等价性）**  
-*记段 $\mathbf{S}_{k,c}$ 内步骤 $t$ 的响应起始偏移为 $a_{k,t} = |\mathbf{p}_{k,t}|$，响应长度为 $m_{k,t} = |\mathbf{y}_{k,t}|$。对无 Dropout 主干 $f_\theta$ 执行单次无缓存因果前向 $\mathbf{H}_{k,c} = f_\theta(\mathbf{S}_{k,c}[:-1])$，切片 $\mathbf{H}_{k,c}[a_{k,t}-1 : a_{k,t}-1+m_{k,t}, :]$ 与逐轮独立调用 `response_hidden(policy, p_{k,t}, y_{k,t})` 的前向隐状态及关于全模型参数 $\theta$ 的反向梯度逐位置精确等价；同时段内纯净观测词元 $\widetilde{\mathbf{o}}_{k,t+1}$ 起始偏移 $b_{k,t+1}$ 处的切片 $\mathbf{H}_{k,c}[b_{k,t+1}-1 : b_{k,t+1}-1+L_{k,t+1}, :]$ 同步给出动作条件外部观测预测分布 $p_\theta(\widetilde{\mathbf{o}}_{k,t+1} \mid \mathcal{F}_{k,t}, \mathbf{y}_{k,t})$。*
+$$
+\mathcal P_{-k,t}=\{j:j\ne k,\ t<T_j\}.
+$$
 
-*证明*：`response_hidden` 输入序列 $\mathbf{p}_{k,t} \oplus \mathbf{y}_{k,t}[:-1]$ 恰为 $\mathbf{S}_{k,c}[:-1]$ 长度为 $a_{k,t}+m_{k,t}-1$ 的严格前缀；严格下三角因果注意力掩码保证位置 $< a_{k,t}+m_{k,t}-1$ 的全部层激活不依赖任何后缀词元，而闭合结构符 $\mathbf{d}_{k,t} \oplus \mathbf{u}_{k,t+1}$ 不进入策略损失 `lm_head` 投影，由链式法则知全段单次反向传播与 $T_k$ 次独立前反向梯度之和恒等，将每条单段轨迹的 $2T_k$ 次主干前向压缩为 **1 次参考前向 + 1 次策略前向**。$\blacksquare$
+同组时域上限固定，因此相同深度对应相同剩余预算 $H-t$。整个目标轨迹从同伴数据中排除。已经结束的同伴在后续深度没有状态；实现不会将终态补成一个当前状态参与近邻比较。
 
----
+这一选择保留了有限时域价值的时间索引。即使某个观察值在第 3 步和第 40 步完全相同，两者也不会直接混入同一状态估计。几何计算仅在每个深度的 $K\times K$ 矩阵内进行，无跨时间图拓扑和递归 Bellman 求解。
 
-## 三、机制二：逐词元分解贝叶斯认识前沿势函数（TF-BEFP）
+### 3.2 连续核与同伴 Monte Carlo 值
 
-为在全零失败组（$Y_1 = \dots = Y_K = 0$）内提取真正推进任务信息获取的步级信号，同时在不借助任何环境内部钩子、AST 字面量过滤或污点掩码补丁的前提下从数学构造上彻底免疫 `stdout` 回显刷分，F-GPO 仅利用已常驻内存的固定参考模型 $p_{\text{ref}}$（`WeightReference`）构建逐词元分解的贝叶斯认识前沿势函数。
+定义双视角距离与核权重
 
-记轨迹 $k$ 截至步骤 $s$ 的纯净观测词元拼接流为 $\widetilde{\mathbf{O}}_{k,s} \triangleq \widetilde{\mathbf{o}}_{k,0} \oplus \dots \oplus \widetilde{\mathbf{o}}_{k,s}$（长 $L^{\text{obs}}_{k,s}$），公开目标词元序列为 $\mathbf{g} \triangleq \operatorname{enc}(g)$。对步骤 $t$ 返回观测 $\widetilde{\mathbf{o}}_{k,t+1}$ 中的第 $j$ 个词元 $w_{k,t+1,j}$（$1 \le j \le L_{k,t+1}$），定义两项基础信息量：
+$$
+d_{kj,t}=\max\{1-(z^o_{k,t})^\top z^o_{j,t},\;
+                       1-(z^h_{k,t})^\top z^h_{j,t}\},
+$$
 
-1. **逐词元目标预测对数似然比增益**（衡量目标 $g$ 对纯观测流中该词元的解释力提升）：
-   $$\delta^{\text{goal}}_{k,t,j} \triangleq \log p_{\text{ref}}\!\left(w_{k,t+1,j} \,\middle|\, \mathbf{g}, \widetilde{\mathbf{O}}_{k,t}, w_{k,t+1,<j}\right) - \log p_{\text{ref}}\!\left(w_{k,t+1,j} \,\middle|\, \widetilde{\mathbf{O}}_{k,t}, w_{k,t+1,<j}\right).$$
-2. **全滤子动作条件外部惊奇度**（衡量该词元超出智能体自身历史代码与当前动作 $\mathbf{y}_{k,t}$ 可预测范围的真实环境新信息量）：
-   $$s^{\text{ext}}_{k,t,j} \triangleq -\log p_{\text{ref}}\!\left(w_{k,t+1,j} \,\middle|\, \mathcal{F}_{k,t}, \mathbf{y}_{k,t}, w_{k,t+1,<j}\right) \ge 0.$$
+$$
+w_{kj,t}=\mathbf 1[j\in\mathcal P_{-k,t}]
+\left[1-\frac{d_{kj,t}}{\epsilon}\right]_+,
+\qquad \epsilon=0.10.
+$$
 
-**定义 2（逐词元分解贝叶斯认识前沿势函数 TF-BEFP）**  
-记初始目标条件交叉熵 $H^{\text{goal}}_{k,0} \triangleq -\log p_{\text{ref}}(\mathbf{g} \mid \widetilde{\mathbf{O}}_{k,0}) > 0$，定义纯观测流上的目标对数后验单调前沿及其步增量：
+数值实现将余弦距离截到 $[0,2]$。越接近目标状态，同伴权重越大；达到半径边界时权重连续变为零。定义支持质量和同伴续值
 
-$$F_{k,t} \triangleq \max_{0 \le s \le t} \log p_{\text{ref}}\!\left(\mathbf{g} \,\middle|\, \widetilde{\mathbf{O}}_{k,s}\right) \le 0, \qquad \Delta F_{k,t} \triangleq F_{k,t+1} - F_{k,t} = \Big[\log p_{\text{ref}}\!\left(\mathbf{g} \,\middle|\, \widetilde{\mathbf{O}}_{k,t+1}\right) - F_{k,t}\Big]_+ \ge 0.$$
+$$
+S_{k,t}=\sum_j w_{kj,t},\qquad
+\mu_{k,t}=\begin{cases}
+\dfrac{\sum_j w_{kj,t}q_j}{S_{k,t}},&S_{k,t}>0,\\
+0,&S_{k,t}=0.
+\end{cases}
+$$
 
-定义步骤 $t$ 的双侧瓶颈认识增量 $\eta_{k,t}$（当 $L_{k,t+1}=0$ 时置 $\eta_{k,t}=0$）与归一化认识势序列 $M_{k,t}$：
+每个 $q_j$ 都是同伴轨迹真实终局成功的缩放值。一次计算出的 $\mu$ 永远不会成为另一次 $\mu$ 的输入。支持质量同时反映邻居数量与距离；相同的邻居数可以有不同的 $S$。其数值作为连续收缩量使用，日志中可直接解释，含义限于当前组的可观测证据。
 
-$$\eta_{k,t} \triangleq \min\!\left(\Delta F_{k,t},\; \sum_{j=1}^{L_{k,t+1}} \min\!\Big(\big[\delta^{\text{goal}}_{k,t,j}\big]_+,\; s^{\text{ext}}_{k,t,j}\Big)\right) \ge 0, \qquad M_{k,0} \triangleq 0, \qquad M_{k,t+1} \triangleq M_{k,t} + \frac{\eta_{k,t}}{H^{\text{goal}}_{k,0} + 1}.$$
+### 3.3 动作前基线
 
-**一维因果 `DynamicCache.crop` 精确无泄漏求值**：在每轮单次 `with torch.no_grad(), reference.activate(policy.model):` 窗口内：（1）对打包段 $\mathbf{S}_{k,c}$ 的单次因果前向同时读出策略参考对数概率与全部 $s^{\text{ext}}_{k,t,j}$（定理 2）；（2）对纯观测流 $\widetilde{\mathbf{O}}_{k,T_k}$（开启 `use_cache=True` 产出键值缓存 $\mathcal{C}^{\text{obs}}$）与前缀拼接流 $\mathbf{g} \oplus \widetilde{\mathbf{O}}_{k,T_k}$ 各执行 1 次标准一维下三角前向即可读出全部 $\delta^{\text{goal}}_{k,t,j}$；（3）沿非空观测步逆序 $s = s_m, \dots, 0$ 对 $\mathcal{C}^{\text{obs}}$ 执行原地裁剪 `kv.crop(L_obs[k, s] - 1)`（对齐 [native_policy.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_policy.py#L2053-L2069)），送入尾词元加目标序列 `[\widetilde{O}[L_obs[k,s]-1]] + g[:-1]` 计算精确条件对数似然 $\log p_{\text{ref}}(\mathbf{g} \mid \widetilde{\mathbf{O}}_{k,s})$，全程仅使用标准一维因果注意力与精确连续 RoPE 位置，零未来观测泄漏、零 4D 掩码显存膨胀，单条轨迹求值耗时 `< 15 ms`。
+先计算同任务留一轨迹先验，再构造动作前基线：
 
-**定理 3（TF-BEFP 严格亚单位上界与逐词元内生防刷定理）**  
-*在零模拟器特权钩子、零语法/污点规则补丁下，任意轨迹的认识势序列 $\{M_{k,t}\}_{t=0}^{T_k}$ 满足以下四条严格性质：*
-1. **单调非负与严格亚单位上界**：对任意轨迹长度 $T_k$ 恒有 $0 = M_{k,0} \le M_{k,1} \le \dots \le M_{k,T_k} \le \frac{H^{\text{goal}}_{k,0}}{H^{\text{goal}}_{k,0} + 1} < 1$。
-2. **数学免疫直接回显（`print(g)`）、单步噪声捆绑（`print(7**777, g)`）与跨步变量中转（`x = ...; print(x)`）**：在任意自造或捆绑打印输出中，算术/随机噪声词元满足 $\delta^{\text{goal}}_{k,t,j} \approx 0$，而源自历史代码或当前代码的回显词元因 $(\mathcal{F}_{k,t}, \mathbf{y}_{k,t})$ 已完整包含赋值与打印语句而满足 $p_{\text{ref}}(w_{k,t+1,j} \mid \mathcal{F}_{k,t}, \mathbf{y}_{k,t}, w_{<j}) \approx 1 \implies s^{\text{ext}}_{k,t,j} \approx 0$；**逐词元取最小** $\min([\delta^{\text{goal}}_{k,t,j}]_+, s^{\text{ext}}_{k,t,j})$ 在每个词元位置 $j$ 上至少有一项归零，彻底阻断“噪声词元供惊奇、回显词元供目标相关度”的句子级捆绑漏洞；同时一旦回显文本进入 $\widetilde{\mathbf{O}}_{k,t+1}$，$F_{k,t+1}$ 贴近 $0$，永久耗尽后续步前沿增量 $\Delta F_{k,t'} \approx 0$（$\forall t' > t$）。
-3. **异常堆栈、重复查询与原地空转精确归零**：运行异常与无关输出有 $\Delta F_{k,t} = 0$；重复查询同一接口或连续触发 `"Nothing happens."` 因上文已含相同观测而同时满足 $s^{\text{ext}}_{k,t,j} \approx 0$ 与 $\Delta F_{k,t} = 0$；空输出步有 $L_{k,t+1}=0 \implies \eta_{k,t}=0$。
-4. **真实隐藏环境发现严格赋正**：打开未知容器发现目标物品或调用业务 API 返回隐藏目标实体记录时，返回词元超越动作文本本身可预测范围（$s^{\text{ext}}_{k,t,j} > 0$），且在不含查询代码的纯观测流上与任务目标 $g$ 高度互信息相关（$\delta^{\text{goal}}_{k,t,j} > 0,\; \Delta F_{k,t} > 0$），使对应发现步获得严格正增量 $M_{k,t+1} - M_{k,t} > 0$。
+$$
+\bar q_{-k}=\frac{1}{K-1}\sum_{j\ne k}q_j,\qquad
+b_{k,t}=\frac{\sum_j w_{kj,t}q_j+\kappa\bar q_{-k}}
+                   {S_{k,t}+\kappa},\qquad \kappa=1.
+$$
 
-*证明*：由离散概率归一化知对一切 $s$ 有 $\log p_{\text{ref}}(\mathbf{g} \mid \widetilde{\mathbf{O}}_{k,s}) \le 0 \implies F_{k,T_k} \le 0$，结合 $0 \le \eta_{k,t} \le F_{k,t+1} - F_{k,t}$ 裂项求和得 $\sum_{t=0}^{T_k-1} \eta_{k,t} \le F_{k,T_k} - F_{k,0} \le 0 - (-H^{\text{goal}}_{k,0}) = H^{\text{goal}}_{k,0}$，两边除以 $H^{\text{goal}}_{k,0} + 1 > 1$ 即得性质 1；性质 2–4 由逐词元内层 $\min([\delta^{\text{goal}}_{k,t,j}]_+, s^{\text{ext}}_{k,t,j})$ 与外层单调前沿增量 $\Delta F_{k,t}$ 的双重零化约束直接导出。$\blacksquare$
+无局部支持时，基线自然等于任务级留一均值。已终止同伴仍可贡献任务级结果先验，其作用不会变成某个后续深度的虚构状态。基线只读取目标动作前信息和独立同伴数据；目标当前动作、当前动作后的观测及自身最终成败都不参与基线计算。
 
----
+### 3.4 下一状态共享与最终优势
 
-## 四、机制三：首访停时滤子有向无环图（Filtration-DAG）留一法贝尔曼期望算子
+非终末动作的共享权重取下一状态的支持质量：
 
-### 4.1 时域匹配的统一非负步奖励与全时程成功严格占优
+$$
+\lambda_{k,t}=\lambda_{\max}\frac{S_{k,t+1}}{S_{k,t+1}+\kappa},
+\qquad \lambda_{\max}=1.
+$$
 
-固定时域匹配折扣因子 $\gamma = 0.99$（覆盖 $1 \le T_k \le H \le 100$，$\gamma^{99} \approx 0.3697$），定义全局统一、无阶段切换开关的非负单步奖励与蒙特卡洛待收回报：
+终末动作规定 $\lambda_{k,t}=0$。下一状态表示来自当前已经发生的动作与公开反馈；$\lambda$ 不读取目标轨迹在这之后的动作或终局结果，也不使用预测误差调权。定义
 
-$$r_{k,u} \triangleq R_{\max} \cdot Y_k \cdot \mathbb{I}[u = T_k - 1] + \big(M_{k,u+1} - M_{k,u}\big) \ge 0, \qquad R_{\max} = 10.0, \qquad V^{(0)}_{k,t} \triangleq \sum_{u=t}^{T_k-1} \gamma^{u-t} r_{k,u}.$$
+$$
+Z_{k,t}=(1-\lambda_{k,t})G^{\mathrm{MC}}_{k,t}
+       +\lambda_{k,t}\bigl(r_{k,t}+\mu_{k,t+1}\bigr),\qquad
+A_{k,t}=\frac{Z_{k,t}-b_{k,t}}{R}.
+$$
 
-**定理 4（百步全时程终局成功严格占优与内生步效定理）**  
-*在 $\gamma = 0.99, R_{\max} = 10.0$ 下，对 $H \le 100$ 内的任意成功轨迹步 $(k,t)$（$Y_k=1, 0 \le t < T_k \le 100$）与任意失败轨迹步 $(k',t')$（$Y_{k'}=0, 0 \le t' < T_{k'} \le 100$），恒满足：*
+默认公式在没有下一状态支持时恰好使用自身 Monte Carlo 回报；随着支持增加，使用更多同伴续值。末步完整保留官方终局回报。所有信用量在参数更新前计算并冻结。
 
-$$\inf_{Y_k=1,\, T_k \le 100} V^{(0)}_{k,t} \ge 10.0 \times 0.99^{99 - t} \ge 3.6973 > 1.0 > \frac{H^{\text{goal}}_{k',0}}{H^{\text{goal}}_{k',0}+1} \ge \sup_{Y_{k'}=0} V^{(0)}_{k',t'},$$
+实现按 `[depth, trajectory, feature]` 组织表示，用批量 Gram 矩阵一次形成所有同深度距离，再按 `[depth, target, peer]` 归约。时间复杂度为 $O(HK^2D)$，权重存储为 $O(HK^2)$。表示使用 CPU float32，信用加权与回报归约使用 CPU float64，避免大量 Python 子图循环与小规模 GPU 同步。
 
-*即哪怕是 100 步才完成的极限长程成功轨迹，其起点待收回报亦以 $> 2.697$ 的绝对裕度（$> 3.7$ 倍比例裕度）严格压制任意第 1 步高认识增益的失败轨迹；同为成功轨迹时，更短完成步数 $T_k < T_{k''}$ 因 $0.99^{T_k-1} > 0.99^{T_{k''}-1}$ 自然享有更高回报，无需墙钟惩罚即内生涌现步数与词元效率。*
+## 4. 数学含义、偏差与明确成立的性质
 
-*证明*：因每步认识势增量非负 $M_{k,u+1} - M_{k,u} \ge 0$ 且 $\gamma \in (0, 1]$，对 $Y_k=1$ 有 $V^{(0)}_{k,t} \ge 10.0\,\gamma^{T_k-1-t} \ge 10.0 \times 0.99^{99} \approx 3.6973$；对 $Y_{k'}=0$ 有 $V^{(0)}_{k',t'} = \sum_{u=t'}^{T_{k'}-1} \gamma^{u-t'}(M_{k',u+1}-M_{k',u}) \le \sum_{u=t'}^{T_{k'}-1}(M_{k',u+1}-M_{k',u}) = M_{k',T_{k'}} - M_{k',t'} \le M_{k',T_{k'}} < 1.0$（定理 3）。$\blacksquare$
+### 4.1 基线的 score 恒等式
 
-### 4.2 $\ell_\infty$ 乘积滤子距离、留一期望回传与非沉没收缩基线
+在固定任务初态、冻结的行为策略 $\pi_{\mathrm{old}}$ 和参考参数下，假设同伴轨迹使用独立随机流生成。记整个目标轨迹之外的数据为 $D_{-k}$，动作响应的 score 为
 
-在 AppWorld 自由代码空间中，两条轨迹常写出变量名或格式略异但语义等价的查询代码（如 `docs = apis.api_docs.show_api_doc(...); print(docs)` 与 `print(apis.api_docs.show_api_doc(...))`），精确动作字符串树会在第 0 步即分裂为 8 条孤立枝而丧失跨轨迹合并能力；反之，仅按局部观测聚类又会发生 1.1 节的马尔可夫混叠。F-GPO 在每轮单次参考前向中提取固定 $p_{\text{ref}}$ 第 `L - 8` 层的双视角球面归一化表征：
-- **完整因果历史表征 $z^{\text{hist}}_{k,t} \in \mathbb{S}^{d-1}$**：直接从 `packed_segment_hidden` 参考前向的位置 $a_{k,t} - 1$ 钩取（零额外前向）；
-- **纯净局部观测表征 $z^{\text{obs}}_{k,t} \in \mathbb{S}^{d-1}$**：对短文本 $\widetilde{o}_{k,t}$ 批量执行一次仅至 `L - 8` 层的无词表头前向取末位向量。
+$$
+\psi_{k,t}=\left.\nabla_\theta\log\pi_\theta(y_{k,t}\mid p_{k,t})\right|_{\theta=\theta_{\mathrm{old}}}.
+$$
 
-**定义 3（$\ell_\infty$ 乘积滤子距离与首访停时留一贝尔曼算子）**  
-定义节点 $x=(k,t)$ 与 $y=(j,s)$ 的乘积空间滤子距离：
+由于 $b_{k,t}$ 在当前动作前已经确定，
 
-$$d_{\text{filt}}\big((k,t),\, (j,s)\big) \triangleq \max\!\Big(\, 1 - (z^{\text{obs}}_{k,t})^\top z^{\text{obs}}_{j,s},\;\; 1 - (z^{\text{hist}}_{k,t})^\top z^{\text{hist}}_{j,s} \,\Big), \qquad \epsilon_{\text{sim}} = 0.10.$$
+$$
+\mathbb E[b_{k,t}\psi_{k,t}\mid h_{k,t},D_{-k}]
+=b_{k,t}\sum_y\pi_{\mathrm{old}}(y\mid p_{k,t})
+\nabla\log\pi_{\mathrm{old}}(y\mid p_{k,t})=0.
+$$
 
-乘积上界要求匹配节点同时具备局部观测一致与历史信息状态相容，既能合并不同代码写法抵达的同一业务信息态，又能严格分离完成子目标前后的同名局部观测；在 $t=0$ 处因 $\mathbf{p}_{1,0}=\dots=\mathbf{p}_{K,0}$ 恒有 $d_{\text{filt}}((k,0),(j,0)) = 0$。
+该结论针对行为策略采样点的基线 score 项；参数更新后的 PPO、多轮优化和近似续值目标需要分别分析。它也没有要求样本内平均优势为零。整个响应的 score 等于其实际采样词元 score 之和，因而与本文的轨迹损失求和口径一致。
 
-固定目标轨迹 $k$ 与同伴轨迹集 $\tau_{-k} = \{\tau_j : j \neq k\}$。对任意排除集 $E \subseteq \{1,\dots,K\}$，定义同伴 $j \notin E$ 首次进入 $x$ 邻域的**首访停时** $\tau_j(x) \triangleq \min\{s \in [0, T_j) : d_{\text{filt}}(x, (j,s)) \le \epsilon_{\text{sim}}\}$、匹配同伴集 $\mathcal{J}_{-E}(x) = \{j \notin E : \tau_j(x) \text{ 存在}\}$、匹配数 $n_{-E}(x) = |\mathcal{J}_{-E}(x)|$ 及首访均值 $\widehat{V}^{(-E)}(x; V) \triangleq \frac{1}{n_{-E}(x)} \sum_{j \in \mathcal{J}_{-E}(x)} V_{j, \tau_j(x)}$。为阻断原地循环重访借用同伴价值刷分，仅当转移 $(i,t) \to (i,t+1)$ 进入本轨迹此前未访问的新滤子邻域时开启前向 DAG 边：
+### 4.2 共享目标的偏差恒等式
 
-$$n^{\text{dag}}_{-E}(i, t) \triangleq \begin{cases} n_{-E}\big((i, t+1)\big), & t + 1 < T_i \;\land\; \min_{0 \le u \le t} d_{\text{filt}}\big((i, t+1),\, (i, u)\big) > \epsilon_{\text{sim}}, \\ 0, & \text{其他情况（终局步或轨迹内重访/空转）}, \end{cases} \qquad \alpha^{\text{dag}}_{-E}(i, t) \triangleq \frac{n^{\text{dag}}_{-E}(i, t)}{n^{\text{dag}}_{-E}(i, t) + 1}.$$
+令 $V^{\pi_{\mathrm{old}}}(h_{t+1})$ 为相同有限时域、相同行为策略下的真实后续回报均值。分析条件包含：同伴与目标后续随机性在固定初态下独立；$\lambda_t$ 仅依赖当前已实现转移和同伴数据；环境转移遵循本次 rollout 的条件分布。把终末后继值定义为零，则
 
-在同伴子图 $\mathcal{V}_{-k}$ 内以 $V^{(-k,0)}_{j,s} = V^{(0)}_{j,s}$ 初始化（终态 $V^{(-k,b)}_{j,T_j} \equiv 0$），执行 $b = 1, 2, 3$ 步**无 $\max$ 纯期望逆向迭代**得到 $V^{(-k)} \triangleq V^{(-k,3)}$，并对目标轨迹 $k$（$G^\star_{-k}(k,T_k)=0$）施加完全对称的逆向待收估值算子：
+$$
+\begin{aligned}
+\Delta_t
+&=\mathbb E[(Z_t-b_t)\psi_t]-\mathbb E[G^{\mathrm{MC}}_t\psi_t]\\
+&=\mathbb E\!\left[\lambda_t
+\bigl(\mu_{-k,t+1}-V^{\pi_{\mathrm{old}}}(h_{t+1})\bigr)\psi_t\right].
+\end{aligned}
+$$
 
-$$V^{(-k, b)}_{j, s} = r_{j, s} + \gamma \Big[ \alpha^{\text{dag}}_{-k,-j}(j, s)\, \widehat{V}^{(-k,-j)}\!\big((j, s+1);\, V^{(-k, b-1)}\big) + \big(1 - \alpha^{\text{dag}}_{-k,-j}(j, s)\big)\, V^{(-k, b)}_{j, s+1} \Big],$$
+推导从 $Z-G^{\mathrm{MC}}=\lambda(r+\mu-G^{\mathrm{MC}})$ 出发。对当前转移及同伴数据条件化后，$G^{\mathrm{MC}}-r$ 的条件均值为真实续值，基线项由上一节消去。由此可将偏差直接归于共享估计与真实后续值之差。
 
-$$G^\star_{-k}(k, t) = r_{k, t} + \gamma \Big[ \alpha^{\text{dag}}_{-k}(k, t)\, \widehat{V}^{(-k)}\!\big((k, t+1);\, V^{(-k)}\big) + \big(1 - \alpha^{\text{dag}}_{-k}(k, t)\big)\, G^\star_{-k}(k, t+1) \Big].$$
+若在所讨论分布上有 $|\mu-V|\leq\delta$、$\lambda\leq\lambda_{\max}$，并且 $\mathbb E\|\psi_t\|\leq L_t$，则归一化后
 
-**定义 4（非沉没留一收缩基线、非法步负值隔离与稳定 RMS 优势）**  
-令同伴步深度先验均值为 $\bar{V}^{(-k)}_t \triangleq \frac{1}{K-1} \sum_{j \neq k} V^{(-k)}_{j, \min(t, T_j)}$（其中已终止同伴步取 $V^{(-k)}_{j,T_j} = 0$），当前节点匹配收缩权重为 $\beta_{-k}(k,t) \triangleq \frac{n_{-k}((k,t))}{n_{-k}((k,t)) + 1}$。定义严格仅依赖步 $t$ 以后期望待收价值的非沉没留一基线 $B_{-k}(k,t)$、原始反事实优势 $\Delta_{k,t}$ 及语法非法步负值隔离优势 $A_{k,t}$（$\eta_{\text{syn}} = 0.1,\; \sigma_0 = 0.05$）：
+$$
+\|\Delta_t/R\|\leq \lambda_{\max}\delta L_t/R,\qquad
+\left\|\sum_{t=0}^{H-1}\Delta_t/R\right\|
+\leq\frac{\lambda_{\max}\delta}{R}\sum_{t=0}^{H-1}L_t.
+$$
 
-$$B_{-k}(k, t) \triangleq \beta_{-k}(k, t)\, \widehat{V}^{(-k)}\!\big((k, t);\, V^{(-k)}\big) + \big(1 - \beta_{-k}(k, t)\big)\, \bar{V}^{(-k)}_t, \qquad \Delta_{k, t} \triangleq G^\star_{-k}(k, t) - B_{-k}(k, t),$$
+这是带显式条件的误差分析；支持量消融使用权重上界 1。余弦半径没有给出已知的 $\delta$；有限上下文、表示混叠和有限同伴采样均影响实际误差。支持收缩提供可控的共享幅度，正式实验进一步测量其预测误差与任务收益。r3 的论证以这些条件为边界，不使用“精确无偏续值”或“全局 DAG 正确性”作为前提。
 
-$$\Delta^{\text{raw}}_{k, t} \triangleq \begin{cases} \Delta_{k, t}, & \mathrm{valid}_{k, t}, \\ \min(\Delta_{k, t}, 0) - \eta_{\text{syn}}, & \neg\mathrm{valid}_{k, t}, \end{cases} \qquad A_{k, t} \triangleq \frac{\Delta^{\text{raw}}_{k, t}}{\sqrt{\frac{1}{|\mathcal{V}_{-k}|} \sum_{(j, s) \in \mathcal{V}_{-k}} \big(\Delta^{(-k)}_{j, s}\big)^2 + \sigma_0^2}},$$
+### 4.3 值域、全零组及失败前缀
 
-其中分母采用严格排除轨迹 $k$ 的同伴子图均方根尺度 $\sigma_{-k} = \sqrt{\frac{1}{|\mathcal{V}_{-k}|} \sum_{(j,s) \in \mathcal{V}_{-k}} (\Delta^{(-k)}_{j,s})^2 + \sigma_0^2}$（$\Delta^{(-k)}_{j,s}$ 为 $\mathcal{V}_{-k}$ 内部留一残差）。
+因为所有核权重非负、$\kappa>0$ 且 $0\leq\lambda\leq1$，有
 
-**定理 5（压缩性、精确零偏中心性、零沉没泄漏与跨轨迹前缀正向信用定理）**  
-1. **$\gamma$-压缩与无自环泵送**：纯期望逆向算子满足 $\|\mathcal{T}u - \mathcal{T}v\|_\infty \le \gamma \|u - v\|_\infty$；轨迹内重访步因 $\alpha^{\text{dag}} = 0$ 无法借用同伴价值，且每条同伴仅以唯一首访停时 $\tau_j(x)$ 入均，杜绝循环轨迹自抬估值。
-2. **精确策略梯度零偏与全步零均值中心性**：$B_{-k}(k,t)$ 与分母 $\sigma_{-k} \ge \sigma_0 > 0$ 均完全由 $(\mathcal{F}_{k,t}, \tau_{-k})$ 决定，与当前采样动作 $y_{k,t}$ 及未来轨迹严格条件独立，故恒有精确零偏恒等式：
-   $$\mathbb{E}_{y_{k,t} \sim \pi_{\theta_{\text{old}}}}\!\left[\frac{B_{-k}(k, t)}{\sigma_{-k}} \nabla_\theta \log \pi_\theta(y_{k,t} \mid \mathbf{p}_{k,t}) \,\middle|\, \mathcal{F}_{k,t}, \tau_{-k}\right] = \mathbf{0};$$
-   同时因同伴算子与目标算子同为线性纯期望回传（无 $\max$ 琴生上偏），在同分布采样下对匹配节点与独有探索分支均满足对称中心性 $\mathbb{E}[\Delta_{k,t}] = 0$。
-3. **零沉没奖励泄漏与末步无衰减信用**：$G^\star_{-k}(k,t)$ 与 $B_{-k}(k,t)$ 均仅聚合步 $u \ge t$ 的未来奖励，绝不混入步 $t$ 之前已实现的沉没奖励 $r_{k, <t}$。若全零组某轨迹在 $t=0$ 发现关键信息获得 $r_{k,0} > 0$ 后在 $t = 1 \dots 49$ 原地空转（$r_{k,1\dots 49} = 0$），则正优势精确锁定于 $t=0$（$\Delta_{k,0} > 0$），而后续 49 个空转步满足 $G^\star_{-k}(k,t) = 0 \implies \Delta_{k,t} = -B_{-k}(k,t) \le 0$；在 90 步独有制胜分支末步 $t=89$ 处，$G^\star_{-k}(k,89) = 10.0$ 保持全幅未衰减正信号。
-4. **失败轨迹优质前缀正向回传与非法步负号隔离**：若失败轨迹 $k$（$Y_k=0$）在步 $t$ 执行有效查询抵达与成功同伴等价的信息态 $(k, t+1)$（$\widehat{V}^{(-k)}((k,t+1)) > 0$）而后在下游 $t_{\text{slip}} > t$ 失误，则 $G^\star_{-k}(k,t) \ge r_{k,t} + \gamma \frac{n}{n+1}\widehat{V}^{(-k)}((k,t+1))$ 向步 $t$ 传递正向信用，并在失误步 $t_{\text{slip}}$ 给出局部负优势；任意语法非法步恒有 $A_{k,t} \le -\eta_{\text{syn}} / \sigma_{-k} < 0$。
+$$
+0\leq b_{k,t},\mu_{k,t},Z_{k,t}\leq R,\qquad -1\leq A_{k,t}\leq1.
+$$
 
-*证明*：性质 1 由凸组合非扩张性与终态边界逆向归纳即得；性质 2 由 $z_{k,t} \in m\mathcal{F}_{k,t}$、$\tau_{-k} \perp \tau_k \mid (g, s_0)$ 及得分函数零期望恒等式 $\mathbb{E}_{y \sim \pi_\theta}[\nabla_\theta \log \pi_\theta(y \mid \mathbf{p}_{k,t})] = \mathbf{0}$ 直接得证；性质 3–4 将对应奖励序列与边界条件代入 $G^\star_{-k}(k,t), B_{-k}(k,t)$ 及 $\Delta^{\text{raw}}_{k,t}$ 定义即证。$\blacksquare$
+若某组所有 $Y_j=0$，该组的先验、局部值、共享目标和任务优势全部为零。熵正则提供有限的分布扩散，参考正则约束偏离；二者属于实际训练辅助，整体算法没有全失败组的成功发现保证。`all_zero_groups` 会直接记录这一状态。
 
-### 4.3 双裁剪 PPO 与单次预计算参考 KL 优化目标
+一个失败轨迹中的动作可以因下一状态的成功同伴获得正优势，具体条件是 $\lambda_{k,t}\mu_{k,t+1}>b_{k,t}$。这种条件将“得到正信用”的含义绑定到可计算估计。它也说明了良好前缀仍可能有负优势：设 $K=8$，目标最终失败，另七条轨迹成功；当前及下一深度完全匹配且均非终态。此时 $S_t=S_{t+1}=7$、$b_t=R$、$\mu_{t+1}=R$、$\lambda_t=7/8$，于是 $A_t=-1/8$。即使这一步是共同的必要前缀，目标自身失败回报仍保留了 $1/8$ 的权重。
 
-完全对齐 `GiGPO` / `BiPACE_Q` 的双裁剪（Dual-Clip）词元级 PPO 目标（[native_real_baseline_training.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baseline_training.py#L399-L418)，$\epsilon_{\text{clip}}=0.2,\; c_{\text{dual}}=3.0,\; c_{\text{ent}}=0.001,\; \beta_{\text{KL}}=0.01$），设词元重要性比率为 $\rho_{k,t,i}(\theta) = \exp(\ell^\theta_{k,t,i} - \ell^{\text{old}}_{k,t,i})$，参考对数概率差为 $d_{k,t,i}(\theta) = \ell^{\text{ref}}_{k,t,i} - \ell^\theta_{k,t,i}$（其中标量 $\ell^{\text{ref}}_{k,t,i}$ 在每轮单次 `reference.activate` 中由参考模型自身 `lm_head` 精确预计算缓存，不受后续 minibatch 参数更新干扰），配合轮级恒定响应词元分母 $Z_{\text{mb}}$ 与 `chunk_tokens = 32` 词表头检查点重算：
+因此，研究检验的是失败前缀信用的统计改善，以及这种改善对最终策略的作用。`positive_failed_steps` 是算法输出计数；认定某一步确实有益，需要结合其公开上下文、执行效果及后续任务结果。
 
-$$\ell^{\text{dual}}_{k,t,i}(\theta) = \begin{cases} \max\!\big(-A_{k,t} \rho_{k,t,i},\; -A_{k,t}\operatorname{clip}(\rho_{k,t,i}, 1-\epsilon_{\text{clip}}, 1+\epsilon_{\text{clip}})\big), & A_{k,t} \ge 0, \\[4pt] \min\!\Big(\max\!\big(-A_{k,t} \rho_{k,t,i},\; -A_{k,t}\operatorname{clip}(\rho_{k,t,i}, 1-\epsilon_{\text{clip}}, 1+\epsilon_{\text{clip}})\big),\; -c_{\text{dual}} A_{k,t}\Big), & A_{k,t} < 0, \end{cases}$$
+## 5. PPO 更新与轨迹权重
 
-$$\mathcal{L}_{\text{F-GPO}}(\theta) = \frac{1}{Z_{\text{mb}}} \sum_{(k,t) \in \mathcal{M}_b} \sum_{i=1}^{m_{k,t}} \Big(\ell^{\text{dual}}_{k,t,i}(\theta) - c_{\text{ent}} \mathcal{H}_{k,t,i}(\theta) + \beta_{\text{KL}} \operatorname{clip}\!\big(e^{d_{k,t,i}(\theta)} - d_{k,t,i}(\theta) - 1,\; -10, 10\big)\Big).$$
+每个步骤的 $A_{k,t}$ 应用于该响应的全部实际采样词元。人工补入的 ChatML 闭合词元、环境观测、滚动重播的旧响应都没有新的损失所有权。令第 $i$ 个响应词元的概率比为 $\rho_i=\exp(\ell_i^\theta-\ell_i^{\mathrm{old}})$。
 
----
+实现使用 clip $0.2$、dual clip $3$ 的 PPO token 损失，叠加系数 $0.001$ 的条件熵奖励和系数 $0.01$ 的截断参考 k3 正则。参考项为
 
-## 五、端到端架构数据流、全参数零混杂对齐与源码改造蓝图
+$$
+d_i=\ell_i^{\mathrm{ref}}-\ell_i^\theta,\qquad
+k_i=\min\{10,\exp(d_i)-d_i-1\}.
+$$
 
-```mermaid
-flowchart TD
-    A["官方训练任务 (g, o_0) 重置<br/>同初态种子 K=8 并行环境槽位"] --> B["机制一：干净公共投影 + 不可变 ChatML 词元段 S_{k,c}<br/>共享根缓存 C_0 与二维掩码 DynamicCache 增量采样"]
-    B --> C["每轮单次 WeightReference.activate (no_grad, <1s)<br/>单遍前向同步提取：标量 log pi_ref、L-8 层 z_hist/z_obs、外部惊奇 s_ext"]
-    C --> D["机制二：纯观测流一维 DynamicCache.crop<br/>计算逐词元 TF-BEFP 认识势 M_{k,t} 与非负奖励 r_{k,t}"]
-    D --> E["机制三：l_inf 乘积滤子距离构建 Filtration-DAG<br/>3 步留一纯期望回传 G*_{-k} - 非沉没收缩基线 B_{-k} -> A_{k,t}"]
-    E --> F["单遍 packed_segment_hidden 前向 + 分块词表头检查点<br/>Dual-Clip PPO + 参考 KL 反向传播 -> OffloadedAdamW 全参更新"]
-    F --> G["冻结评测：同一不可变完整词元滤子 + 增量 KV 缓存<br/>直接评测官方 ALFWorld SR 与 AppWorld TGC / SGC"]
-```
+这些是保存的行为样本上的正则化 surrogate。裁剪、抽样参考项和近似续值共同决定实际更新；训练并不宣称每次参数变化都等于官方成功目标的精确梯度。默认全参数 bf16/SDPA、无 dropout，AdamW 学习率 $10^{-6}$、weight decay $0.01$，全局梯度范数裁剪 $1$。
 
-### 5.1 与 `GiGPO` / `BiPACE_Q` 的全参数零混杂对齐与服务器显存核算
+新共享协议采用 `loss_normalization="trajectory"`。一轮包含 $N_{\mathrm{traj}}$ 条真实轨迹，事先按响应行数分成 $M$ 个 minibatch，则每个 minibatch 使用相同分母
 
-为确保所有实验增益 100% 归因于上述三项核心算法机制，F-GPO 与仓库中的 `GiGPO`、`BiPACE_Q` 严格锁定完全一致的模型容量与优化器配置：统一采用服务器本地 `Qwen/Qwen2.5-7B-Instruct`（`bfloat16`, `sdpa`）**全量 `7.62B` 可训练参数**（零额外价值网络头、零 LoRA 秩差混杂），统一使用 `OffloadedAdamW(lr=1e-6, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01, max_norm=1.0)` 与每轮 `16 groups × 8 trajectories = 128` 条同初态采样规模。
+$$
+Z_{\mathrm{mb}}=N_{\mathrm{traj}}/M,\qquad
+\mathcal L_m=\frac{1}{Z_{\mathrm{mb}}}
+\sum_{i\in\mathcal B_m}\bigl(\ell^{\mathrm{PPO}}_i-\alpha H_i+\beta k_i\bigr).
+$$
 
-按 [native_real_baselines.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baselines.py#L82-L96) 显存公式，全参 `bf16` 权重与梯度共占 `28.37 GiB`（CPU 主权重与一二阶动量不占显存），激活检查点与打包段工作区峰值 `< 6 GiB`。在 `mgt01` 健康 **NVIDIA L40（`GPUs 1..7`，单卡 `46 GiB`，排除故障 `GPU 0`）** 上，单张 L40 即可独立承载 1 个完整全参数训练实例；在部分占用节点上则按 [native_real_runner.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_runner.py#L536-L549) 的 `capacity >= 40960 MiB` 规则自动多卡分层切分。`DynamicCache` 增量采样、`packed_segment_hidden` 单遍前反向与每轮仅 1 次 `WeightReference` 交换，将单轨迹主干 FLOPs 压缩 **$20 \sim 45$ 倍**，并消除每轮逾 `650 GB` 的冗余权重搬运。
+在固定参数下对这些 minibatch 损失取平均，恰好等于所有响应词元损失之和除以轨迹数。每条轨迹内部使用词元求和；长轨迹具有更多决策项。末个不足额 minibatch 保持同一分母。参数在每次 optimizer step 后变化，后续相关段按当前参数重新计算。
 
-### 5.2 最小内聚代码改造清单（待审阅确认后实施并在服务器验证）
+## 6. 系统实现与性能优化的成立条件
 
-1. **[native_real_baselines.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baselines.py)**：
-   - 在 `METHODS` 注册 `"fgpo"` 及三项自身消融标识，共享 `full_parameters`、`OffloadedAdamW(lr=1e-6, weight_decay=0.01)` 与 `WeightReference`；
-   - 将 `_activation_saving`（第 [190](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baselines.py#L190) 行）的 `pin_memory=True` 改为 `pin_memory=False`，根除变长长序列反向传播的锁页内存池泄漏；
-   - 修复第 [437](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baselines.py#L437) 行原生分发为 `env.step_native(action) if hasattr(env, "step_native") else env.step(action)`，并对齐 AppWorld 官方步限 `max_steps = 100`（ALFWorld 保持 `50`）；
-   - 实现 `project_public_observation` 与支持多槽位独立目录、`DynamicCache` 根缓存克隆及二维掩码批量解码的 `run_episodes_fgpo`（外部基线保留各自原始提示、奖励与更新公式不变，同时修复 `SELF` 在空 `stdout` 下的分词边界异常）。
-2. **[native_real_baseline_training.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_baseline_training.py)**：
-   - 新增 `packed_segment_hidden`（定理 2 单遍打包段前向与响应/观测隐状态切片）；
-   - 新增 `compute_fgpo_reference_and_befp`（在单次 `reference.activate` 窗口内同步完成标量 `ref_token_logprobs`、`L - 8` 层双表征 $z^{\text{hist}}, z^{\text{obs}}$、外部惊奇 $s^{\text{ext}}$ 及一维逆序 `kv.crop` TF-BEFP 认识势 $M_{k,t}$ 求值）；
-   - 新增 `filtration_dag_loo_advantages`（定义 3–4 与定理 4–5 向量化实现）及 `fgpo_ppo_update`（恒定分母分层 minibatch + 分块词表头双裁剪 PPO 更新）。
-3. **[native_real_runner.py](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/prism_evolve/native_real_runner.py) 与运行配置**：
-   - 在 `OWN_METHODS` / `OWN_ABLATION_METHODS` 与 `_select_training_devices` 全参设备分配中接入 `"fgpo"` 及其三项自身消融；
-   - 移除 [prism-r11-qwen7b-real-20261115.json](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/configs/prism-r11-qwen7b-real-20261115.json) 与评估链路中的 `8M` 词元、`12,000` 环境步、`14,400s` 截断及 `wide / constrained` 超时判零逻辑，统一按收敛轮数训练并在 `evaluate_run` 中同时输出 ALFWorld 官方 **SR (%)** 与 AppWorld 官方 **TGC (%) / SGC (%)**。
+### 6.1 因果打包与参考计算
 
----
+完整段包含按时间串接的动作和观测。在相同词元、位置编码、因果 mask 及参数下，响应前缀位置的隐藏态可以从整段前向获得；后面的词元被因果注意力屏蔽。这允许一个段内的多个响应共享主干计算，同时保持各自真实前缀。滚动窗口重新开始一个段，旧前缀依赖的 KV 不能直接作为新窗口的条件继续使用。
 
-## 六、紧扣论文核心主张的正式实验与自身消融规划
+冻结参考权重在每轮参考阶段集中安装，完成响应概率与历史特征计算后恢复 actor。参考 log-prob 按响应块计算、结果集中回到 CPU；整个输出词表不会为全部轨迹同时保留。局部观测表示采用去重、长度排序和词元预算微批。此处的复用范围以相同参数版本和实际段为单位。
 
-> [!NOTE]
-> 严格遵循工作要求：完整实现全部核心代码后在服务器统一启动正式实验；不设任何阶段放行门控、校验清单或合成玩具实验；消融仅针对 F-GPO 自身机制，内生诊断直接从正式运行轨迹日志中提取，零额外跑次。
+### 6.2 持久环境进程与提前派发
 
-统一在服务器官方 **ALFWorld**（134 题 `valid_unseen`，$H=50$）与 **AppWorld**（168 题 `test_normal` + 417 题 `test_challenge`，$H=100$）上使用现有 `Qwen/Qwen2.5-7B-Instruct` 与 3 个随机种子 `(0, 1, 2)`，各训练方法统一运行充足收敛轮数 **$R = 60$ 轮**（每轮 $16 \times 8 = 128$ 条轨迹，共 7,680 条训练回合/种子）：
+每条轨迹通过独占 lease 使用一个官方环境实例。持久进程池复用 Python 进程和已加载依赖；新 lease 重新建立该任务的隔离状态，旧任务数据库与可变环境对象不会在轨迹间共享。池的容量按运行配置约束，进程启动、复用与环境调用记入成本日志。
 
-| 实验组别 | 方法 / 变体配置 | 支撑的论文核心主张（Claim）与必要性说明 | 核心评价指标 |
-|---|---|---|---|
-| **主对比实验** | `native_qwen`（冻结基座）、`gigpo`、`bipace_q`、`self`、`skill_disco`、**`fgpo`（Ours）** | **Claim 1**：在同基座、同全参数空间与充足交互轮次下，F-GPO 在长时程稀疏奖励 POMDP 上全面超越现有群策略 RL、反馈自蒸馏与技能归纳基线，并内生降低完成步数与词元消耗 | ALFWorld **SR (%)**；AppWorld **TGC (%) / SGC (%)**；伴随汇报平均完成步数与词元消耗 |
-| **自身消融 1** | `F-GPO w/o Full Filtration`（回退两轮历史窗口 `history_length=2`，保留 TF-BEFP 与留一算子） | **Claim 2**：不可变完整词元滤子消除跨步 API 文档、凭证与已查容器遗忘，支撑 30–100 步长时程连贯推理与动作绑定 | 同上 |
-| **自身消融 2** | `F-GPO w/o TF-BEFP`（令认识增量 $\eta_{k,t} \equiv 0$，保留完整词元滤子与 Filtration-DAG 留一算子） | **Claim 3**：逐词元分解贝叶斯认识前沿势打破全零失败采样组的冷启动零梯度死锁，显著缩短困难任务的首次破零轮次并提升终局成功率 | 同上 |
-| **自身消融 3** | `F-GPO w/o Filtration-DAG LOO`（令 $\alpha^{\text{dag}} \equiv 0$ 且锚点退回局部瞬时观测 `anchor_obs`，保留完整词元滤子与 TF-BEFP） | **Claim 4**：$\ell_\infty$ 乘积滤子 DAG 与首访停时留一贝尔曼期望回传消除局部观测马尔可夫混叠，向失败轨迹中的优质信息收集前缀精准传递正向信用 | 同上 |
-| **内生日志诊断** | 直接从上述正式运行的训练与测试日志提取统计（零额外实验） | 验证定理 3–5 实测因果链路：（1）全零采样组有效梯度激活率与初始零成功任务累积破零曲线（支撑 Claim 3）；（2）失败轨迹优质探索前缀正向优势占比与原地重复动作率下降曲线（支撑 Claim 2 & 4）；（3）失败轨迹实测势上界 $\max_{Y_k=0} M_{k,T_k} < 1$ 及按步长区间（`1–25 / 26–50 / 51–100`）拆分的分段成功率（支撑定理 3 & 4） | 全零组激活率、累积破零任务数、重复动作率、分段 SR/TGC |
+GPU 仍以单主线程处理模型批次。每个槽位独立维护 `torch.Generator`；采样保持各槽位自己的随机流，将 token 与 log-prob 合并为一次 CPU 读取。某条响应遇到实际终止符或生成长度上限后，立即将解析、原生环境执行和公开观测投影派给 CPU 工作线程，此时其余槽位仍可继续 GPU 解码。
+
+下一交互轮保留 turn barrier：本轮所有活跃槽位的反馈完成后，才构造下一轮模型输入。该实现实现了轮内环境调用与解码的重叠；多轮持续调度不在当前执行语义内。独立采样 seed 保障随机流所有权，批形状和浮点计算变化可能影响最终离散采样结果，复现信息需记录实际执行配置。
+
+### 6.3 几何增长 KV 与真实内存
+
+`cache.py` 的 arena 在容量充足时原位写入 KV，容量不足时按几何增长扩容。它维护每行有效长度、物理跨度、attention mask 与逻辑位置。变长批次仍然具有 padding；压紧会真实移动有效列，只有已经紧凑的布局才能跳过这项操作。`crop` 改变逻辑长度并保留底层容量，不能据此声称显存已经释放。
+
+这项设计减少逐 token 全前缀拼接分配，同时保留实际模型所需的 padding 和位置语义。根前缀可以共享一次 prefill 结果，分叉后各槽位持有可独立更新的缓存。窗口丢弃历史时重新 prefill 新窗口。数学条件一致与浮点逐位一致分别陈述，吞吐比较使用相同推理条件下的实测结果。
+
+以 [Qwen2.5-7B 官方配置](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/config.json) 的 28 层、4 个 KV 头、头维度 128 和 bf16 为例，8 个槽位的纯 KV 张量在容量 4096 时为 $28\times2\times8\times4\times4096\times128\times2$ 字节，即 1.75 GiB；容量 32768 时为 14 GiB。这是指定张量的容量计算，整机峰值还包括权重、梯度、激活、输出头、缓存扩容临时量和分配器保留空间。
+
+### 6.4 输出头分块与一次主干反向
+
+每个被当前 minibatch 使用的段先得到主干输出 $H=f_\theta(S)$。输出头按默认 64 个响应词元分块。每块的隐藏态复制为 detached leaf，对该块损失立即反向，累积输出头参数梯度及 $\partial\mathcal L_c/\partial H_c$，随后释放该块词表图。所有块完成后，将隐藏态梯度加回正确位置，对原始 $H$ 只调用一次 backward：
+
+$$
+\nabla_\theta\mathcal L
+=\nabla_\theta\mathcal L\big|_{H\ \mathrm{fixed}}
+ +\left(\frac{\partial H}{\partial\theta}\right)^\top
+   \sum_c\frac{\partial\mathcal L_c}{\partial H}.
+$$
+
+在相同参数和损失定义下，这实现一阶链式法则；若输出头与输入 embedding 绑权，两部分参数梯度自然相加。每段只保留一个活跃词表块及完整隐藏态梯度缓冲。将所有块的标量 loss 图保留到最后会保留其词表相关激活，因此当前实现逐块释放图。
+
+`logsumexp`、目标词元 gather 和熵的解析形式避免保存完整 log-softmax 副本；熵仍计算全词表概率。主干保留非重入式梯度检查点。`activation_offload` 默认关闭，显式配置为 true 时仍可使用非锁页 CPU 激活换出；实际取值依据服务器显存与正式 workload 配置，不能从简单的权重加法推出统一安全峰值。
+
+### 6.5 有界 CPU AdamW 与阶段计时
+
+AdamW 的 fp32 主权重、一阶和二阶矩保存在 CPU。默认 64 MiB 传输桶，并为每个设备和 dtype 分配两个有限的锁页传输槽。GPU 梯度按桶传回，事件完成后 CPU 才读取；更新后的参数写入权重镜像再传回，缓冲区在传输结束后方可复用。GPU 全局范数先按设备聚合，避免每个参数触发一次 CPU 标量同步。参数更新保持完整参数集合，传输空间随桶预算约束。
+
+模型主干和词表头热路径移除显式逐调用同步，其日志耗时标为 `host_dispatch`。正式阶段边界进行 CUDA 同步，记录 `synchronized_wall` 耗时与每张卡的 allocated、reserved 和真实 peak bytes。嵌套阶段的峰值标明属于外层阶段，报告时不把重叠的环境时间与 GPU 时间相加为端到端耗时。吞吐、实际 token、环境步数、GPU 小时和峰值显存均由正式运行账本产生。
+
+用户性能提案中的异步派发、持久环境、减少同步、批量表征、几何缓存、有界传输与分块输出头思路已按上述条件纳入。所有模块均以 r3 数学对象为准；旧三遍估计器的删除属于算法变更。理论容量计算与预计收益可以指导配置，具体加速倍数和 benchmark 增幅由服务器结果填写。
+
+## 7. 正式研究协议与实验解释
+
+### 7.1 主实验矩阵
+
+| 方法 ID | 主实验中的改变 | 需要回答的问题 |
+|---|---|---|
+| `fgpo` | 完整 r3 | 在统一预算下的成功率、样本效率和成本如何？ |
+| `fgpo_no_full_filtration` | actor、参考和 PPO 同时改成初始锚定块加最近两轮 | 增加实际可见历史是否改善匹配预测和任务表现？ |
+| `fgpo_no_transfer` | 所有 $\lambda=0$，保留相同几何与动作前基线 | 同伴下一状态续值共享产生了什么增益？ |
+| `fgpo_obs_only` | 匹配距离仅用局部观测；actor 历史保持主方法设置 | 历史匹配项如何改变覆盖率、预测误差和成功率？ |
+| `fgpo_no_support_weight` | 下一状态有正支持时 $\lambda=1$，否则为零；终末仍为零 | 连续共享强度的作用如何？ |
+| `gigpo_shared` | 共享采集、上下文、奖励、生成和优化协议，使用 GiGPO 优势规则 | 相同资源和决策条件下，相对 anchor 信用与 r3 如何比较？ |
+| `bipace_q_shared` | 相同公共协议，使用当前 actor prompt 表示和 BiPACE-Q 局部优势 | 对比已有历史表示与动作条件估计，r3 的额外收益如何？ |
+| `native_qwen_shared` | 同一输入与生成协议，冻结基座 | 未训练模型在相同上下文下的参考水平如何？ |
+
+支持量消融只改变共享强度，其余核与基线保持一致；配置可以显式选择需要执行的方法。旧 `fgpo_no_befp`、`fgpo_no_dag_loo` 显式退出协议。
+
+共享比较器默认同用 $\gamma=1$、终局奖励 10、相同初始锚定与有界历史、生成预算、模型、轮数、优化器、轨迹损失分母及正则项。GiGPO 与 BiPACE 的 episode/cluster 优势标准化属于其估计器定义，保留在各自方法中；主方法使用固定奖励尺度。BiPACE 使用当前 actor 的实际 prompt 表示，包含可见历史，并明确记录 AppWorld 动作键等迁移约定。
+
+原作者配置 ID `gigpo`、`bipace_q`、`self`、`skill_disco`、`native_qwen` 可作为单独补充实验。它们的历史、轮数、输出预算或训练方式可能不同，结果与共享协议表分开呈现；Qwen 和 AppWorld 迁移也应直接注明。
+
+### 7.2 默认预算与完整官方评测
+
+| 项目 | r3 默认值 |
+|---|---|
+| 基座与更新 | Qwen2.5-7B-Instruct；可训练方法全参数 bf16/SDPA |
+| 训练种子 | 0、1、2 |
+| 每种子训练量 | 60 轮 × 16 个任务组 × 每组 8 条轨迹，即 7680 条完整轨迹 |
+| 时域与每步生成上限 | ALFWorld：50 步、256 词元；AppWorld：100 步、1024 词元 |
+| 上下文上限 | 默认 32768；主方法按完整轮次滚动 |
+| ALFWorld | 官方 `valid_unseen` 全部 134 任务 |
+| AppWorld | 官方 `test_normal` 全部 168 任务，`test_challenge` 全部 417 任务 |
+| 信用参数 | $R=10,\epsilon=.10,\kappa=1,\lambda_{\max}=1$ |
+| 更新参数 | lr `1e-6`、weight decay `.01`、clip norm `1`、row minibatch `256`、head chunk `64` |
+
+这些是运行默认值，实际配置记录预算和资源参数，正式比较保持共同项一致。训练任务来自官方训练划分。最终 checkpoint 在完整测试划分评测；训练过程中的诊断复用训练日志，不通过测试集选择最优轮次。ALFWorld 报告官方 SR；AppWorld 报告官方任务完成指标和在完整 scenario 上定义的 SGC，所有数值同时附完成任务数。中断运行的部分任务结果单独标明，不补成完整官方得分。
+
+### 7.3 文章 claim 与正式日志
+
+历史条件化的 claim 由主方法与观察值消融、两轮历史消融共同支撑：对比官方成功率、匹配覆盖、支持质量与留一 outcome 预测误差。共享估计的 claim 由 `no_transfer` 对照以及成功率随训练轮数、环境步数和响应 token 的变化支撑。支持收缩的 claim 由 `no_support_weight` 对照支撑。系统效率 claim 直接使用同硬件、同预算正式运行中的阶段耗时、端到端吞吐、环境进程复用量和峰值显存。
+
+核心日志包括 $S$、有效同伴数 $(\sum w)^2/\sum w^2$、$\lambda$、匹配及共享比例、回报移动量 $|Z/R-Y|$、全零任务组、失败轨迹正优势步骤数与优势范围。主留一诊断定义为
+
+$$
+\operatorname{Brier}_{\mathrm{LOO}}
+=\frac{1}{\sum_k T_k}\sum_{k,t<T_k}
+\left(b_{k,t}/R-Y_k\right)^2.
+$$
+
+另记录任务先验 Brier 和有匹配状态上的未收缩 $\mu/R$ Brier。目标轨迹结果没有进入预测值，随后用于计算预测损失。若真实条件成功概率为 $p$，条件平方误差可分为 $(\widehat p-p)^2+p(1-p)$：因此该指标包含 Bernoulli outcome 噪声。它衡量留出结果预测，不能直接当成真实 Q 的误差，也不回流为训练权重。
+
+这些诊断按真实步骤统计，长轨迹贡献更多预测样本；跨组聚合时按对应样本数加权，并保留每组原始记录。三种子报告完整均值、标准差及逐种子结果；论文中的显著性与收益解释还应结合配对任务结果和实际资源消耗。
+
+## 8. 运行身份与交付状态
+
+r3 使用新的 study 目录及协议 `fgpo-r3-success-v2`。旧协议 checkpoint 内含不同的奖励、优势、参考对象和待执行更新，禁止作为 r3 的继续训练状态。恢复由 `effective_training_identity/require_training_identity` 约束：模型、任务、种子、历史、生成预算、信用及 PPO/Adam 的有效语义保持相同；GPU 放置、缓存、offload 和计算微批等资源项可以调整。保存的 CUDA RNG 流数量仍须一致；SELF 使用 dropout，其逻辑层放置与对应随机流也须保持一致。完成的采集组、参考数据及更新 cursor 按原协议恢复。环境中途的任意进程状态不作为可恢复 checkpoint 的假设。
+
+目前可审阅的产物是上述方案与对应源代码。所有项目运行遵循仓库规定，在指定服务器完成；当前尚无 r3 正式服务器测量。下一步直接执行主实验矩阵，沿同一运行日志回答成功率、共享估计和系统效率三个问题，并据真实结果形成 2027 年研究结论。

@@ -1,0 +1,285 @@
+{
+  "protocol": "fgpo-r3-success-v2",
+  "install_root": "/home/chenxiangwei/workspace/fgpo-r3",
+  "python_executable": "/home/chenxiangwei/env/prism-native-v1/bin/python",
+  "alfworld_python_executable": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/venv-alfworld/bin/python",
+  "model_path": "/home/chenxiangwei/models/Qwen2.5-7B-Instruct",
+  "alfworld_data_root": "/home/chenxiangwei/workspace/prism-native-external/native-text-data-20261108/alfworld",
+  "appworld_data_root": "/home/chenxiangwei/workspace/external/appworld-root-v020",
+  "local_files_only": true,
+  "benchmarks": [
+    "alfworld",
+    "appworld"
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "methods": [
+    "fgpo",
+    "fgpo_no_full_filtration",
+    "fgpo_no_transfer",
+    "fgpo_obs_only",
+    "fgpo_no_support_weight",
+    "gigpo_shared",
+    "bipace_q_shared",
+    "native_qwen_shared"
+  ],
+  "evaluation_splits": {
+    "alfworld": [
+      "valid_unseen"
+    ],
+    "appworld": [
+      "test_normal",
+      "test_challenge"
+    ]
+  },
+  "official_task_counts": {
+    "valid_unseen": 134,
+    "test_normal": 168,
+    "test_challenge": 417
+  },
+  "horizons": {
+    "alfworld": 50,
+    "appworld": 100
+  },
+  "groups": 16,
+  "trajectories": 8,
+  "max_context_tokens": 32768,
+  "activation_offload": false,
+  "excluded_gpu_ids": [],
+  "gpu_id_semantics": "CLI_physical_allocation_with_isolated_process_local_CUDA_indices",
+  "skill_induction_tasks": {
+    "alfworld": 200,
+    "appworld": 90
+  },
+  "method_configs": {
+    "fgpo": {
+      "rounds": 60,
+      "training_window_source": "r3_shared_system_60_rounds",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      },
+      "history_length": null,
+      "learning_rate": 0.000001,
+      "weight_decay": 0.01,
+      "gamma": 1,
+      "ppo_minibatch_rows": 256,
+      "ppo_epochs": 1,
+      "loss_normalization": "trajectory"
+    },
+    "fgpo_no_full_filtration": {
+      "rounds": 60,
+      "training_window_source": "r3_shared_system_60_rounds",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      },
+      "history_length": 2,
+      "learning_rate": 0.000001,
+      "weight_decay": 0.01,
+      "gamma": 1,
+      "ppo_minibatch_rows": 256,
+      "ppo_epochs": 1,
+      "loss_normalization": "trajectory"
+    },
+    "fgpo_no_transfer": {
+      "rounds": 60,
+      "training_window_source": "r3_shared_system_60_rounds",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      },
+      "history_length": null,
+      "learning_rate": 0.000001,
+      "weight_decay": 0.01,
+      "gamma": 1,
+      "ppo_minibatch_rows": 256,
+      "ppo_epochs": 1,
+      "loss_normalization": "trajectory"
+    },
+    "fgpo_obs_only": {
+      "rounds": 60,
+      "training_window_source": "r3_shared_system_60_rounds",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      },
+      "history_length": null,
+      "learning_rate": 0.000001,
+      "weight_decay": 0.01,
+      "gamma": 1,
+      "ppo_minibatch_rows": 256,
+      "ppo_epochs": 1,
+      "loss_normalization": "trajectory"
+    },
+    "fgpo_no_support_weight": {
+      "rounds": 60,
+      "training_window_source": "r3_shared_system_60_rounds",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      },
+      "history_length": null,
+      "learning_rate": 0.000001,
+      "weight_decay": 0.01,
+      "gamma": 1,
+      "ppo_minibatch_rows": 256,
+      "ppo_epochs": 1,
+      "loss_normalization": "trajectory"
+    },
+    "gigpo_shared": {
+      "rounds": 60,
+      "training_window_source": "r3_shared_system_60_rounds",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      },
+      "history_length": null,
+      "learning_rate": 0.000001,
+      "weight_decay": 0.01,
+      "gamma": 1,
+      "ppo_minibatch_rows": 256,
+      "ppo_epochs": 1,
+      "loss_normalization": "trajectory"
+    },
+    "bipace_q_shared": {
+      "rounds": 60,
+      "training_window_source": "r3_shared_system_60_rounds",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      },
+      "history_length": null,
+      "learning_rate": 0.000001,
+      "weight_decay": 0.01,
+      "gamma": 1,
+      "ppo_minibatch_rows": 256,
+      "ppo_epochs": 1,
+      "loss_normalization": "trajectory"
+    },
+    "native_qwen_shared": {
+      "rounds": 0,
+      "training_window_source": "frozen_shared_system",
+      "output_tokens_by_benchmark": {
+        "alfworld": 256,
+        "appworld": 1024
+      },
+      "history_length": null,
+      "learning_rate": 0.000001,
+      "weight_decay": 0.01,
+      "gamma": 1,
+      "ppo_minibatch_rows": 256,
+      "ppo_epochs": 1,
+      "loss_normalization": "trajectory"
+    },
+    "gigpo": {
+      "rounds": 150,
+      "training_window_source": "author_complete_iterations",
+      "output_tokens_by_benchmark": {
+        "alfworld": 512,
+        "appworld": 1024
+      },
+      "history_length": 2,
+      "author_prompt_length": 2048,
+      "learning_rate": 0.000001,
+      "gamma": 0.95,
+      "ppo_minibatch_rows": 256,
+      "ppo_epochs": 1,
+      "loss_normalization": "token"
+    },
+    "bipace_q": {
+      "rounds": 150,
+      "training_window_source": "author_complete_iterations",
+      "output_tokens_by_benchmark": {
+        "alfworld": 512,
+        "appworld": 1024
+      },
+      "history_length": 2,
+      "author_prompt_length": 2048,
+      "learning_rate": 5e-7,
+      "gamma": 0.95,
+      "ppo_minibatch_rows": 128,
+      "ppo_epochs": 1,
+      "loss_normalization": "token"
+    },
+    "self": {
+      "rounds": 60,
+      "training_window_source": "study_finite_Qwen7B_ALF_migration_window_not_author_reported",
+      "output_tokens_by_benchmark": {
+        "alfworld": 512,
+        "appworld": 1024
+      },
+      "max_context_tokens": 32768,
+      "history_mode": "full_messages_with_model_context_window",
+      "learning_rate": 0.0003,
+      "weight_decay": 0,
+      "self_collection_trajectories": 16,
+      "self_batch_size": 16,
+      "lora_rank": 96,
+      "lora_alpha": 128,
+      "lora_dropout": 0.05,
+      "teacher_ema_decay": 0.99,
+      "loss_normalization": "token"
+    },
+    "skill_disco": {
+      "rounds": 0,
+      "training_window_source": "single_author_offline_pipeline_no_outer_RL_rounds",
+      "output_tokens_by_benchmark": {
+        "alfworld": 512,
+        "appworld": 1024
+      },
+      "max_context_tokens": 32768,
+      "history_mode": "full_messages_with_skill_library_and_model_context_window",
+      "workflow": "single_author_offline_induction_and_verification",
+      "skill_refinements": 3,
+      "skill_operation_batch_size": 32,
+      "skill_induction_output_tokens": 8192,
+      "loss_normalization": "token"
+    },
+    "native_qwen": {
+      "rounds": 0,
+      "training_window_source": "frozen_no_training",
+      "output_tokens_by_benchmark": {
+        "alfworld": 512,
+        "appworld": 1024
+      },
+      "max_context_tokens": 32768,
+      "history_mode": "full_messages_with_model_context_window",
+      "workflow": "frozen_no_training",
+      "loss_normalization": "token"
+    }
+  },
+  "adaptations": [
+    "fresh_r3_study_no_v1_resume",
+    "shared_Qwen2.5_7B_backbone",
+    "official_native_ALFWorld_and_AppWorld_interfaces",
+    "full_official_evaluation_splits",
+    "finite_horizon_terminal_success_gamma1",
+    "shared_system_history_outputs_training_rounds_and_optimizer",
+    "own_short_history_ablation_uses_two_complete_turns",
+    "author_recipe_transfers_are_separate_optional_methods",
+    "SELF_study_finite_migration_window60_not_author_reported",
+    "Skill_DisCo_single_offline_workflow"
+  ],
+  "environment_pool_size": 8,
+  "cache_initial_capacity": 1024,
+  "representation_token_budget": 8192,
+  "representation_batch_size": 8,
+  "working_memory_gib": 6,
+  "head_chunk_tokens": 64,
+  "optimizer_bucket_mib": 64,
+  "optimizer_pin_memory": true,
+  "checkpoint_interval_groups": 16,
+  "reward_scale": 10,
+  "credit_radius": 0.1,
+  "credit_prior_weight": 1,
+  "credit_transfer_max": 1,
+  "ppo_clip_ratio": 0.2,
+  "ppo_dual_clip": 3,
+  "entropy_coef": 0.001,
+  "kl_coef": 0.01,
+  "max_grad_norm": 1
+}

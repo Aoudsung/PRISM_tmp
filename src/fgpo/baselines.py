@@ -25,6 +25,7 @@ from torch.utils.checkpoint import checkpoint
 from .records import StepRecord, SegmentRecord, TrajectoryRecord, GroupRecord, TokenSpan, TurnBlock
 from .policy import clock
 from .optimization import UpdateCursor
+from .protocol import SHARED_BASELINES
 
 
 AUTHOR_RECIPES = {
@@ -116,13 +117,19 @@ def native_prompt(policy,pin,history,current,*,method,config,memory=None,schema=
 def sample_ids(policy,prompt,generator,limit,*,role):
     state = policy.prefill_root(prompt,role=role+".prefill")
     ids,logp = [],[]
-    for i in range(limit):
-        tokens,scores = policy.draw_tokens(state,[0],[generator])
-        ids.extend(tokens);logp.extend(scores)
-        if tokens[0] in policy.eos_token_ids or i+1==limit:
-            break
-        state = policy.append_cache(state,[tokens],role=role+".decode")
-    return tuple(ids),tuple(logp)
+    try:
+        for i in range(limit):
+            tokens,scores = policy.draw_tokens(state,[0],[generator])
+            ids.extend(tokens);logp.extend(scores)
+            if tokens[0] in policy.eos_token_ids or i+1==limit:
+                break
+            previous = state
+            state = policy.append_cache(previous,[tokens],role=role+".decode")
+            if state is not previous:
+                policy.release_cache(previous)
+        return tuple(ids),tuple(logp)
+    finally:
+        policy.release_cache(state)
 
 
 def collect_native_trajectory(policy,env_factory,*,task_id,initial_seed,sampling_seed,group_id,
@@ -225,10 +232,18 @@ def collect_native_group(policy,env_factory,*,task_id,initial_seed,slot_seeds,gr
     return GroupRecord(group_id,task_id,policy.benchmark,initial_seed,trajectories,tuple(policy.ledger.records[start:]))
 
 
-def baseline_advantages(policy,trajectories,method):
+def baseline_advantages(policy,trajectories,method,*,config=None):
+    config = {} if config is None else config
+    shared = method in SHARED_BASELINES
+    recipe_method = SHARED_BASELINES.get(method,method)
+    if recipe_method not in ("gigpo","bipace_q"):
+        raise ValueError(f"No PPO advantage recipe for {method!r}")
+    gamma = float(config.get("gamma",1. if shared else .95))
+    scale = float(config.get("reward_scale",10.))
+    syntax_penalty = 0. if shared else float(config.get("syntax_reward_penalty",.1))
     groups,episode,discounted,anchors,keys = {},{},{},{},{}
     for trajectory in trajectories:
-        groups.setdefault(trajectory.group_id,[]).extend(trajectory.steps)
+        groups.setdefault(trajectory.group_id,[]).append(trajectory)
         running = 0.
         previous = trajectory.initial_observation_ids
         for row in trajectory.steps:
@@ -236,29 +251,34 @@ def baseline_advantages(policy,trajectories,method):
             previous = row.observation_ids
             raw = policy.tokenizer.decode(row.response_ids,skip_special_tokens=True)
             match = re.search(r"<action>([\s\S]+?)</action>",raw,re.IGNORECASE)
-            keys[row.step_id] = ("CODE::"+row.action["code"] if policy.benchmark=="appworld" else
-                "ACT::"+match.group(1).strip() if match else "FIRST8::"+str(row.response_ids[:8]))
+            if policy.benchmark=="appworld":
+                code = row.action.get("code")
+                keys[row.step_id] = ("CODE::"+code if isinstance(code,str) else
+                    "INVALID::"+str(row.action.get("raw_text",raw)))
+            else:
+                keys[row.step_id] = ("ACT::"+match.group(1).strip() if match else
+                    "FIRST8::"+str(row.response_ids[:8]))
         for row in reversed(trajectory.steps):
-            reward = 10.*float(trajectory.official_success) if row.index==len(trajectory.steps)-1 else 0.
-            running = reward+.95*running
-            episode[row.step_id] = 10.*float(trajectory.official_success)-.1*(not row.syntax_valid)
-            discounted[row.step_id] = running-.1*(not row.syntax_valid)
+            reward = scale*float(trajectory.official_success) if row.index==len(trajectory.steps)-1 else 0.
+            running = reward+gamma*running
+            discounted[row.step_id] = running-syntax_penalty*(not row.syntax_valid)
+        episode[trajectory.trajectory_id] = scale*float(trajectory.official_success)
     embeddings = {}
-    if method=="bipace_q":
-        rows = [row for t in trajectories for row in t.steps]
-        for start in range(0,len(rows),8):
-            selected = rows[start:start+8]
-            with torch.no_grad():
-                vectors = policy.observation_embeddings([anchors[r.step_id] or policy.encode("[Empty stdout]") for r in selected],
-                                                       role="bipace.current_actor_anchor")
-            embeddings.update({r.step_id:z for r,z in zip(selected,vectors)})
+    if recipe_method=="bipace_q":
+        # BiPACE §3.4 fingerprints the actual current prompt, including history.
+        # Observation-only vectors would change its published comparison unit.
+        from .reference import actor_history_embeddings
+        embeddings = actor_history_embeddings(policy,trajectories)
     output = {}
-    for rows in groups.values():
-        values = torch.tensor([episode[r.step_id] for r in rows],dtype=torch.float32)
-        normalized = (values-values.mean())/(values.std(unbiased=True)+1e-6) if len(rows)>1 else torch.zeros_like(values)
-        output.update({r.step_id:float(a) for r,a in zip(rows,normalized)})
+    for group in groups.values():
+        rows = [row for trajectory in group for row in trajectory.steps]
+        # Episode statistics have one vote per trajectory, not one per turn.
+        values = torch.tensor([episode[t.trajectory_id] for t in group],dtype=torch.float32)
+        normalized = (values-values.mean())/(values.std(unbiased=True)+1e-6) if len(values)>1 else torch.zeros_like(values)
+        for trajectory,value in zip(group,normalized,strict=True):
+            output.update({row.step_id:float(value) for row in trajectory.steps})
         clusters,centroids = [],[]
-        if method=="gigpo":
+        if recipe_method=="gigpo":
             by_anchor = {}
             for row in rows:
                 by_anchor.setdefault(anchors[row.step_id],[]).append(row)
@@ -275,7 +295,7 @@ def baseline_advantages(policy,trajectories,method):
                     clusters.append([row]);centroids.append(z.clone())
         for cluster in clusters:
             returns = torch.tensor([discounted[r.step_id] for r in cluster],dtype=torch.float32)
-            if method=="gigpo":
+            if recipe_method=="gigpo":
                 a = (returns-returns.mean())/(returns.std(unbiased=True)+1e-6) if len(cluster)>1 else torch.zeros_like(returns)
                 for row,value in zip(cluster,a):
                     output[row.step_id] += float(value)

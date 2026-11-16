@@ -1,6 +1,6 @@
-"""Exact F-GPO study orchestration, author baselines and recoverable pending work."""
+"""r3 terminal-success studies, shared-system comparators and recoverable work."""
 from __future__ import annotations
-from dataclasses import dataclass,field,asdict
+from dataclasses import dataclass,field
 import json
 from pathlib import Path
 import random
@@ -8,15 +8,15 @@ import signal
 
 from .policy import CausalPolicy,clock
 from .records import CostLedger
-from .optimization import OffloadedAdamW,WeightReference,UpdateCursor,ppo_update
+from .optimization import OffloadedAdamW,WeightReference,ppo_update
 from .reference import prepare_round
 from .credit import advantages
 from .baselines import (AUTHOR_RECIPES,collect_native_group,collect_native_trajectory,
-                        baseline_advantages,self_update,SelfCursor,SkillLibrary,SkillState)
+                        baseline_advantages,self_update,SkillLibrary)
 from . import checkpoint
-
-OWN_METHODS = ("fgpo","fgpo_no_full_filtration","fgpo_no_befp","fgpo_no_dag_loo")
-METHODS = OWN_METHODS+tuple(AUTHOR_RECIPES)
+from .protocol import (PROTOCOL, OWN_METHODS, METHODS, SHARED_METHODS,
+                       SHARED_FROZEN, FROZEN_METHODS, require_protocol,
+                       effective_training_identity, require_training_identity)
 
 
 class TrainingInterrupted(Exception):
@@ -32,6 +32,7 @@ class EngineState:
     task_order: list = field(default_factory=list)
     reference_data: object = None
     advantages: dict = field(default_factory=dict)
+    credit_diagnostics: dict = field(default_factory=dict)
     update_cursor: object = None
     skill_state: object = None
     evaluation_completed: dict = field(default_factory=dict)
@@ -47,6 +48,7 @@ class Engine:
             "compute_physical_gpu_ids","compute_logical_gpu_ids","model_placement_explicit") if key in self.config}
         self.config.update(self.config.get("method_configs",{}).get(method,{}))
         self.config.update(placement)
+        require_protocol(self.config)
         if method not in METHODS:
             raise ValueError(f"Unknown formal study method {method!r}")
         self.method,self.benchmark,self.seed = method,self.config["benchmark"],int(self.config["seed"])
@@ -77,13 +79,17 @@ class Engine:
     def _make_policy(self,path=None):
         start = clock()
         adaptation = "self_lora" if self.method=="self" else None
-        trainable = self.method not in ("native_qwen","skill_disco")
+        trainable = self.method not in FROZEN_METHODS
         policy = CausalPolicy(self.config["model_path"],gpu_ids=self.compute_gpu_ids,ledger=self.ledger,
             trainable=trainable,adaptation=adaptation,checkpoint=path,
             free_memory_gib=self.config.get("gpu_free_memory_gib"),
-            activation_offload=self.config.get("activation_offload",True),benchmark=self.benchmark)
-        if self.method not in OWN_METHODS:
-            policy.max_new_tokens = int(self.config.get("output_tokens",512 if self.benchmark=="alfworld" else 1024))
+            activation_offload=self.config.get("activation_offload",False),benchmark=self.benchmark,
+            max_context_tokens=int(self.config.get("max_context_tokens",32768)),
+            max_new_tokens=int(self.config.get("output_tokens",256 if self.benchmark=="alfworld" else 1024)),
+            cache_initial_capacity=int(self.config.get("cache_initial_capacity",1024)),
+            representation_token_budget=int(self.config.get("representation_token_budget",8192)),
+            representation_batch_size=int(self.config.get("representation_batch_size",8)),
+            working_memory_gib=float(self.config.get("working_memory_gib",6.)))
         policy.metadata.update({"method":self.method,"max_context_tokens":policy.max_context_tokens,
             "allocated_logical_gpu_ids":list(self.gpu_ids),
             "allocated_physical_gpu_ids":self.config.get("allocated_physical_gpu_ids",self.config.get("physical_gpu_ids")),
@@ -92,10 +98,16 @@ class Engine:
             "compute_logical_gpu_ids":list(self.compute_gpu_ids),
             "compute_physical_gpu_ids":self.config.get("compute_physical_gpu_ids",self.config.get("physical_gpu_ids")),
             "model_placement_explicit":self.config.get("model_placement_explicit",False),
-            "output_tokens":policy.max_new_tokens,"recipe":({"lr":1e-6,"weight_decay":.01,
-                "groups":16,"trajectories":8,"rounds":60,"row_order":"stable_group_trajectory_segment",
-                "Z_mb":"round_response_tokens / fixed_row_minibatch_count","chunk_tokens":32}
-                if self.method in OWN_METHODS else AUTHOR_RECIPES[self.method])})
+            "output_tokens":policy.max_new_tokens,"protocol":PROTOCOL,
+            "effective_training_identity":effective_training_identity(self.config),
+            "recipe":({"lr":float(self.config.get("learning_rate",1e-6)),
+                "weight_decay":float(self.config.get("weight_decay",.01)),
+                "groups":int(self.config.get("groups",16)),"trajectories":int(self.config.get("trajectories",8)),
+                "rounds":int(self.config.get("rounds",60)),"row_order":"stable_group_trajectory_segment",
+                "loss_normalization":self.config.get("loss_normalization","trajectory"),
+                "chunk_tokens":int(self.config.get("head_chunk_tokens",64)),
+                "gamma":1.,"intrinsic_reward":False}
+                if self.method in SHARED_METHODS else AUTHOR_RECIPES[self.method])})
         if self.method in ("gigpo","bipace_q"):
             policy.metadata["prompt_transfer"] = {"history_length":2,"alfworld":"official_SimpleMemory_template",
                 "alfworld_prompt_capacity":int(self.config.get("author_prompt_length",2048)),
@@ -116,10 +128,16 @@ class Engine:
         return policy
 
     def _make_learning_state(self):
-        if self.method in ("native_qwen","skill_disco"):
+        if self.method in FROZEN_METHODS:
             return None,None,None
-        recipe = {"lr":1e-6,"weight_decay":.01} if self.method in OWN_METHODS else AUTHOR_RECIPES[self.method]
-        optimizer = OffloadedAdamW(self.policy.model,lr=recipe["lr"],weight_decay=recipe["weight_decay"])
+        recipe = {"lr":1e-6,"weight_decay":.01} if self.method in SHARED_METHODS else AUTHOR_RECIPES[self.method]
+        optimizer = OffloadedAdamW(self.policy.model,
+            lr=float(self.config.get("learning_rate",recipe["lr"])),
+            weight_decay=float(self.config.get("weight_decay",recipe["weight_decay"])),
+            betas=tuple(self.config.get("optimizer_betas",(.9,.999))),
+            eps=float(self.config.get("optimizer_eps",1e-8)),
+            bucket_mib=int(self.config.get("optimizer_bucket_mib",64)),
+            pin_memory=bool(self.config.get("optimizer_pin_memory",True)))
         if self.method=="self":
             return optimizer,None,WeightReference(self.policy.model,trainable_only=True)
         return optimizer,WeightReference(self.policy.model),None
@@ -154,7 +172,7 @@ class Engine:
     def train(self,task_rows,env_factory):
         if self._storage_finalized:
             raise ValueError("Completed-cell deployment state cannot implicitly restart training")
-        if self.method=="native_qwen":
+        if self.method in ("native_qwen",SHARED_FROZEN):
             return self._result("complete")
         if not self.state.task_order:
             rows = [dict(row) for row in task_rows]
@@ -173,27 +191,34 @@ class Engine:
                 self.state.phase = "complete"
                 self._boundary(durable=True)
                 return self._result("complete")
-            rounds = 60 if self.method in OWN_METHODS else int(AUTHOR_RECIPES[self.method]["rounds"])
-            if self.method=="self":
-                rounds = int(self.config.get("rounds",60))
+            default_rounds = 60 if self.method in SHARED_METHODS else int(AUTHOR_RECIPES[self.method]["rounds"])
+            rounds = int(self.config.get("rounds",default_rounds))
+            if rounds < 1:
+                raise ValueError("Trainable methods require a positive configured round count")
             while self.state.round<rounds:
                 if self.state.phase=="collect":
-                    count = int(self.config.get("self_collection_trajectories",16)) if self.method=="self" else 16
+                    count = int(self.config.get("self_collection_trajectories",16)) if self.method=="self" else int(self.config.get("groups",16))
+                    if count < 1:
+                        raise ValueError("A training round requires at least one task group")
                     while self.state.group_cursor<count:
                         g = self.state.group_cursor
                         task = tasks[(self.state.round*count+g)%len(tasks)]
                         initial_seed = self.seed*1000003+self.state.round*count+g
-                        k = 1 if self.method=="self" else 8
+                        k = 1 if self.method=="self" else int(self.config.get("trajectories",8))
+                        if self.method in OWN_METHODS and k < 2:
+                            raise ValueError("r3 peer credit requires at least two independent trajectories")
                         seeds = [self.seed*1000000007+self.state.round*1000003+g*101+slot for slot in range(k)]
                         group_id = f"{self.method}:{self.seed}:{self.state.round}:{g}"
-                        if self.method in OWN_METHODS:
+                        if self.method in SHARED_METHODS:
                             from .rollout import collect_group
-                            group = collect_group(self.policy,env_factory,task_id=task["task_id"],benchmark=self.benchmark,
-                                initial_seed=initial_seed,slot_seeds=seeds,group_id=group_id,
-                                history_length=2 if self.method=="fgpo_no_full_filtration" else None,ledger=self.ledger)
+                            with self.policy.phase("rollout.group"):
+                                group = collect_group(self.policy,env_factory,task_id=task["task_id"],benchmark=self.benchmark,
+                                    initial_seed=initial_seed,slot_seeds=seeds,group_id=group_id,
+                                    history_length=2 if self.method=="fgpo_no_full_filtration" else None,ledger=self.ledger)
                         else:
-                            group = collect_native_group(self.policy,env_factory,task_id=task["task_id"],initial_seed=initial_seed,
-                                slot_seeds=seeds,group_id=group_id,method=self.method,config=self.config)
+                            with self.policy.phase("rollout.group"):
+                                group = collect_native_group(self.policy,env_factory,task_id=task["task_id"],initial_seed=initial_seed,
+                                    slot_seeds=seeds,group_id=group_id,method=self.method,config=self.config)
                         self.state.groups.append(group)
                         import torch
                         directory = self.output_dir/"groups"
@@ -205,23 +230,36 @@ class Engine:
                 trajectories = [t for group in self.state.groups for t in group.trajectories]
                 if self.state.phase=="reference":
                     if self.method not in OWN_METHODS:
-                        self.state.advantages = baseline_advantages(self.policy,trajectories,self.method)
+                        with self.policy.phase("baseline.advantages"):
+                            self.state.advantages = baseline_advantages(self.policy,trajectories,self.method,config=self.config)
                     with self.policy.phase("reference.single_round_activation"),self.reference.activate(self.policy.model):
                         self.policy._reference_active = True
                         try:
-                            self.state.reference_data = prepare_round(self.policy,trajectories,method=self.method)
+                            self.state.reference_data = prepare_round(self.policy,trajectories,method=self.method,config=self.config)
                         finally:
                             self.policy._reference_active = False
                     if self.method in OWN_METHODS:
-                        self.state.advantages = advantages(trajectories,self.state.reference_data,method=self.method)
+                        start = clock()
+                        self.state.credit_diagnostics = {}
+                        self.state.advantages = advantages(trajectories,self.state.reference_data,method=self.method,
+                            config=self.config,diagnostics=self.state.credit_diagnostics)
+                        self.ledger.record("controller","credit.peer_values",seconds=clock()-start,
+                            details={"groups":len(self.state.credit_diagnostics),"recursive_bootstrapping":False})
                     self.state.phase = "update"
                     self._boundary(durable=True)
                 if self.state.phase=="update":
-                    minibatch = 256 if self.method in OWN_METHODS else AUTHOR_RECIPES[self.method]["minibatch"]
+                    minibatch = 256 if self.method in SHARED_METHODS else AUTHOR_RECIPES[self.method]["minibatch"]
                     self.state.update_cursor = ppo_update(self.policy,trajectories,self.state.reference_data,
                         self.state.advantages,self.optimizer,minibatch_rows=int(self.config.get("ppo_minibatch_rows",minibatch)),
                         cursor=self.state.update_cursor,checkpoint_callback=self._boundary,
-                        constant_denominator=self.method in OWN_METHODS,chunk_tokens=32)
+                        constant_denominator=self.method in SHARED_METHODS,
+                        chunk_tokens=int(self.config.get("head_chunk_tokens",64)),
+                        loss_normalization=self.config.get("loss_normalization","trajectory" if self.method in SHARED_METHODS else "token"),
+                        clip_ratio=float(self.config.get("ppo_clip_ratio",.2)),
+                        dual_clip=float(self.config.get("ppo_dual_clip",3.)),
+                        entropy_coef=float(self.config.get("entropy_coef",.001)),
+                        kl_coef=float(self.config.get("kl_coef",.01)),
+                        max_grad_norm=float(self.config.get("max_grad_norm",1.)))
                 elif self.state.phase=="self_update":
                     self.state.update_cursor = self_update(self.policy,trajectories,self.optimizer,self.teacher,self.rng,
                         cursor=self.state.update_cursor,on_boundary=self._boundary,chunk_tokens=32)
@@ -229,6 +267,7 @@ class Engine:
                 self.state.round += 1
                 self.state.phase,self.state.group_cursor = "collect",0
                 self.state.groups,self.state.reference_data,self.state.advantages,self.state.update_cursor = [],None,{},None
+                self.state.credit_diagnostics = {}
                 self._boundary(durable=True)
             self.state.completed,self.state.phase = True,"complete"
             self._boundary(durable=True)
@@ -246,14 +285,14 @@ class Engine:
                        self.output_dir/f"reference-round-{self.state.round}.pt")
         payload = {"method":self.method,"round":self.state.round,
             "successes":sum(t.official_success for t in trajectories),"trajectories":len(trajectories),
-            "optimizer_steps":self.optimizer.steps,"costs":self.ledger.snapshot(),
+            "protocol":PROTOCOL,"optimizer_steps":self.optimizer.steps,"costs":self.ledger.snapshot(),
             "metrics":self.state.update_cursor.metrics}
         if self.method in OWN_METHODS:
-            data = self.state.reference_data.steps
             payload["diagnostics"] = {"all_zero_groups":sum(not any(t.official_success for t in g.trajectories) for g in self.state.groups),
                 "nonzero_advantages":sum(abs(v)>0 for v in self.state.advantages.values()),
-                "positive_failed_prefixes":sum(self.state.advantages[row.step_id]>0 for t in trajectories if not t.official_success for row in t.steps),
-                "failed_potential_max":max((data[t.steps[-1].step_id].potential_after for t in trajectories if not t.official_success),default=0.)}
+                "positive_failed_steps":sum(self.state.advantages[row.step_id]>0 for t in trajectories if not t.official_success for row in t.steps),
+                "intrinsic_reward_enabled":False,"credit_groups":self.state.credit_diagnostics,
+                "credit_diagnostic_scope":"held_out_outcomes_include_Bernoulli_noise_not_true_Q"}
         with (self.output_dir/"training.jsonl").open("a",encoding="utf-8") as handle:
             handle.write(json.dumps(payload,ensure_ascii=False,allow_nan=False)+"\n")
 
@@ -267,7 +306,7 @@ class Engine:
                     if not line.endswith(b"\n"):
                         break
                     row = json.loads(line)
-                    for key,value in (("method",self.method),("benchmark",self.benchmark),("seed",self.seed),("split",split)):
+                    for key,value in (("protocol",PROTOCOL),("method",self.method),("benchmark",self.benchmark),("seed",self.seed),("split",split)):
                         if row[key]!=value:
                             raise ValueError("Persisted official evaluation belongs to another study identity")
                     completed[row["task_id"]] = row
@@ -291,22 +330,24 @@ class Engine:
                     records.append(completed[task["task_id"]])
                     continue
                 group_id = f"evaluation:{split}:{index}"
-                if self.method in OWN_METHODS:
+                if self.method in SHARED_METHODS:
                     from .rollout import collect_group
-                    group = collect_group(self.policy,env_factory,task_id=task["task_id"],benchmark=self.benchmark,
-                        initial_seed=self.seed,slot_seeds=[self.seed*1000003+index],group_id=group_id,
-                        history_length=2 if self.method=="fgpo_no_full_filtration" else None,ledger=self.ledger)
+                    with self.policy.phase("evaluation.rollout"):
+                        group = collect_group(self.policy,env_factory,task_id=task["task_id"],benchmark=self.benchmark,
+                            initial_seed=self.seed,slot_seeds=[self.seed*1000003+index],group_id=group_id,
+                            history_length=2 if self.method=="fgpo_no_full_filtration" else None,ledger=self.ledger)
                     trajectory = group.trajectories[0]
                 else:
                     self.ledger.begin_group(group_id)
-                    trajectory = collect_native_trajectory(self.policy,env_factory,task_id=task["task_id"],initial_seed=self.seed,
-                        sampling_seed=self.seed*1000003+index,group_id=group_id,slot=0,method=self.method,
-                        config=self.config,library=self.library)
-                costs = group.costs if self.method in OWN_METHODS else trajectory.costs
+                    with self.policy.phase("evaluation.rollout"):
+                        trajectory = collect_native_trajectory(self.policy,env_factory,task_id=task["task_id"],initial_seed=self.seed,
+                            sampling_seed=self.seed*1000003+index,group_id=group_id,slot=0,method=self.method,
+                            config=self.config,library=self.library)
+                costs = group.costs if self.method in SHARED_METHODS else trajectory.costs
                 row = {"task_id":task["task_id"],"trajectory_id":trajectory.trajectory_id,
                     "official_evaluation":dict(trajectory.official_metrics),"steps":len(trajectory.steps),
                     "input_tokens":sum(c.input_tokens or 0 for c in costs),"output_tokens":sum(c.output_tokens or 0 for c in costs),
-                    "method":self.method,"benchmark":self.benchmark,"seed":self.seed,"split":split}
+                    "protocol":PROTOCOL,"method":self.method,"benchmark":self.benchmark,"seed":self.seed,"split":split}
                 with path.open("a",encoding="utf-8") as handle:
                     handle.write(json.dumps(row,ensure_ascii=False)+"\n")
                 records.append(row)
@@ -318,10 +359,10 @@ class Engine:
                     break
         finally:
             self._restore_signals()
-        return {"status":status,"records":records,"method":self.method,"benchmark":self.benchmark,"seed":self.seed,"split":split}
+        return {"status":status,"protocol":PROTOCOL,"records":records,"method":self.method,"benchmark":self.benchmark,"seed":self.seed,"split":split}
 
     def _result(self,status):
-        return {"status":status,"method":self.method,"benchmark":self.benchmark,"seed":self.seed,
+        return {"status":status,"protocol":PROTOCOL,"method":self.method,"benchmark":self.benchmark,"seed":self.seed,
             "rounds_completed":self.state.round,"phase":self.state.phase,
             "optimizer_steps":self.optimizer.steps if self.optimizer else 0,
             "skill_count":len(self.library.skills) if self.library else 0,"costs":self.ledger.snapshot()}
@@ -342,7 +383,7 @@ class Engine:
         if (training.get("status")!="complete" or set(evaluation)!=expected or
             any(not item["dataset_complete"] for item in evaluation.values())):
             raise ValueError("Incomplete official work retains its full exact-resume checkpoint")
-        if self.method!="native_qwen" and not self.state.completed:
+        if self.method not in ("native_qwen",SHARED_FROZEN) and not self.state.completed:
             raise ValueError("Training has pending work; its full state remains retained")
         full_root = self.output_dir/"checkpoint"
         self.save_checkpoint(full_root)
@@ -382,13 +423,17 @@ class Engine:
 
     def _restore_checkpoint(self,saved):
         config = saved["trainer"]["config"]
-        for key in ("method","benchmark","seed","model_path"):
-            if config[key] != self.config[key]:
-                raise ValueError(f"Resume identity differs at {key}")
+        require_training_identity(config,self.config)
         self.policy = self._make_policy(saved["model_path"])
+        if self.method=="self" and saved["metadata"]["model"]["device_map"]!=self.policy.metadata["device_map"]:
+            raise ValueError("SELF dropout resume requires the saved logical layer placement and CUDA RNG assignment")
         if saved["metadata"]["has_optimizer"]:
-            self.optimizer = OffloadedAdamW(self.policy.model)
+            self.optimizer = OffloadedAdamW(self.policy.model,
+                bucket_mib=float(self.config.get("optimizer_bucket_mib",64)),
+                pin_memory=bool(self.config.get("optimizer_pin_memory",True)))
             self.optimizer.load_state_dict(saved["optimizer"])
+            self.optimizer.bucket_bytes = int(float(self.config.get("optimizer_bucket_mib",64))*1024*1024)
+            self.optimizer.pin_memory = bool(self.config.get("optimizer_pin_memory",True))
             self.optimizer.restore_gradients(saved["gradients"])
         self.reference = WeightReference(state=saved["reference"]) if saved["metadata"]["has_reference"] else None
         self.teacher = WeightReference(state=saved["teacher"]) if saved["metadata"]["has_teacher"] else None
