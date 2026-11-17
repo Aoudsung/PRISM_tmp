@@ -9,9 +9,10 @@ import os
 from pathlib import Path
 from statistics import fmean, stdev
 
-from .envs import make_env, EnvironmentPool
+from .envs import make_env, EnvironmentPool, ALFWORLD_TABLE_COLUMNS
 from .metrics import official_summary
 from .baseline_specs import PUBLISHED_SOURCES
+from .records import CostLedger, monotonic_seconds
 from .protocol import (METHODS, METHOD_ROLES, SUITE_METHODS, SUITE_BENCHMARKS,
                        resolve_method_config, require_protocol, require_training_identity)
 
@@ -88,21 +89,38 @@ def _validate_suite_cells(cells, config, suite):
 def run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_ids=None, resume=False):
     """Reserve the full CPU training footprint before loading or sampling."""
     require_protocol(config)
+    startup_started = monotonic_seconds()
     output = Path(output_dir)
+    options = resolve_method_config(dict(config, method=method, benchmark=benchmark, seed=int(seed)))
+    restore_receipt = None
+    from .checkpoint_gcs import configured, GCSCheckpoint
+    if configured(options):
+        with _file_lock(output.parent / f'.{output.name}.lock', nonblocking=True,
+                        error_message=f'Cell is already locked by another active worker: {output}'):
+            storage = GCSCheckpoint(options, output / 'checkpoint')
+            restore_receipt = storage.restore_cell(require_resume=resume, optional=True)
+            if restore_receipt is None:
+                resume = resume and output.exists()
+    startup_receipt = {'started': startup_started, 'gcs_restore': restore_receipt}
+    receipt_file = os.environ.get('FGPO_STARTUP_RECEIPT_FILE')
+    if receipt_file and Path(receipt_file).is_file():
+        startup_receipt['cold_asset_restore'] = json.loads(Path(receipt_file).read_text(encoding='utf-8'))
+        startup_receipt['cold_asset_receipt_file'] = receipt_file
     arguments = dict(method=method, benchmark=benchmark, seed=seed, gpu_ids=gpu_ids,
-                     model_gpu_ids=model_gpu_ids, resume=resume)
+                     model_gpu_ids=model_gpu_ids, resume=resume, startup_receipt=startup_receipt)
     if resume and (output / 'cell_summary.json').is_file():
         return _run_cell(config, output, **arguments)
     from .resources import reserve_host_memory
-    options = resolve_method_config(dict(config, method=method, benchmark=benchmark, seed=int(seed)))
     compute = gpu_ids if model_gpu_ids is None else model_gpu_ids
+    reserve_started = monotonic_seconds()
     with reserve_host_memory(options, model_gpu_count=len(compute),
                              resume_checkpoint=output / 'checkpoint' if resume and output.exists() else None) as allocation:
+        startup_receipt['host_reserve_seconds'] = monotonic_seconds() - reserve_started
         return _run_cell(config, output, **arguments, resource_allocation=allocation)
 
 
 def _run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu_ids=None,
-              resume=False, resource_allocation=None):
+              resume=False, resource_allocation=None, startup_receipt=None):
     require_protocol(config)
     # Resolve physical allocation before importing any Engine/CUDA code.
     logical_ids, visible_mask = isolate_gpus(gpu_ids, config['excluded_gpu_ids'])
@@ -131,12 +149,127 @@ def _run_cell(config, output_dir, *, method, benchmark, seed, gpu_ids, model_gpu
         return _run_locked_cell(
             config, cell_config, output,
             method=method, benchmark=benchmark, seed=seed,
-            Engine=Engine, resume=resume,
+            Engine=Engine, resume=resume, startup_receipt=startup_receipt,
         )
 
 
-def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, Engine, resume):
+_FINALIZATION_COSTS_SCOPE = (
+    'complete_cell_including_official_evaluation_final_export_reclamation_and_final_publish_logs'
+)
+_TERMINAL_PUBLICATION_BOUNDARY = (
+    'included_events_end_at_checkpoint_final_publish_logs_before_unmetered_terminal_summary_and_tail_export'
+)
+
+
+def _resume_pending_finalization(config, cell_config, output, complete_path, complete, *, storage, startup_receipt=None):
+    from .checkpoint import _sync_file, reclaim_completed_resume_state
+
+    marker_path = output / '.finalization_complete.json'
+    is_finalized = complete.get('finalization_stage') == 'finalized'
+    exported = marker_path.is_file()
+    if not exported and storage is not None and is_finalized:
+        with storage.open_snapshot(('CURRENT', 'FINAL'), verify_cell_root=True) as pinned:
+            cur_manifest, _, _ = pinned['CURRENT']
+            fin_manifest, _, _ = pinned['FINAL']
+            if (cur_manifest is None and fin_manifest is not None
+                    and bool(fin_manifest.get('metadata', {}).get('terminal_export_completed', False))):
+                exported = True
+    if is_finalized and exported:
+        if not marker_path.is_file():
+            write_json(marker_path, {
+                'protocol': config['protocol'],
+                'snapshot': complete.get('completed_checkpoint', {}).get('snapshot'),
+                'terminal_export_completed': True,
+            }, durable=True)
+        return complete
+
+    ledger = CostLedger(output / 'costs.jsonl', gpu_ids=cell_config['gpu_ids'])
+    if startup_receipt is not None and not ledger._startup_credited:
+        pre_seconds = monotonic_seconds() - startup_receipt['started']
+        details = {'catalog_seconds': 0.0, 'resumed': True, 'finalization_recovery': True}
+        for key in ('gcs_restore', 'host_reserve_seconds'):
+            if startup_receipt.get(key) is not None:
+                details[key] = startup_receipt[key]
+        ledger.credit_startup(
+            pre_engine_seconds=pre_seconds,
+            startup_details=details,
+            cold_asset_receipt=startup_receipt.get('cold_asset_restore'),
+        )
+        if startup_receipt.get('cold_asset_receipt_file'):
+            Path(startup_receipt['cold_asset_receipt_file']).unlink(missing_ok=True)
+
+    if storage is not None:
+        saved_state = storage.load_final_state()
+    else:
+        import torch
+        final_ptr = json.loads((output / 'final_checkpoint' / 'CURRENT').read_text(encoding='utf-8'))
+        saved_state = torch.load(
+            output / 'final_checkpoint' / 'snapshots' / final_ptr['snapshot'] / 'state.pt',
+            map_location='cpu',
+            weights_only=False,
+        )
+    ledger.load_state_dict(saved_state['ledger'])
+
+    seen_roles = set()
+    tail_offset = int(saved_state['ledger']['durable_offset_bytes'])
+    if ledger.path is not None and ledger.path.is_file():
+        with ledger.path.open('rb') as handle:
+            handle.seek(tail_offset)
+            for line in handle:
+                if line.endswith(b'\n'):
+                    seen_roles.add(json.loads(line).get('role'))
+
+    if storage is not None:
+        with storage.open_snapshot(('CURRENT',), verify_cell_root=True) as pinned:
+            needs_reclaim = (output / 'checkpoint').exists() or pinned['CURRENT'][0] is not None
+    else:
+        needs_reclaim = (output / 'checkpoint').exists()
+
+    if needs_reclaim:
+        rec_start = monotonic_seconds()
+        reclaimed = reclaim_completed_resume_state(
+            complete_path, storage=storage, keep_journal_state=(storage is not None),
+        )
+        rec_details = {'reclaimed': reclaimed, 'cell': str(output)}
+        if storage is not None and storage.last_transfer_stats is not None:
+            rec_details['transfer'] = dict(storage.last_transfer_stats)
+        ledger.record('checkpoint', 'checkpoint.reclaim_completed_resume_state',
+                      seconds=monotonic_seconds() - rec_start, details=rec_details)
+
+    if 'checkpoint.final_publish_logs' not in seen_roles:
+        pub_start = monotonic_seconds()
+        if storage is not None:
+            pub_receipt = storage.publish_logs()
+        else:
+            if ledger.path is not None and ledger.path.is_file():
+                _sync_file(ledger.path)
+            pub_receipt = {'backend': 'local'}
+        ledger.record('checkpoint', 'checkpoint.final_publish_logs',
+                      seconds=monotonic_seconds() - pub_start, details=pub_receipt)
+
+    if complete.get('finalization_stage') != 'finalized':
+        complete['costs'] = ledger.snapshot()
+        complete['costs_scope'] = _FINALIZATION_COSTS_SCOPE
+        complete['terminal_publication_boundary'] = _TERMINAL_PUBLICATION_BOUNDARY
+        complete['finalization_stage'] = 'finalized'
+        write_json(complete_path, complete, durable=True)
+
+    _sync_file(complete_path)
+    if ledger.path is not None and ledger.path.is_file():
+        _sync_file(ledger.path)
+    if storage is not None:
+        storage.publish_final_artifacts(complete_path)
+    write_json(marker_path, {
+        'protocol': config['protocol'],
+        'snapshot': complete.get('completed_checkpoint', {}).get('snapshot'),
+        'terminal_export_completed': True,
+    }, durable=True)
+    return complete
+
+
+def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, Engine, resume, startup_receipt=None):
     resume_from = None
+    catalog_seconds = 0.0
     if output.exists():
         if not resume:
             raise FileExistsError(f'Existing cell requires explicit --resume: {output}')
@@ -147,8 +280,12 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
             complete = json.loads(complete_path.read_text())
             require_identity(complete, cell_config)
             if complete.get('completed_checkpoint', {}).get('format') == 'fgpo-completed-model-v1':
-                from .checkpoint import reclaim_completed_resume_state
-                reclaim_completed_resume_state(complete_path)
+                from .checkpoint_gcs import configured, GCSCheckpoint
+                storage = GCSCheckpoint(cell_config, output / 'checkpoint') if configured(cell_config) else None
+                return _resume_pending_finalization(
+                    config, cell_config, output, complete_path, complete,
+                    storage=storage, startup_receipt=startup_receipt,
+                )
             return complete
         resume_from = output / 'checkpoint'
         if not (resume_from / 'CURRENT').is_file():
@@ -162,6 +299,7 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
     else:
         output.mkdir(parents=True, exist_ok=False)
         write_json(output / 'config.json', cell_config)
+        catalog_started = monotonic_seconds()
         catalog = make_env(cell_config, benchmark, output / 'environments/catalog', seed=seed)
         try:
             train_tasks = catalog.list_tasks('train')
@@ -170,12 +308,30 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
         finally:
             catalog.close()
         write_json(output / 'official_tasks.json', {'train': train_tasks, **evaluation_tasks})
+        catalog_seconds = monotonic_seconds() - catalog_started
 
+    pre_engine_seconds = (monotonic_seconds() - startup_receipt['started']) if startup_receipt else catalog_seconds
+    startup_details = {'catalog_seconds': catalog_seconds, 'resumed': resume_from is not None}
+    cold_asset_restore = None
+    cold_asset_receipt_file = None
+    if startup_receipt is not None:
+        for key in ('gcs_restore', 'host_reserve_seconds'):
+            if startup_receipt.get(key) is not None:
+                startup_details[key] = startup_receipt[key]
+        cold_asset_restore = startup_receipt.get('cold_asset_restore')
+        cold_asset_receipt_file = startup_receipt.get('cold_asset_receipt_file')
+    engine_startup = {
+        'pre_engine_seconds': pre_engine_seconds,
+        'details': startup_details,
+        'cold_asset_restore': cold_asset_restore,
+    }
     env_factory = EnvironmentPool(cell_config, benchmark, output / 'environments/pool',
                                   size=int(cell_config.get('environment_pool_size',cell_config.get('trajectories',8))))
     engine = None
     try:
-        engine = Engine(cell_config, output, resume_from=resume_from)
+        engine = Engine(cell_config, output, resume_from=resume_from, startup_receipt=engine_startup)
+        if cold_asset_receipt_file:
+            Path(cold_asset_receipt_file).unlink(missing_ok=True)
         # Each method executes its declared complete recipe once per study cell.
         training_path = output / 'training_summary.json'
         training = json.loads(training_path.read_text()) if resume_from and training_path.is_file() else None
@@ -227,12 +383,24 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
                   'published_source':PUBLISHED_SOURCES.get(method),
                   'model_path': cell_config['model_path'],
                   'checkpoint': completed_checkpoint['path'], 'completed_checkpoint': completed_checkpoint,
-                  'training_resume_supported': False,
+                  'training_resume_supported': False, 'finalization_stage': 'preliminary',
                   'training': training, 'evaluation': scores, 'costs': engine.ledger.snapshot(),
                   'costs_scope':'complete_cell_including_official_evaluation_and_final_model_export',
                   'environment_pool':env_factory.statistics()}
         write_json(output / 'cell_summary.json', result, durable=True)
         engine.reclaim_completed_checkpoint(output / 'cell_summary.json')
+        engine.publish_final_logs()
+        result['costs'] = engine.ledger.snapshot()
+        result['costs_scope'] = _FINALIZATION_COSTS_SCOPE
+        result['terminal_publication_boundary'] = _TERMINAL_PUBLICATION_BOUNDARY
+        result['finalization_stage'] = 'finalized'
+        write_json(output / 'cell_summary.json', result, durable=True)
+        engine.export_final_terminal_state(output / 'cell_summary.json')
+        write_json(output / '.finalization_complete.json', {
+            'protocol': config['protocol'],
+            'snapshot': completed_checkpoint.get('snapshot'),
+            'terminal_export_completed': True,
+        }, durable=True)
         return result
     finally:
         try:
@@ -244,22 +412,123 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
 
 def aggregate_cells(cells):
     """Seed statistics from completed official splits, with explicit seed count."""
-    grouped = {}
+    grouped, categories = {}, {}
+    seen = set()
     for cell in cells:
         if cell.get('status') != 'complete':
             continue
         for split, scores in cell['evaluation'].items():
             if not scores['dataset_complete']:
                 continue
+            if cell['benchmark'] == 'alfworld':
+                identity = (cell['benchmark'], cell['method'], split, cell['seed'])
+                if identity in seen:
+                    raise ValueError(f'Duplicate seed in official split aggregation: {identity}')
+                seen.add(identity)
+                for category, item in scores.get('task_types', {}).items():
+                    if category != 'All' and item['dataset_complete'] and item['SR'] is not None:
+                        key = (cell['benchmark'], cell['method'], split, category)
+                        categories.setdefault(key, []).append((cell['seed'], item['SR']))
+                if scores.get('SR') is not None:
+                    key = (cell['benchmark'], cell['method'], split, 'All')
+                    categories.setdefault(key, []).append((cell['seed'], scores['SR']))
             for metric in ('SR','TGC','SGC'):
                 if scores.get(metric) is not None:
                     key = (cell['benchmark'],cell['method'],split,metric)
                     grouped.setdefault(key,[]).append((cell['seed'],scores[metric]))
-    return [{'benchmark':benchmark,'method':method,'method_role':METHOD_ROLES[method],
+    def statistics(values):
+        seeds = sorted(seed for seed, _ in values)
+        return {'mean': fmean(value for _, value in values) if values else None,
+                'sample_std': stdev(value for _, value in values) if len(values) > 1 else None,
+                'seeds': seeds, 'seed_count': len(values), 'unit': 'percent',
+                'three_seed_complete': seeds == [0, 1, 2]}
+
+    rows = [{'benchmark':benchmark,'method':method,'method_role':METHOD_ROLES[method],
              'split':split,'metric':metric,'mean':fmean(value for _,value in values),
              'sample_std':stdev(value for _,value in values) if len(values)>1 else None,
              'seeds':sorted(seed for seed,_ in values),'seed_count':len(values),'unit':'percent'}
             for (benchmark,method,split,metric),values in sorted(grouped.items())]
+    for row in rows:
+        if row['benchmark'] == 'alfworld' and row['metric'] == 'SR':
+            row['task_types'] = {
+                category: statistics(categories.get((row['benchmark'], row['method'], row['split'], category), []))
+                for category in ALFWORLD_TABLE_COLUMNS}
+    return rows
+
+
+def alfworld_table(aggregates):
+    """Seven Table 1 percent columns from per-seed official success rates."""
+    rows = [{'method': row['method'], 'split': row['split'],
+             'task_types': row['task_types']}
+            for row in aggregates if row['benchmark'] == 'alfworld'
+            and row['metric'] == 'SR' and 'task_types' in row]
+    lines = ['SR (%); dispersion is sample standard deviation across the listed seeds.', '',
+             '| Method | Split | Seeds | ' + ' | '.join(ALFWORLD_TABLE_COLUMNS) + ' |',
+             '| --- | --- | --- | ' + ' | '.join('---' for _ in ALFWORLD_TABLE_COLUMNS) + ' |']
+    for row in rows:
+        values = []
+        for category in ALFWORLD_TABLE_COLUMNS:
+            stats = row['task_types'][category]
+            value = '—' if stats['mean'] is None else f"{stats['mean']:.2f}"
+            if stats['sample_std'] is not None:
+                value += f" ± {stats['sample_std']:.2f}"
+            if stats['seeds'] != row['task_types']['All']['seeds']:
+                value += ' (seeds: ' + ','.join(map(str, stats['seeds'])) + ')'
+            values.append(value)
+        seeds = ','.join(map(str, row['task_types']['All']['seeds']))
+        lines.append('| ' + ' | '.join([row['method'], row['split'], seeds, *values]) + ' |')
+    return {'columns': list(ALFWORLD_TABLE_COLUMNS), 'unit': 'percent',
+            'dispersion': 'sample_std', 'rows': rows, 'markdown': '\n'.join(lines) + '\n'}
+
+
+def aggregate_only(selected, suite_dir, config, suite, *, records_format):
+    """Derive reports from completed receipts without touching terminal authority."""
+    cells = []
+    for benchmark, method, seed, output in selected:
+        cell = json.loads((output / 'cell_summary.json').read_text())
+        require_identity(cell, dict(config, benchmark=benchmark, method=method, seed=seed))
+        if cell.get('suite', suite) != suite:
+            raise ValueError(f'Report-only cell belongs to another suite: {output}')
+        if cell['status'] != 'complete':
+            raise ValueError(f'Report-only aggregation requires a completed cell: {output}')
+        official_tasks = json.loads((output / 'official_tasks.json').read_text())
+        evaluation = {}
+        for split, saved in cell['evaluation'].items():
+            path = (output / split / 'evaluation_records.json' if records_format == 'json'
+                    else output / f'evaluation-{split}.jsonl')
+            if records_format == 'json':
+                records = json.loads(path.read_text())
+            else:
+                records = []
+                with path.open('rb') as handle:
+                    for line in handle:
+                        if not line.endswith(b'\n'):
+                            break
+                        records.append(json.loads(line))
+            for record in records:
+                for key, value in (('protocol', cell['protocol']), ('benchmark', benchmark),
+                                   ('method', method), ('seed', seed), ('split', split)):
+                    if record[key] != value:
+                        raise ValueError(f'Official receipt identity differs at {key}: {path}')
+                if 'model_version' in saved and record.get('model_version') != saved['model_version']:
+                    raise ValueError(f'Official receipt model version differs: {path}')
+            scores = official_summary(benchmark, records, official_tasks[split])
+            for key in ('dataset_complete', 'official_task_count', 'evaluated_count',
+                        'success_count', 'SR', 'TGC', 'SGC'):
+                if key in saved and scores.get(key) != saved[key]:
+                    raise ValueError(f'Derived report differs from terminal {key}: {path}')
+            evaluation[split] = {**saved, **scores}
+        cells.append({**cell, 'evaluation': evaluation})
+    aggregates = aggregate_cells(cells)
+    table = alfworld_table(aggregates)
+    report = {'protocol': config['protocol'], 'suite': suite,
+              'report_only': True, 'records_format': records_format,
+              'cells': cells, 'aggregates': aggregates, 'alfworld_table1': table}
+    for cell, (_, _, _, output) in zip(cells, selected):
+        write_json(output / 'reporting_summary.json', cell)
+    write_json(suite_dir / 'study_reporting_summary.json', report)
+    (suite_dir / 'study_reporting_table1.md').write_text(table['markdown'], encoding='utf-8')
+    return report
 
 
 def reused_fgpo_results(study_root, cells, config):
@@ -291,11 +560,15 @@ def main(argv=None):
     parser.add_argument('--methods', nargs='+', choices=METHODS)
     parser.add_argument('--benchmarks', nargs='+', choices=('alfworld', 'appworld'))
     parser.add_argument('--seeds', nargs='+', type=int)
-    parser.add_argument('--gpu', nargs='+', type=int, required=True,
+    parser.add_argument('--gpu', nargs='+', type=int,
                         help='Physical GPU IDs; Engine uses isolated process-local logical indices.')
     parser.add_argument('--model-gpu', nargs='+', type=int,
                         help='Explicit physical model-compute subset of --gpu; all allocated RNG contexts remain intact.')
     parser.add_argument('--resume', action='store_true', help='Continue saved F-GPO study state explicitly.')
+    parser.add_argument('--aggregate-only', action='store_true',
+                        help='Read completed official receipts and write derived reports without model/environment work.')
+    parser.add_argument('--evaluation-records-format', choices=('json', 'jsonl'), default='json',
+                        help='Explicit report-only receipt source; jsonl reads newline-committed records.')
     args = parser.parse_args(argv)
     config = json.loads(args.config.read_text())
     require_protocol(config)
@@ -312,14 +585,24 @@ def main(argv=None):
         raise ValueError('Select each method, benchmark and seed only once')
     config = dict(config,suite=args.suite,methods=list(methods),benchmarks=list(benchmarks))
     require_protocol(config)
-    os.environ['PYTHONPATH'] = str(Path(__file__).resolve().parents[1])
-    isolate_gpus(args.gpu, config['excluded_gpu_ids'])
-    compute_allocation(args.gpu, args.model_gpu)
     suite_dir = args.output_dir / args.suite
     selected = [(benchmark, method, seed, suite_dir / benchmark / method / f'seed-{seed}')
                 for benchmark in benchmarks for method in methods for seed in seeds]
+    if args.aggregate_only:
+        report = aggregate_only(selected, suite_dir, config, args.suite,
+                                records_format=args.evaluation_records_format)
+        print(report['alfworld_table1']['markdown'], end='')
+        return 0
+    if args.gpu is None:
+        parser.error('--gpu is required for training/evaluation')
+    os.environ['PYTHONPATH'] = str(Path(__file__).resolve().parents[1])
+    isolate_gpus(args.gpu, config['excluded_gpu_ids'])
+    compute_allocation(args.gpu, args.model_gpu)
     if args.resume:
-        if not suite_dir.is_dir():
+        from .checkpoint_gcs import configured
+        if configured(config):
+            suite_dir.mkdir(parents=True, exist_ok=True)
+        elif not suite_dir.is_dir():
             raise FileNotFoundError('Explicit --resume requires the existing selected suite directory.')
     else:
         suite_dir.mkdir(parents=True, exist_ok=True)
@@ -334,7 +617,7 @@ def main(argv=None):
     for benchmark, method, seed, output in selected:
         cell = run_cell(config, output, method=method, benchmark=benchmark,
                         seed=seed, gpu_ids=args.gpu, model_gpu_ids=args.model_gpu,
-                        resume=args.resume and output.exists())
+                        resume=args.resume)
         cell.update(method_role=METHOD_ROLES[method], suite=args.suite)
         with _file_lock(lock_path):
             cells = json.loads(study_path.read_text())['cells'] if study_path.is_file() else []
@@ -348,11 +631,14 @@ def main(argv=None):
                 cells[position] = cell
             references, reference_aggregates = (reused_fgpo_results(args.output_dir, cells, config)
                 if args.suite == 'ablation' else ([], []))
+            aggregates = aggregate_cells(cells)
+            table = alfworld_table(aggregates)
             write_json(study_path, {
                 'protocol': config['protocol'], 'suite': args.suite, 'experiment_plan': plan,
-                'cells': cells, 'aggregates': aggregate_cells(cells),
+                'cells': cells, 'aggregates': aggregates, 'alfworld_table1': table,
                 'reference_cells': references, 'reference_aggregates': reference_aggregates,
                 'design': 'docs/fgpo_design_and_derivation.md'})
+            (suite_dir / 'study_table1.md').write_text(table['markdown'], encoding='utf-8')
         if cell['status'] == 'interrupted':
             return 130
     return 0

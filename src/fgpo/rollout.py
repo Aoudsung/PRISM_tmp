@@ -109,31 +109,47 @@ def _sample_turn(policy, cohort, generators, max_tokens, *, on_response=None):
     ids = [[] for _ in cohort.slots]
     logprobs = [[] for _ in cohort.slots]
     active = list(range(len(cohort.slots)))
+    parked = []
     workspace = policy.decode_workspace(state, max_tokens)
     try:
         for position in range(max_tokens):
-            tokens, scores = policy.draw_tokens(state, active,
+            local_rows = tuple(range(len(active)))
+            tokens, scores = policy.draw_tokens(state, local_rows,
                 [generators[cohort.slots[row]] for row in active], workspace=workspace)
             continuing = []
-            for row, token, score in zip(active, tokens, scores, strict=True):
+            for local, (row, token, score) in enumerate(zip(active, tokens, scores, strict=True)):
                 ids[row].append(int(token))
                 logprobs[row].append(float(score))
                 if token not in TERMINATORS and position + 1 < max_tokens:
-                    continuing.append(row)
+                    continuing.append(local)
                 elif on_response is not None:
                     on_response(cohort.slots[row], tuple(ids[row]))
             if not continuing:
+                parked.append((tuple(active), state))
+                state = None
                 break
+            if len(continuing) != len(active):
+                keep = set(continuing)
+                finished = tuple(row for row in local_rows if row not in keep)
+                ended, state = policy.split_cache(state, (finished, continuing),
+                                                  preserve_capacity=(False, True))
+                parked.append((tuple(active[row] for row in finished), ended))
+                workspace.select_rows(continuing, physical=state.valid_mask.shape[1])
+                active = [active[row] for row in continuing]
+            # EOS/cap tokens remain outside KV, exactly as on the old path;
+            # next-turn delta_ids append each slot's last sampled token once.
             previous = state
-            state = policy.append_sampled_cache(state, workspace, continuing, role="rollout.decode")
+            state = policy.append_sampled_cache(state, workspace, range(len(active)), role="rollout.decode")
             if state is not previous:
                 policy.release_cache(previous)
-            active = continuing
-        return state, ids, logprobs
+        return parked, ids, logprobs
     except BaseException:
         # A successful append has transferred storage out of cohort.state's
         # original wrapper; the current owner lives in this local variable.
-        policy.release_cache(state)
+        if state is not None:
+            policy.release_cache(state)
+        for _, owned in parked:
+            policy.release_cache(owned)
         cohort.state = None
         raise
     finally:
@@ -154,21 +170,45 @@ def _execute_response(tokenizer, tokenizer_lock, environment, benchmark, respons
     return action, syntax_valid, result, observation
 
 
-def _advance_cohort(policy, root, cohort, sampled_state, advances, *, history_length):
+def _advance_cohort(policy, root, cohort, parked, advances, *, history_length):
     """Consume old cohort ownership before extending exact surviving prefixes."""
     groups = {}
     for index, slot in enumerate(cohort.slots):
         advance = advances[slot]
         if advance.cache_mode != "terminal":
             groups.setdefault(advance.cache_mode, []).append(index)
+    append_pieces = []
     append_state = suffix_state = state = suffix = None
     result = []
     try:
         cohort.state = None
         if "append" in groups:
-            append_state = policy.select_cache(sampled_state, groups["append"], consume=True)
+            append_indices = groups["append"]
+            index_to_dest = {idx: pos for pos, idx in enumerate(append_indices)}
+            while parked:
+                piece_indices, piece_state = parked.pop(0)
+                keep_local = [local for local, idx in enumerate(piece_indices) if idx in index_to_dest]
+                if not keep_local:
+                    policy.release_cache(piece_state)
+                    continue
+                if len(keep_local) == len(piece_indices):
+                    dest = tuple(index_to_dest[idx] for idx in piece_indices)
+                    append_pieces.append((piece_state, dest))
+                else:
+                    selected = policy.select_cache(piece_state, keep_local, consume=True, preserve_capacity=True)
+                    dest = tuple(index_to_dest[piece_indices[local]] for local in keep_local)
+                    append_pieces.append((selected, dest))
+            if len(append_pieces) == 1 and append_pieces[0][1] == tuple(range(len(append_indices))):
+                append_state = append_pieces.pop()[0]
+            else:
+                pieces_states = [st for st, _ in append_pieces]
+                pieces_groups = [dest for _, dest in append_pieces]
+                append_pieces.clear()
+                append_state = policy.merge_cache(pieces_states, row_groups=pieces_groups)
         else:
-            policy.release_cache(sampled_state)
+            while parked:
+                _, owned = parked.pop(0)
+                policy.release_cache(owned)
         suffix_state, cohort.suffix = cohort.suffix, None
         if "suffix" in groups:
             if suffix_state is None:
@@ -205,7 +245,13 @@ def _advance_cohort(policy, root, cohort, sampled_state, advances, *, history_le
     except BaseException:
         # Some modes may have completed while a later mode fails.  None of
         # these owners has been returned to the caller's next-cohort queue yet.
-        for owned in (sampled_state, append_state, suffix_state, state, suffix):
+        for _, owned in parked:
+            policy.release_cache(owned)
+        parked.clear()
+        for owned, _ in append_pieces:
+            policy.release_cache(owned)
+        append_pieces.clear()
+        for owned in (append_state, suffix_state, state, suffix):
             if owned is not None:
                 policy.release_cache(owned)
         for completed in result:
@@ -258,7 +304,7 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
     submitted_steps = []
     root, cohorts = None, []
     sampled_cohorts, next_cohorts = deque(), []
-    cohort = sampled_state = None
+    cohort = sampled_parked = None
 
     try:
         creation_results = _parallel_requests(pool, [
@@ -306,11 +352,12 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
             for cohort in cohorts:
                 model_cost_start = len(ledger.records)
                 with ledger.aggregate_model_calls():
-                    sampled_state, responses, probabilities = _sample_turn(
+                    sampled_parked, responses, probabilities = _sample_turn(
                         policy, cohort, generators, output_limit, on_response=dispatch)
                 cohort.state = None
                 model_event_ids = tuple(row.event_id for row in ledger.records[model_cost_start:])
-                sampled_cohorts.append((cohort, sampled_state, responses, probabilities, model_event_ids))
+                sampled_cohorts.append((cohort, sampled_parked, responses, probabilities, model_event_ids))
+                sampled_parked = None
             cohorts.clear()
             # Every active slot returns its actual feedback before the next
             # policy round; model operations remain single-threaded batches.
@@ -319,7 +366,7 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
             _raise_request_error(step_results)
             next_cohorts, evaluation_jobs = [], []
             while sampled_cohorts:
-                cohort, sampled_state, responses, probabilities, model_event_ids = sampled_cohorts.popleft()
+                cohort, sampled_parked, responses, probabilities, model_event_ids = sampled_cohorts.popleft()
                 advances = {}
                 for local_index, slot in enumerate(cohort.slots):
                     step_id = f"{ids[slot]}:step-{turn}"
@@ -341,9 +388,9 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
                     if terminal:
                         evaluation_jobs.append((slot, environments[slot].finalize_evaluation,
                             {"group_id": group_id, "slot": slot, "task_id": task_id}))
-                next_cohorts.extend(_advance_cohort(policy, root, cohort, sampled_state, advances,
+                next_cohorts.extend(_advance_cohort(policy, root, cohort, sampled_parked, advances,
                                                    history_length=history_length))
-                cohort = sampled_state = None
+                cohort = sampled_parked = None
             evaluation_results = _parallel_requests(pool, sorted(evaluation_jobs, key=lambda job: job[0]),
                                                      ledger, "rollout.official_evaluation")
             _raise_request_error(evaluation_results)
@@ -378,8 +425,9 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
                 # Ownership may be in a decode queue, the current advancement,
                 # or a completed next-turn queue when an environment/model
                 # operation fails.  Repeated release of a wrapper is harmless.
-                for pending_cohort, pending_state, *_ in sampled_cohorts:
-                    policy.release_cache(pending_state)
+                for pending_cohort, pending_parked, *_ in sampled_cohorts:
+                    for _, owned in pending_parked:
+                        policy.release_cache(owned)
                     _release_cohort(policy, pending_cohort)
                 sampled_cohorts.clear()
                 for pending_cohort in cohorts:
@@ -387,18 +435,32 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
                 for pending_cohort in next_cohorts:
                     _release_cohort(policy, pending_cohort)
                 _release_cohort(policy, cohort)
-                if sampled_state is not None:
-                    policy.release_cache(sampled_state)
+                if sampled_parked is not None:
+                    for _, owned in sampled_parked:
+                        policy.release_cache(owned)
                 if root is not None:
                     policy.release_cache(root)
-    trajectories = tuple(TrajectoryRecord(ids[slot], group_id, slot, str(task_id), benchmark,
-        int(initial_seed), slot_seeds[slot], str(contexts[slot]["instruction"]),
-        encode_text(policy.tokenizer, str(contexts[slot]["instruction"])), initials[slot].pure_ids,
-        pins[slot], tuple(steps[slot]), actor_views[slot].segments(), reference_views[slot].segments(),
-        bool(official[slot]["success"]), official[slot],
-        tuple(ledger.records) if count == 1 else tuple(row for row in ledger.records
-            if row.kind == "environment" and row.details.get("slot") == slot),
-        history_length) for slot in range(count))
+    built = []
+    for slot in range(count):
+        actor_segments = actor_views[slot].segments()
+        reference_segments = (actor_segments if reference_views[slot] is actor_views[slot]
+                              else reference_views[slot].segments())
+        built.append(TrajectoryRecord(ids[slot], group_id, slot, str(task_id), benchmark,
+            int(initial_seed), slot_seeds[slot], str(contexts[slot]["instruction"]),
+            encode_text(policy.tokenizer, str(contexts[slot]["instruction"])), initials[slot].pure_ids,
+            pins[slot], tuple(steps[slot]), actor_segments, reference_segments,
+            bool(official[slot]["success"]), official[slot],
+            tuple(ledger.records) if count == 1 else tuple(row for row in ledger.records
+                if row.kind == "environment" and row.details.get("slot") == slot),
+            history_length))
+    trajectories = tuple(built)
+    actor_views.clear()
+    reference_views.clear()
+    steps.clear()
+    contexts.clear()
+    initials.clear()
+    pins.clear()
+    del built
     group = GroupRecord(str(group_id), str(task_id), benchmark, int(initial_seed), trajectories, tuple(ledger.records))
     if on_complete is not None:
         on_complete(group)

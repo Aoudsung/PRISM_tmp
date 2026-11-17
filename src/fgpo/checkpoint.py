@@ -71,7 +71,10 @@ def snapshot_directory(root):
     return directory,metadata
 
 
-def save(root,*,policy,optimizer,reference,teacher,trainer_state,ledger_state,rng_state,model_version):
+def save(root,*,policy,optimizer,reference,teacher,trainer_state,ledger_state,rng_state,model_version,storage=None):
+    if storage is not None:
+        return storage.save(policy=policy,optimizer=optimizer,reference=reference,teacher=teacher,
+            trainer_state=trainer_state,ledger_state=ledger_state,rng_state=rng_state,model_version=model_version)
     started = time.clock_gettime(time.CLOCK_MONOTONIC)
     root = Path(root)
     snapshots = root/"snapshots"
@@ -144,7 +147,9 @@ def save(root,*,policy,optimizer,reference,teacher,trainer_state,ledger_state,rn
     return directory
 
 
-def load(root):
+def load(root,*,storage=None):
+    if storage is not None:
+        return storage.load()
     directory,metadata = snapshot_directory(root)
     state = torch.load(directory/"state.pt",map_location="cpu",weights_only=False)
     state.update(metadata=metadata,model_path=str(directory/"model"))
@@ -220,8 +225,10 @@ def _reclaim_superseded_snapshots(root,current):
     _sync_directory(snapshots)
 
 
-def prepare_completed(full_root,final_root,*,provenance):
+def prepare_completed(full_root,final_root,*,provenance,storage=None):
     """Publish final deployment artifacts while the full resume tree still exists."""
+    if storage is not None:
+        return storage.prepare_completed(provenance=provenance)
     full_root,final_root = Path(full_root),Path(final_root)
     cell = final_root.parent.resolve()
     if (full_root.name!="checkpoint" or final_root.name!="final_checkpoint" or
@@ -300,8 +307,10 @@ def _reclaim_training_artifacts(cell):
     return reclaimed
 
 
-def reclaim_completed_resume_state(summary_path):
+def reclaim_completed_resume_state(summary_path,*,storage=None,keep_journal_state=False):
     """Reclaim only the owning new cell's full state after durable completion."""
+    if storage is not None:
+        return storage.reclaim_completed(summary_path,keep_journal_state=keep_journal_state)
     summary_path = Path(summary_path)
     cell = summary_path.parent.resolve()
     with summary_path.open("rb") as handle:

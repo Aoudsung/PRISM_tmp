@@ -87,7 +87,7 @@ class ArenaLayer(DynamicLayer):
         if self.is_initialized:
             self._refresh_views()
 
-    def copy_rows(self, indices):
+    def copy_rows(self, indices, *, length=None, preserve_capacity=True):
         other = ArenaLayer(initial_capacity=self.initial_capacity, growth_limit=self.growth_limit)
         if not self.is_initialized:
             return other
@@ -95,16 +95,21 @@ class ArenaLayer(DynamicLayer):
         other.dtype, other.device = self.dtype, self.device
         other.max_batch_size, other.num_heads, other.head_dim = indices.numel(), self.num_heads, self.head_dim
         other.is_initialized = True
-        other._reserve(max(1, self._length))
-        other._length = self._length
+        copy_len = self._length if length is None else min(self._length, int(length))
+        if copy_len < 0:
+            raise ValueError("KV copy length must be nonnegative")
+        reserve_len = (max(copy_len, min(self.growth_limit, self._capacity))
+                       if preserve_capacity else max(1, copy_len))
+        other._reserve(max(1, reserve_len))
+        other._length = copy_len
         other._refresh_views()
-        if self._length:
-            torch.index_select(self.keys, 0, indices, out=other.keys)
-            torch.index_select(self.values, 0, indices, out=other.values)
+        if copy_len:
+            torch.index_select(self._key_storage[..., :copy_len, :], 0, indices, out=other.keys)
+            torch.index_select(self._value_storage[..., :copy_len, :], 0, indices, out=other.values)
         return other
 
-    def batch_select_indices(self, indices):
-        selected = self.copy_rows(indices)
+    def batch_select_indices(self, indices, *, length=None, preserve_capacity=True):
+        selected = self.copy_rows(indices, length=length, preserve_capacity=preserve_capacity)
         self.__dict__.update(selected.__dict__)
 
     def reorder_cache(self, beam_idx):
@@ -119,7 +124,7 @@ class ArenaLayer(DynamicLayer):
         """Remove masked columns while preserving already-computed K/V values."""
         longest = max(lengths, default=0)
         for row, (indices, count) in enumerate(zip(positions, lengths, strict=True)):
-            if count:
+            if count and indices is not None:
                 # index_select creates a distinct row buffer, so an in-place
                 # leftward copy cannot overwrite a later source position.
                 self._key_storage[row, :, :count].copy_(self.keys[row].index_select(1, indices))
@@ -142,16 +147,17 @@ class ArenaCache(Cache):
         super().__init__(layers=layers)
 
     @classmethod
-    def merge_owned(cls, caches):
-        """Consume sibling caches into one right-padded batch, layer by layer."""
+    def merge_owned(cls, caches, *, row_groups=None):
+        """Consume sibling caches into their destination rows, layer by layer."""
         caches = tuple(caches)
         if not caches:
             raise ValueError("Cache merging requires at least one owned cache")
-        if len(caches) == 1:
+        if len(caches) == 1 and row_groups is None:
             return caches[0]
         first = caches[0].layers[0]
         merged = cls(len(caches[0].layers), initial_capacity=first.initial_capacity,
                      growth_limit=first.growth_limit)
+        selections = {}
         try:
             for index, target in enumerate(merged.layers):
                 sources = [cache.layers[index] for cache in caches]
@@ -165,14 +171,25 @@ class ArenaCache(Cache):
                 # source capacity or presenting spare columns to attention.
                 capacity = max(width, min(target.growth_limit, max(layer._capacity for layer in sources)))
                 target._reserve(max(1, capacity))
+                if row_groups is not None:
+                    target._key_storage[..., :width, :].zero_()
+                    target._value_storage[..., :width, :].zero_()
+                    if target.device not in selections:
+                        selections[target.device] = [torch.tensor(rows, dtype=torch.long, device=target.device)
+                                                     for rows in row_groups]
                 start = 0
-                for cache, source in zip(caches, sources, strict=True):
+                for group_index, (cache, source) in enumerate(zip(caches, sources, strict=True)):
                     stop = start + source.max_batch_size
                     count = source._length
-                    target._key_storage[start:stop, :, :count].copy_(source.keys)
-                    target._value_storage[start:stop, :, :count].copy_(source.values)
-                    target._key_storage[start:stop, :, count:width].zero_()
-                    target._value_storage[start:stop, :, count:width].zero_()
+                    if row_groups is None:
+                        target._key_storage[start:stop, :, :count].copy_(source.keys)
+                        target._value_storage[start:stop, :, :count].copy_(source.values)
+                        target._key_storage[start:stop, :, count:width].zero_()
+                        target._value_storage[start:stop, :, count:width].zero_()
+                    else:
+                        rows = selections[target.device][group_index]
+                        target._key_storage[..., :count, :].index_copy_(0, rows, source.keys)
+                        target._value_storage[..., :count, :].index_copy_(0, rows, source.values)
                     # No old layer or arena capacity survives into allocation
                     # of the next layer; callers relinquish all input owners.
                     cache.layers[index] = None
@@ -188,6 +205,37 @@ class ArenaCache(Cache):
             merged.layers.clear()
             raise
 
+    def split_owned(self, row_groups, *, lengths=None, preserve_capacity=True):
+        """Partition rows once at response exits, releasing each source layer."""
+        row_groups = tuple(row_groups)
+        group_lengths = (None,) * len(row_groups) if lengths is None else tuple(lengths)
+        preserve_flags = ((bool(preserve_capacity),) * len(row_groups)
+                          if isinstance(preserve_capacity, bool)
+                          else tuple(bool(x) for x in preserve_capacity))
+        first = self.layers[0]
+        outputs = [ArenaCache(len(self.layers), initial_capacity=first.initial_capacity,
+                              growth_limit=first.growth_limit) for _ in row_groups]
+        selections = {}
+        try:
+            for index, source in enumerate(self.layers):
+                if source.is_initialized and source.device not in selections:
+                    selections[source.device] = [torch.tensor(rows, dtype=torch.long, device=source.device)
+                                                 for rows in row_groups]
+                row_selections = selections[source.device] if source.is_initialized else row_groups
+                for target, rows, target_len, keep_cap in zip(
+                        outputs, row_selections, group_lengths, preserve_flags, strict=True):
+                    target.layers[index] = source.copy_rows(rows, length=target_len, preserve_capacity=keep_cap)
+                self.layers[index] = None
+                source.keys = source.values = None
+                source._key_storage = source._value_storage = None
+                source._capacity = source._length = 0
+                source.is_initialized = False
+            return outputs
+        except BaseException:
+            for target in outputs:
+                target.layers.clear()
+            raise
+
     def _row_selections(self, indices):
         """Upload each row selection once per device, shared by its layers."""
         device_indices = {}
@@ -199,18 +247,18 @@ class ArenaCache(Cache):
                 device_indices[layer.device] = indices.to(device=layer.device, dtype=torch.long)
             yield layer, device_indices[layer.device]
 
-    def copy_rows(self, indices):
-        return ArenaCache(layers=[layer.copy_rows(selected)
+    def copy_rows(self, indices, *, length=None, preserve_capacity=True):
+        return ArenaCache(layers=[layer.copy_rows(selected, length=length, preserve_capacity=preserve_capacity)
                                   for layer, selected in self._row_selections(indices)])
 
-    def batch_select_indices(self, indices):
+    def batch_select_indices(self, indices, *, length=None, preserve_capacity=True):
         for layer, selected in self._row_selections(indices):
-            layer.batch_select_indices(selected)
+            layer.batch_select_indices(selected, length=length, preserve_capacity=preserve_capacity)
 
     def compact(self, positions, lengths):
         device_positions = {}
         for layer in self.layers:
             device = layer.device
             if device not in device_positions:
-                device_positions[device] = [indices.to(device) for indices in positions]
+                device_positions[device] = [None if indices is None else indices.to(device) for indices in positions]
             layer.compact(device_positions[device], lengths)

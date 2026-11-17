@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections import defaultdict
 from statistics import fmean
 
+from .envs import ALFWORLD_TABLE_COLUMNS, alfworld_task_type
+
 
 def official_summary(benchmark, records, expected_tasks):
     """One method/seed/split, aggregated from actual official evaluator receipts.
@@ -31,6 +33,29 @@ def official_summary(benchmark, records, expected_tasks):
               'mean_output_tokens': fmean(row['output_tokens'] for row in records) if records else None}
     if benchmark == 'alfworld':
         result['SR'] = 100 * rate if complete and rate is not None else None
+        expected_types = {task: alfworld_task_type(task) for task in expected}
+        observed_types = {task: alfworld_task_type(task) for task in observed}
+        task_types = {}
+        for category in ALFWORLD_TABLE_COLUMNS[:-1]:
+            tasks = {task for task, kind in expected_types.items() if kind == category}
+            evaluated = {task: success for task, success in scored.items()
+                         if observed_types[task] == category}
+            absent = sorted(tasks - set(evaluated))
+            unexpected = sorted((set(evaluated) - tasks) | {
+                task for task in extra if observed_types[task] == category})
+            category_complete = bool(tasks) and not absent and not unexpected
+            task_types[category] = {
+                'SR': (100 * sum(evaluated.values()) / len(evaluated)
+                       if category_complete and evaluated else None),
+                'official_task_count': len(tasks), 'evaluated_count': len(evaluated),
+                'success_count': sum(evaluated.values()), 'missing_tasks': absent,
+                'unexpected_tasks': unexpected, 'dataset_complete': category_complete,
+            }
+        # All is task-weighted, exactly the existing official SR.
+        task_types['All'] = {key: result[key] for key in (
+            'SR', 'official_task_count', 'evaluated_count', 'success_count',
+            'missing_tasks', 'unexpected_tasks', 'dataset_complete')}
+        result['task_types'] = task_types
     elif benchmark == 'appworld':
         scenarios = defaultdict(list)
         for task, row in expected.items():

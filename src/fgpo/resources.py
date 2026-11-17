@@ -79,21 +79,41 @@ def _estimate(config, model_gpu_count, resume_checkpoint):
         raise ValueError("model_gpu_count must be a positive integer")
     inventory_path = Path(config["model_path"])
     snapshot_directory = None
+    remote_manifest = None
     if resume_checkpoint is not None:
-        root = Path(resume_checkpoint)
-        snapshot = json.loads((root / "CURRENT").read_text(encoding="utf-8"))["snapshot"]
-        if not isinstance(snapshot, str) or Path(snapshot).name != snapshot or snapshot in {"", ".", ".."}:
-            raise ValueError("Checkpoint CURRENT must name one snapshot directory")
-        snapshot_directory = root / "snapshots" / snapshot
-        inventory_path = snapshot_directory / "model"
+        from .checkpoint_gcs import configured, GCSCheckpoint
+        if configured(config):
+            storage = GCSCheckpoint(config, resume_checkpoint)
+            with storage.open_snapshot(("CURRENT",), required=("CURRENT",), verify_cell_root=True) as pinned:
+                remote_manifest, _, _ = pinned["CURRENT"]
+                inventory_path = storage.materialize_actor(remote_manifest)
+        else:
+            root = Path(resume_checkpoint)
+            snapshot = json.loads((root / "CURRENT").read_text(encoding="utf-8"))["snapshot"]
+            if not isinstance(snapshot, str) or Path(snapshot).name != snapshot or snapshot in {"", ".", ".."}:
+                raise ValueError("Checkpoint CURRENT must name one snapshot directory")
+            snapshot_directory = root / "snapshots" / snapshot
+            inventory_path = snapshot_directory / "model"
     budget = _tensor_inventory(inventory_path)
+    if remote_manifest is not None and budget != remote_manifest["inventory"]:
+        raise ValueError("GCS actor cache inventory differs from its committed manifest")
     budget.update(parameter_inventory_path=str(inventory_path),
-                  parameter_inventory_source="checkpoint_current_model" if snapshot_directory is not None else "configured_model")
+                  parameter_inventory_source=("gcs_current_actor_cache" if remote_manifest is not None else
+                      "checkpoint_current_model" if snapshot_directory is not None else "configured_model"))
     largest = budget["largest_bf16_tensor_bytes"]
     shard = _configured_bytes(config, "checkpoint_shard_mib", 1024., _MIB)
     bucket = _configured_bytes(config, "optimizer_bucket_mib", 64., _MIB)
     runtime = _configured_bytes(config, "host_runtime_reserve_gib", 16., _GIB, allow_zero=True)
     gradients = 0
+    transport = 0
+    if remote_manifest is not None:
+        gradients = remote_manifest["tensors"].get("gradients.pt", {}).get("size", 0)
+        budget["gcs_object_bytes"] = {name: item["size"] for name, item in remote_manifest["tensors"].items()}
+    from .checkpoint_gcs import configured
+    if configured(config):
+        # Two transport chunks plus the largest FP32 storage Python temporary
+        # created by PyTorch's file-like writer. No second optimizer dictionary.
+        transport = 2 * int(config.get("checkpoint_gcs_chunk_mib", 8)) * _MIB
     if snapshot_directory is not None:
         path = snapshot_directory / "gradients.pt"
         if path.is_file():
@@ -101,12 +121,14 @@ def _estimate(config, model_gpu_count, resume_checkpoint):
     budget.update(model_gpu_count=model_gpu_count, checkpoint_shard_bytes=shard,
                   optimizer_bucket_bytes=bucket, resume_gradients_file_bytes=gradients,
                   adam_and_reference_bytes=14 * budget["parameter_numel"],
-                  serialization_temporary_bytes=max(2 * max(shard, largest), gradients + largest),
+                  serialization_temporary_bytes=max(2 * max(shard, largest), gradients + largest,
+                                                    2 * largest if transport else 0),
+                  checkpoint_transport_bytes=transport,
                   optimizer_transfer_bytes=4 * bucket * model_gpu_count,
                   optimizer_arithmetic_bytes=4 * bucket, runtime_reserve_bytes=runtime)
     budget["required_bytes"] = sum(budget[key] for key in (
         "adam_and_reference_bytes", "serialization_temporary_bytes", "optimizer_transfer_bytes",
-        "optimizer_arithmetic_bytes", "runtime_reserve_bytes"))
+        "optimizer_arithmetic_bytes", "runtime_reserve_bytes", "checkpoint_transport_bytes"))
     return budget
 
 

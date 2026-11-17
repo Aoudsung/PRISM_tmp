@@ -49,7 +49,7 @@ class CrossTrajectoryCredit:
         options: Mapping = {} if config is None else config
         self.radius = float(options.get("credit_radius", .10))
         self.prior_weight = float(options.get("credit_prior_weight", 1.))
-        self.transfer_max = float(options.get("credit_transfer_max", 1.))
+        self.transfer_max = float(options.get("credit_transfer_max", .5))
         self.reward_scale = float(options.get("reward_scale", 10.))
         if not math.isfinite(self.radius) or self.radius <= 0:
             raise ValueError("credit_radius must be finite and positive")
@@ -73,6 +73,7 @@ class CrossTrajectoryCredit:
             raise ValueError("Each peer trajectory must have a distinct trajectory_id")
         self.group_id = self.trajectories[0].group_id
         benchmark = self.trajectories[0].benchmark
+        self.benchmark = benchmark
         self.horizon = int(options.get("horizons", HORIZONS)[benchmark])
         if self.horizon <= 0:
             raise ValueError("The official finite horizon must be positive")
@@ -108,6 +109,10 @@ class CrossTrajectoryCredit:
             self.lengths, dtype=torch.long, device="cpu"
         )[None, :]
         self.prior = (self.outcomes.sum() - self.outcomes) / (self.count - 1)
+        self.success_count = sum(1 for t in self.trajectories if t.official_success)
+        self.all_zero = self.success_count == 0
+        self.all_one = self.success_count == self.count
+        self.homogeneous = self.all_zero or self.all_one
         self.diagnostics = {}
 
     def _features(self, attribute):
@@ -124,32 +129,104 @@ class CrossTrajectoryCredit:
         features[self.times, self.owners] = flat
         return features
 
+    def _alfworld_obs_match(self) -> torch.Tensor:
+        codes = torch.zeros((self.depth, self.count), dtype=torch.long, device="cpu")
+        vocab: dict[tuple[int, ...], int] = {}
+        for owner, trajectory in enumerate(self.trajectories):
+            if not trajectory.steps:
+                continue
+            previous = tuple(trajectory.initial_observation_ids)
+            for depth_idx, row in enumerate(trajectory.steps):
+                codes[depth_idx, owner] = vocab.setdefault(previous, len(vocab) + 1)
+                previous = tuple(row.observation_repr_ids)
+        return (codes[:, :, None] == codes[:, None, :]) & (codes[:, :, None] > 0)
+
     @torch.no_grad()
     def advantages(self):
+        matching_mode = "exact_token_id" if self.benchmark == "alfworld" else "dual_view_cosine"
         if not self.rows:
             self.diagnostics = {
                 "algorithm": ALGORITHM, "method": self.method,
                 "trajectory_count": self.count, "step_count": 0,
-                "successes": int((self.outcomes > 0).sum()),
+                "successes": self.success_count,
+                "all_zero_group": self.all_zero,
+                "all_one_group": self.all_one,
+                "homogeneous_group": self.homogeneous,
+                "homogeneous_bypass": self.homogeneous,
+                "local_observation_matching": matching_mode,
                 "horizon": self.horizon,
+                "positive_peer_gated_steps": 0,
                 "loo_outcome_brier": None,
                 "loo_task_prior_brier": None,
             }
             return {}
+        if self.homogeneous:
+            count = int(self.valid.sum())
+            zero_transfer = self.all_zero or self.method == "fgpo_no_transfer"
+            self.diagnostics = {
+                "algorithm": ALGORITHM,
+                "method": self.method,
+                "trajectory_count": self.count,
+                "step_count": count,
+                "successes": self.success_count,
+                "all_zero_group": self.all_zero,
+                "all_one_group": self.all_one,
+                "homogeneous_group": True,
+                "homogeneous_bypass": True,
+                "local_observation_matching": matching_mode,
+                "horizon": self.horizon,
+                "credit_radius": self.radius,
+                "credit_prior_weight": self.prior_weight,
+                "credit_transfer_max": self.transfer_max,
+                "reward_scale": self.reward_scale,
+                "matched_steps": None,
+                "matched_step_fraction": None,
+                "transferred_steps": 0 if zero_transfer else None,
+                "transfer_step_fraction": 0.0 if zero_transfer else None,
+                "mean_support_mass": None,
+                "mean_effective_peers": None,
+                "mean_transfer_weight": 0.0 if zero_transfer else None,
+                "positive_peer_gated_steps": 0 if self.all_one else None,
+                "loo_outcome_brier": 0.0,
+                "loo_task_prior_brier": 0.0,
+                "matched_loo_outcome_brier": None,
+                "mean_abs_return_shift": 0.0,
+                "positive_failed_steps": 0,
+                "mean_advantage": 0.0,
+                "advantage_min": 0.0,
+                "advantage_max": 0.0,
+            }
+            return {row.step_id: 0.0 for row in self.rows}
+        if self.reference is None:
+            raise ValueError("Mixed-outcome r3 credit requires frozen-reference features")
 
-        obs = self._features("z_obs")
-        distance = (1 - torch.bmm(obs, obs.transpose(1, 2))).clamp_(0, 2)
-        del obs
-        if self.method != "fgpo_obs_only":
-            hist = self._features("z_hist")
-            history_distance = (1 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0, 2)
-            torch.maximum(distance, history_distance, out=distance)
-            del hist, history_distance
         # Shapes are [depth, target trajectory, peer trajectory]. This computes
         # O(H*K^2) matches, rather than comparing every pair of temporal nodes.
         eligible = self.valid[:, :, None] & self.valid[:, None, :]
         eligible &= ~torch.eye(self.count, dtype=torch.bool, device="cpu")[None, :, :]
-        weights = ((1 - distance / self.radius).clamp_min_(0) * eligible).to(torch.float64)
+        if self.benchmark == "alfworld":
+            obs_match = self._alfworld_obs_match()
+            if self.method == "fgpo_obs_only":
+                weights = (obs_match & eligible).to(torch.float64)
+            else:
+                hist = self._features("z_hist")
+                hist_dist = (1.0 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0.0, 2.0)
+                del hist
+                weights = ((1.0 - hist_dist / self.radius).clamp_min_(0.0) * (obs_match & eligible)).to(torch.float64)
+                del hist_dist
+            del obs_match
+        else:
+            obs = self._features("z_obs")
+            distance = (1.0 - torch.bmm(obs, obs.transpose(1, 2))).clamp_(0.0, 2.0)
+            del obs
+            if self.method != "fgpo_obs_only":
+                hist = self._features("z_hist")
+                history_distance = (1.0 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0.0, 2.0)
+                torch.maximum(distance, history_distance, out=distance)
+                del hist, history_distance
+            weights = ((1.0 - distance / self.radius).clamp_min_(0.0) * eligible).to(torch.float64)
+            del distance
+
         support = weights.sum(dim=-1)
         weighted_outcomes = torch.matmul(weights, self.outcomes)
         positive_support = support > 0
@@ -158,31 +235,42 @@ class CrossTrajectoryCredit:
         baseline = (weighted_outcomes + self.prior_weight * self.prior[None, :]) / (
             support + self.prior_weight
         )
+        valid_won = self.valid.to(torch.long) * (self.outcomes > 0).to(torch.long)[None, :]
+        has_positive_peer = (valid_won.sum(dim=-1, keepdim=True) - valid_won) >= 1
         if self.method == "fgpo_no_transfer":
             state_share = torch.zeros_like(support)
         elif self.method == "fgpo_no_support_weight":
-            state_share = positive_support.to(torch.float64)
+            state_share = (has_positive_peer & positive_support).to(torch.float64)
         else:
-            state_share = self.transfer_max * support / (support + self.prior_weight)
+            state_share = has_positive_peer.to(torch.float64) * (
+                self.transfer_max * support / (support + self.prior_weight)
+            )
 
         next_values = torch.cat((peer_values[1:], torch.zeros_like(peer_values[:1])), dim=0)
         next_share = torch.cat((state_share[1:], torch.zeros_like(state_share[:1])), dim=0)
+        next_pos_sup = torch.cat((positive_support[1:], torch.zeros_like(positive_support[:1])), dim=0)
+        next_pos_peer = torch.cat((has_positive_peer[1:], torch.zeros_like(has_positive_peer[:1])), dim=0)
         terminal = torch.zeros_like(self.valid)
         terminal[self.times, self.owners] = self.terminals
         continuation = self.valid & ~terminal
         next_share = next_share * continuation
+        gated = continuation & next_pos_sup & ~next_pos_peer
         mc_return = self.outcomes[None, :].expand(self.depth, -1)
         reward = mc_return * terminal
-        target = (1 - next_share) * mc_return + next_share * (reward + next_values)
+        target = (1.0 - next_share) * mc_return + next_share * (reward + next_values)
         advantage = (target - baseline) / self.reward_scale
 
         # A fixed scale preserves task weighting. The syntax_valid field is a
         # diagnostic only; parsing outcomes do not replace the official reward.
         values = advantage[self.times, self.owners].tolist()
-        self._record_diagnostics(weights, support, peer_values, baseline, next_share, target, advantage)
+        self._record_diagnostics(
+            weights, support, peer_values, baseline, next_share, target, advantage,
+            matching_mode=matching_mode, gated_steps=int(gated.sum()),
+        )
         return {row.step_id: value for row, value in zip(self.rows, values)}
 
-    def _record_diagnostics(self, weights, support, peer_values, baseline, share, target, advantage):
+    def _record_diagnostics(self, weights, support, peer_values, baseline, share, target, advantage,
+                            *, matching_mode, gated_steps):
         valid = self.valid
         count = int(valid.sum())
         matched = valid & (support > 0)
@@ -206,8 +294,12 @@ class CrossTrajectoryCredit:
             "method": self.method,
             "trajectory_count": self.count,
             "step_count": count,
-            "successes": int((self.outcomes > 0).sum()),
-            "all_zero_group": not bool((self.outcomes > 0).any()),
+            "successes": self.success_count,
+            "all_zero_group": self.all_zero,
+            "all_one_group": self.all_one,
+            "homogeneous_group": False,
+            "homogeneous_bypass": False,
+            "local_observation_matching": matching_mode,
             "horizon": self.horizon,
             "credit_radius": self.radius,
             "credit_prior_weight": self.prior_weight,
@@ -220,6 +312,7 @@ class CrossTrajectoryCredit:
             "mean_support_mass": float(support[valid].mean()),
             "mean_effective_peers": float(effective_peers[valid].mean()),
             "mean_transfer_weight": float(share[valid].mean()),
+            "positive_peer_gated_steps": gated_steps,
             "loo_outcome_brier": float((predicted - success).square()[valid].mean()),
             "loo_task_prior_brier": float((prior - success).square()[valid].mean()),
             "matched_loo_outcome_brier": matched_brier,

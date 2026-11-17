@@ -1,251 +1,84 @@
-# F-GPO r3 (`long-horizon-decision`) Colab GPU（G4 / A100）连接与操作手册
+# Colab F-GPO r3 GCS 恢复与顺序运行
 
-> 使用边界：本文档与配套脚本 [`scripts/colab_*.sh`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/colab_launch_fgpo.sh) 为 **`fgpo-r3-published-v3`** 准备的静态工具与操作说明。主实验方案与指定服务器操作以 [README](../README.md)、[现行设计](fgpo_design_and_derivation.md) 与 [AGENTS.md](../AGENTS.md) 为准；实际启用 Colab 需由用户显式运行对应命令，本文不构成未授权自启动服务器的依据。
+Colab 使用显式 `checkpoint_backend=gcs`。`configs/fgpo-r3-colab-a100.json`（协议 `fgpo-r3-published-v4`）的 study 前缀为 `gs://r032-pact-rebuild-f1be230a/fgpo-r3/checkpoints/fgpo-r3-published-v4-alf`，其后按 `<suite>/alfworld/<method>/seed-0` 等 cell 隔离；`outputs/fgpo-r3-956ceab-alf` 为既有 v3 独立归档目录。Host B 配置继续使用默认 local backend。本文涉及的命令均由原 Colab 执行者在既有实例执行；源码交付没有启动实例、改变当前进程或执行迁移。
 
-本文档说明如何在 **Google Colab `G4`（RTX PRO 6000 96 GB / 176 GB RAM）或 High-RAM A100（80 GB）** 上通过预置冷资产、硬件门槛预检、轻量日志同步及原子断点处理，运行当前项目 [`src/fgpo`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo) 的 **`fgpo`** 正式任务（AppWorld / ALFWorld），以及如何与 **Host B** 并发协同而不撞目录锁。
+每个 cell 的 GCS `CURRENT` 为训练恢复权威，指向不可变 manifest（当前为 `fgpo-gcs-manifest-v2` / `fgpo-gcs-journal-v2`，并兼容读取既有 `fgpo-gcs-manifest-v1` 检查点）。manifest 保存 actor 官方 `save_pretrained` 文件及 optimizer、reference、gradients、trainer/RNG、不可变静态任务/配置（未变直接复用）与增量分段的日志对象名、提交字节偏移、精确 generation 与长度；`costs.jsonl` 同时区分瞬时未换行尾 `uncommitted_tail_bytes_at_publish` 与恢复放弃后的单调 `discarded_incomplete_tail_bytes`，并在相同提交长度合并 `CURRENT`/`FINAL`/`LOGS` 尾证据。actor/Adam 相同版本复用，初始 reference 在同 seed 内复用，gradients 与 state 每次保存真实当前内容；增长中的 `costs.jsonl`、`training.jsonl` 与 `evaluation-*.jsonl` 仅上传新提交换行段并通过几何分级合并保持有界段数。全部成员上传成功后发布 manifest，再用旧 CURRENT generation 条件替换指针，随后更新本地小指针并回收失效对象。所有读路径（`current`、`inspect`、`status`、`pull`、`restore_cell`、`prepare_resume`、`load`、`restore_final` 及 `resources` 预算估算）均在 `open_snapshot` / `_reader_pins` 内先发布并复核 `readers/<lease>.json` 租约与指针不变后再读取 manifest 与成员，且所有校验异常同样进入租约释放清理；活跃读租约存在时，周期性 `sync-logs` 延迟清理旧 LOGS 对象，全量 GC 保留所有活跃读租约引用闭包直至读取释放。传输失败直接终止该操作；上一完整 CURRENT 保留。指针提交成功但后续本地更新或 GC 失败时，新 CURRENT 已完整有效。
 
-> [!IMPORTANT]
-> 本方案针对旧 Colab 方案中的四类隐患做了彻底重构：
-> 1. **取消多份冗余检查点与每 90 秒全量 `tar -czf`**：训练中仅同步 KB–MB 级 JSONL 与 `live_status.json`；
-> 2. **冷资产与计费 GPU 解耦**：已通过 0-GPU CPU 会话 [`colab_stage_assets.sh`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/colab_stage_assets.sh) 将环境/权重/数据打包为 `.tar.zst` 存入 `gs://r032-pact-rebuild-f1be230a/fgpo-r3/`；
-> 3. **开卡即做显存 / CPU 内存 / 磁盘硬预检 + 禁盲传百 GB 未完成断点**：不满足立即 `colab stop` 止损；
-> 4. **修复并发目录锁**：[`runner.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo/runner.py) 与 [`relocate_fgpo_cell.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/relocate_fgpo_cell.py) 已原生支持多卡并发写同一 `--output-dir` 与 r3 跨机迁移。
+最终提交顺序为 `LOGS` 后 `FINAL`：只有匹配的终态日志已发布，FINAL 才公开完成标记；完成态恢复的静态摘要以 FINAL 为权威。新任务的可选远端探测不创建本地 cell 目录。`.cost-tail-state.json` 与实际成本日志一起保留写入 session、已消费弃尾观察及累计字节数；远端 journal 携带对应证据，使同一弃尾在恢复和再次同步后仍只计一次。
 
----
+Adam/reference/gradients/state 直接 `torch.save` 到 8 MiB 分块上传器；恢复使用 generation 固定的 `seek/read/readinto` 对象。Adam 与 reference 没有本地全文件副本。actor 单独暂存于 `<cell>/actor-cache/model`，保持分片 safetensors、索引、config、generation_config 和 tokenizer；恢复时只物化此目录。原 `model_path=/content/models/Qwen2.5-7B-Instruct` 身份保持原值；CausalPolicy 所需的小 tokenizer/config 文件在该路径保留。每个新 seed 必须从原始 Qwen 冷资产加载 actor 并建立固定 reference。配置显式授权在首次远端保存后释放该原始目录的 safetensors 权重；下一 seed 的 launcher 重新流式解压原始资产。完成态模型保留于 GCS FINAL，训练态回收后删除当前本地 actor cache。
 
-## 1. 与旧 PACT 方案的核心差异（必读）
+凭据由原执行者在进程外刷新短期 access token，写入本机同用户、权限 0600 的受限临时文件。传输层每次 HTTP 请求重新读取 `FGPO_GCS_ACCESS_TOKEN_FILE`。该环境变量仅包含文件路径，token、ADC、refresh token 和上传 session URL 均不进入配置、状态、manifest 或日志。launcher 不提供 token 刷新机制，操作方须在运行期间持续原子更新该文件。传输层使用 Python 标准库，不需要安装 GCS SDK；冷资产解压沿用已有 tar/zstd。
 
-| 维度 | 旧 PACT (`r032-pact-rebuild`) | 当前 F-GPO r3 (`src/fgpo`) | 对 Colab 操作的直接约束 |
-| :--- | :--- | :--- | :--- |
-| **训练参数量** | LoRA（单进程 ~18–23 GB VRAM） | **7B 全参数训练**（[`policy.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo/policy.py#L25-L98)，`activation_offload: false`） | **单张 G4 / A100 只能跑 1 个 cell**（显存要求 `>= 75000 MiB`），严禁同卡并发双任务 |
-| **CPU 内存** | 轻量 | `OffloadedAdamW` + `WeightReference` 在 CPU 驻留 `master`/`exp_avg`/`exp_avg_sq`（FP32）与参考权重（bf16），合计约 `14 B/param`（100 GB+） | 必须满足 `MemTotal >= 130 GiB`：优先用 **`--gpu G4`**（默认 176 GiB，勿加 `--high-mem`）；用 A100 须加 `--high-mem` 严禁降级 |
-| **断点体积** | LoRA 检查点几十 MB，每轮存 7 份 `.pt` | 全参数快照含 `model/`、`optimizer.pt`、`gradients.pt`、`reference.pt`、`state.pt`；`save()` 更新参数时新旧快照短暂并存（峰值 ~212+ GB） | 启动前校验 `/content >= 225 GiB`（`< 260 GiB` 时告警提示）；**禁止训练期打包上传百 GB `checkpoint/`** |
-| **续跑校验** | 依赖 `run_contract.py` SHA 校验 | [`runner.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo/runner.py) 原生 `require_training_identity` + `--resume` | 固定 `/content/...` 路径即可 `--resume`；1 卡断点只能对 1 卡续跑 |
-| **GPU 排除列表** | 无 | Host A 配置含 `excluded_gpu_ids: [0, 2]` | Colab 使用 [`fgpo-r3-colab-a100.json`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/configs/fgpo-r3-colab-a100.json)（`excluded_gpu_ids: []`） |
-
----
-
-## 2. Host B 与 Colab 的分工原则
-
-当前首要目标是先完整跑通 **F-GPO 主方法**（`--suite comparison --methods fgpo`，2 个 benchmark × 3 个 seed = **6 个完全独立的单卡 cell**）：
-
-- **Host B**（RTX 6000D × 3，461 GB CPU 内存，17 TB 硬盘，无回收超时）：
-  - 优先承接长耗时、大评测集、需要大容量持久盘的 **`appworld`**（`horizon=100`，`test_normal=168` + `test_challenge=417`）及部分 `alfworld` cell。
-  - [`runner.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo/runner.py#L290-L330) 已支持同一 `--output-dir` 下多张卡并行跑互不重叠的 `seed` / `benchmark`（单元级文件锁防重复启动、`study_summary.json` 加锁合并聚合）。
-- **Colab `G4` / High-RAM A100**（单卡 96 GB / 80 GB，`--gpu 0`，容器盘 `236 GiB` 且有超时/回收风险）：
-  - 若启用低磁盘保存策略或短程执行，优先承接单轮更快、评测集更轻的 **`alfworld`**（`horizon=50`，`valid_unseen=134`），争取在单次连续会话内跑完至 `final_checkpoint`（自动执行 [`reclaim_completed_resume_state`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo/checkpoint.py#L202-L239) 清理大型优化器状态后，只需回传 ~15 GB 最终模型与评测日志）。
-- **两条硬约束**：
-  1. **显式指定方法**：[`runner.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo/runner.py#L267-L315) 按 `benchmark → method → seed` 遍历，所有机器均需显式传入 `--suite comparison --methods fgpo`，避免先跑完 `alfworld` 全部对比/消融才开始 `appworld`。
-  2. **1 卡对 1 卡约束**：[`checkpoint.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo/checkpoint.py#L40-L42) 的 `restore_rng` 严格校对 CUDA RNG 流数量，Colab（1 卡）只适合自建新 cell 或接续原本就是 **1 卡** 的 cell，不能直接接手 2 卡断点。
-
----
-
-## 3. 本地连接环境与 CLI 机制
-
-### 3.1 本地已就绪的工具与认证
-- **Colab CLI**：`/Users/cxw/.local/bin/colab`（指向 `/Users/cxw/.local/share/uv/tools/google-colab-cli/bin/colab`，版本 `0.7.5`）。
-  - 该入口脚本内置了两项自动处理：
-    1. 若未显式设置 `HTTPS_PROXY`/`https_proxy`，自动探测 `127.0.0.1:7897` 并注入 `HTTP_PROXY` / `HTTPS_PROXY`；
-    2. 若未显式传 `--auth` 且不存在 `~/.config/colab-cli/token.json`，而存在 `~/.config/gcloud/application_default_credentials.json`，自动注入 `--auth adc`。
-  - > [!WARNING]
-    > **不要直接执行 `colab update --install` 或 `uv tool install -U google-colab-cli`**，否则会覆盖该自定义入口脚本；若以后升级了工具，调用时需手动保证代理环境变量生效并显式加上 `colab --auth adc ...`。
-- **GCP / GCS CLI**：`/Users/cxw/google-cloud-sdk/bin/gcloud`（支持 `gcloud storage`），认证文件位于 `/Users/cxw/.config/gcloud/application_default_credentials.json`。
-  - **凭据安全**：严禁将 ADC JSON、OAuth token 或 `SSH_Document.md` 内容复制到脚本仓库、日志或输出中。
-  - **GCS 持久路径**：当前已配置并预置冷资产至 **`gs://r032-pact-rebuild-f1be230a/fgpo-r3/`**（与历史 `r032-pact-rebuild` 对象隔离，可通过环境变量 `FGPO_GCS_BUCKET` / `FGPO_GCS_PREFIX` 或 `--bucket` / `--prefix` 覆盖）。
-
-### 3.2 常用连接与管理命令
-
-先确保 `PATH` 包含 `~/.local/bin` 与 `~/google-cloud-sdk/bin`（若本地通过代理访问外网，按需导出代理）：
+下面示例采用原始 cell 路径和实际运行配置 `fgpo-r3-colab-956ceab-alf.json`。操作方将模板中的四项 `checkpoint_backend`、`checkpoint_gcs_uri`、`checkpoint_gcs_chunk_mib`、`checkpoint_gcs_release_base_weights` 合入这份现用配置，保留原 GPU 及全部训练设置。执行前由操作方确认实际远端主机、目录及已部署源码。导入不反序列化 optimizer/reference/gradients：直接上传原文件；只读取 state.pt 绑定训练身份及 journal 原路径。默认保留本地 CURRENT，适用于原代码仍持有旧快照的迁移准备。
 
 ```bash
-export PATH="$HOME/.local/bin:$HOME/google-cloud-sdk/bin:$PATH"
-export HTTPS_PROXY="${HTTPS_PROXY:-http://127.0.0.1:7897}"
-export HTTP_PROXY="${HTTP_PROXY:-http://127.0.0.1:7897}"
+cd /content/fgpo-r3
+export PYTHONPATH=/content/fgpo-r3/src
+export FGPO_GCS_ACCESS_TOKEN_FILE=/run/fgpo-gcs/access-token
+PY=/content/venvs/fgpo-main/bin/python
+CELL=/content/outputs/fgpo-r3-956ceab-alf/comparison/alfworld/fgpo/seed-0
+CONFIG=/content/fgpo-r3/configs/fgpo-r3-colab-956ceab-alf.json
+
+"$PY" scripts/fgpo_gcs_checkpoint.py import-local --config "$CONFIG" \
+  --cell-dir "$CELL" --benchmark alfworld --seed 0
+"$PY" scripts/fgpo_gcs_checkpoint.py status --config "$CONFIG" \
+  --cell-dir "$CELL" --benchmark alfworld --seed 0
 ```
 
-#### 1) 查看算力余额与当前会话
-```bash
-colab sessions
-colab usage
-```
-
-#### 2) 申请 Colab GPU 实例（1 个会话只跑 1 个 cell）
-实测当前账号机型状态：
-- **`G4`（`NVIDIA RTX PRO 6000 Blackwell Server Edition`）**：实测可用，默认自带 **`97,887 MiB` 显存、`176 GiB` 内存、`236 GiB` `/content` 盘**。注意 `G4` **不要传 `--high-mem`**（后端会对 `--gpu G4 --high-mem` 返回 HTTP 400）。
-- **`A100`**：`--high-mem` 当前常遇 `503 Service Unavailable`，而不带 `--high-mem` 的标准 `A100` 实测仅 `40 GB VRAM / 83 GB RAM`，放不下全参数 F-GPO。
-
-```bash
-# 推荐：G4 (RTX PRO 6000, 96GB VRAM / 176GB RAM) —— 不传 --high-mem
-colab new -s fgpo-alfworld-s0 --gpu G4
-
-# 仅在确认有 High-RAM A100 配额时使用（若 503 勿降级标准 A100）
-colab new -s fgpo-alfworld-s0 --gpu A100 --high-mem
-```
-
-#### 3) 连接与执行命令（SSH / Exec）
-- **方式 A：交互式登录 Colab（默认落入 `/content`）**
-  ```bash
-  colab ssh -s fgpo-alfworld-s0
-  ```
-- **方式 B：标准 `ssh` 非交互执行命令或管道传输**
-  ```bash
-  ssh -o ProxyCommand="colab ssh --proxy-mode -s fgpo-alfworld-s0" \
-      -o StrictHostKeyChecking=no \
-      -o UserKnownHostsFile=/dev/null \
-      root@colab-runtime "nvidia-smi"
-  ```
-- **方式 C：配置 `~/.ssh/config` 简化日常 SSH / SCP**（可选）：
-  ```sshconfig
-  Host fgpo-*
-      User root
-      ProxyCommand /Users/cxw/.local/bin/colab ssh --proxy-mode -s %n
-      StrictHostKeyChecking no
-      UserKnownHostsFile /dev/null
-  ```
-  配置后即可直接 `ssh fgpo-alfworld-s0` 或 `scp local_file fgpo-alfworld-s0:/tmp/`。
-- **方式 D：通过 Jupyter Kernel 执行 Python（不占 SSH 通道，同时刷新空闲计时器）**
-  ```bash
-  colab exec -s fgpo-alfworld-s0 -f /tmp/check_or_keepalive.py
-  ```
-
-> [!NOTE]
-> **SSH 单连接限制**：Colab 每个会话**同一时刻仅允许 1 个活跃 SSH 连接**，并发发起第二个 SSH 会返回 `HTTP 429`。日常查看进度优先通过 GCS 或 `colab exec`，不要开多个长连 SSH 终端占用通道。
-
-#### 4) 文件上传 / 下载与会话清理
-```bash
-# 上传 / 下载单文件
-colab upload -s fgpo-alfworld-s0 ./local_file /content/remote_file
-colab download -s fgpo-alfworld-s0 /content/remote_file ./local_file
-
-# 停止释放 GPU 计费
-colab stop -s fgpo-alfworld-s0
-colab sessions   # 核对已无残留会话
-```
-
----
-
-## 4. Colab 运行 F-GPO r3 一键工具与标准操作流程
-
-已针对旧方案的所有膨胀与竞态隐患提供可直接运行的脚本（位于 [`scripts/`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts)）与专用配置 [`configs/fgpo-r3-colab-a100.json`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/configs/fgpo-r3-colab-a100.json)：
-
-| 文件 | 职责 | 解决的问题 |
-| :--- | :--- | :--- |
-| [`colab_stage_assets.sh`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/colab_stage_assets.sh) | 用 **0-GPU CPU 会话**预装双 venv、模型权重与数据并打为 `.tar.zst` 存入 GCS | 彻底杜绝开出计费 GPU 后干等 pip/HF 下载 |
-| [`colab_launch_fgpo.sh`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/colab_launch_fgpo.sh) | 开 `G4`/High-RAM A100 → 硬件/内存/盘硬门槛预检 → 内网流式解压 → 启动单 cell + 60s 轻监控 + 容错保活 | 不达标秒停不烧卡；不每 90s 打包百 GB 断点；结束只传瘦身后成果 |
-| [`colab_ops.sh`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/colab_ops.sh) | 统一提供 `sync-code` / `status` / `pull` / `stop` 日常操作 | 禁热覆盖运行中进程；`status` 不抢 SSH；`stop` 先发 `SIGTERM` |
-| [`relocate_fgpo_cell.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/relocate_fgpo_cell.py) | 按目标配置文件重映射已停止断点路径、GPU 与 `journal_path` | 去除旧 `v1` Host B 硬编码，兼容 `fgpo-r3` 跨机 1 卡迁移 |
-
-### Step 1：0 GPU 计费预置冷资产（已完成，仅后续更新依赖时需重跑）
-> 当前 `gs://r032-pact-rebuild-f1be230a/fgpo-r3/assets/` 已预置全套 5 个 `.tar.zst`（`fgpo_venv_main`、`fgpo_venv_alfworld`、`alfworld_data`、`appworld_data`、`qwen25_7b_instruct`）及 `code/fgpo_r3_src.tar.gz`，无需重复执行。后续如新增依赖可用 `--force` 刷新：
-```bash
-# 仅在需要更新 venv 或数据资产时执行（0 GPU 费用，支持断点跳过已上传项）
-./scripts/colab_stage_assets.sh --appworld-bundle-obj appworld_020_bundle.tar.gz
-```
-
-### Step 2：启动单个 F-GPO Cell（含硬件/盘门槛预检与轻监控）
-[`colab_launch_fgpo.sh`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/colab_launch_fgpo.sh) 默认申请 **`--gpu G4`**（RTX PRO 6000，96 GB VRAM / 176 GB RAM），并先校验 `VRAM >= 75000 MiB`、`MemTotal >= 130 GiB`、`/content` 剩余空间 `>= 225 GiB`；任一项不达标即**立刻 `colab stop` 退出**，不会拉资产或空烧算力单元：
-
-> [!WARNING]
-> **实测 `/content` 磁盘硬限制**：Colab `G4` 容器总盘为 **`236 GiB`**，解压全部冷资产（`25 GiB`）后剩余 **`212 GiB`**；而 [`checkpoint.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo/checkpoint.py#L71-L115) 轮末保存全参数断点期间新旧两份快照（各约 99 GB）并存加 `reference.pt`（约 14 GB）峰值约 **`212+ GiB`**（另加每轮累积的 `groups/*.pt`）。因此，在未对 Colab 开启低磁盘存储模式（如跳过中间轮次全量 `optimizer.pt` 双份保留）前，长轮次全参数 `fgpo` 训练在 Colab 上仍有在保存阶段爆盘风险，建议优先放 Host B（17 TB）或先明确裁剪保存策略后再启动长训练。
+当前存活进程的过渡由 Root 和原执行者处理。既有 model50 可先导入；必须等待经授权的旧进程在真实组边界保存最新 optimizer125+ 并正常退出，再导入更新后的完整本地 CURRENT。tmpfs actor 桥接、信号、wrapper 暂停和本地大型恢复文件回收均属于该操作方的独立迁移指令，本 CLI 不执行这些动作。更新快照提交远端 CURRENT 后，才可回收已持久化的本地旧大态。`--activate-local-pointer` 仅适用于旧进程已退出且已授权切换本地指针时；该选项本身保留旧 snapshots 文件，操作方负责其显式回收。
 
 ```bash
-# 在 Colab G4 (PRO 6000) 上启动 comparison suite 的 alfworld / fgpo / seed 0
-./scripts/colab_launch_fgpo.sh --gpu G4 --benchmark alfworld --seed 0 --session fgpo-alfworld-s0
-
-# 若需接续 GCS 中已有的断点（保持相同 /content 路径）
-./scripts/colab_launch_fgpo.sh --gpu G4 --benchmark alfworld --seed 0 --session fgpo-alfworld-s0 --resume
+# 在最新完整 snapshot 已导入、旧进程已退出后恢复数据及当前 actor；
+# 原有本机完整成本尾事件继续保留。
+"$PY" scripts/fgpo_gcs_checkpoint.py restore --config "$CONFIG" \
+  --cell-dir "$CELL" --benchmark alfworld --seed 0
+"$PY" -u -m fgpo.runner --config "$CONFIG" --output-dir /content/outputs/fgpo-r3-956ceab-alf \
+  --suite comparison --methods fgpo --benchmarks alfworld --seeds 0 --gpu 0 --resume
 ```
-> 若你打算把 `colab exec` 保活放到长期在线的 Linux 主机上跑，启动时加 `--no-keepalive` 即可避免依赖个人 Mac 不休眠。
 
-### Step 3：查看进度、拉取结果与优雅停机
+runner 在构造 CostLedger 和 CPU 模型运行时之前恢复 cell 数据。`state.pt` 继续保存原 EngineState（round/phase/groups/group_cursor/task_order/reference_data/advantages/update_cursor/training_log_offset/evaluation_completed）、sampler，以及 Python/NumPy/Torch/CUDA RNG。恢复后按旧训练 byte offset 截断统计日志；物理成本保留完整尾事件、按原有规则丢弃半写尾并记录 usage_complete。LOGS 指针提供周期性日志持久化，始终保留成本的最长完整来源；同快照的其他日志可用于继续官方评价。未上传的最后一个日志间隔随实例永久丢失时无法由远端重建，交付不将其计为已持久化成本。
+
 ```bash
-# 1) 零 SSH 冲突查看进度（读 GCS live_status.json 与 training.jsonl 末尾）
-./scripts/colab_ops.sh status --cell comparison/alfworld/fgpo/seed-0
+# 可由既有操作循环每 45 秒调用（需传入 --suite 与 --method），失败直接报告，不重试。
+"$PY" scripts/fgpo_gcs_checkpoint.py sync-logs --config "$CONFIG" \
+  --cell-dir "$CELL" --suite comparison --method fgpo --benchmark alfworld --seed 0
 
-# 2) 仅在必要时用单次 SSH 实时看显存/进程/磁盘
-./scripts/colab_ops.sh status --session fgpo-alfworld-s0 --ssh
+# 在远端指定运行时上执行 manifest-v2/v1 status 或带读锁重建增量日志与最终模型：
+"$PY" scripts/fgpo_gcs_checkpoint.py status --config "$CONFIG" \
+  --cell-dir "$CELL" --suite comparison --method fgpo --benchmark alfworld --seed 0
+"$PY" scripts/fgpo_gcs_checkpoint.py pull --config "$CONFIG" \
+  --cell-dir "$CELL" --suite comparison --method fgpo --benchmark alfworld --seed 0 \
+  --dest-dir /tmp/fgpo_pull_stage --with-final-model
 
-# 3) 拉取完成后的日志与评测结果到仓库 outputs/colab_synced/（加 --with-final-model 可一并拉 ~15 GB final_checkpoint）
-./scripts/colab_ops.sh pull comparison/alfworld/fgpo/seed-0
+# 本地控制端运维包装（不在本地执行项目 Python）：支持显式 --transport ssh|exec（默认 ssh，无 429 重试或隐式回退）。
+# exec 传输通过项目内单次直连 Jupyter KernelClient 适配器执行，禁用本地 CLI history/colab.log 记录与核内 store_history，通过 stdin_hook 隔离输入、用每调用随机 nonce 校验完整 stdout/stderr/RC 三帧与严格 base64，不在失败时自动重试连接；
+# status/pull 通过 --session 与 --config 在指定远端实例重建并回传结果，拒绝无效的 --bucket/--prefix 覆盖，并自动随同保留已生成的 reporting_summary.json / study_reporting_summary.json / study_reporting_table1.md；
+# refresh-token 使用目标目录内唯一 mktemp 文件原子替换远端短期 access token；
+# aggregate 在远端以 --aggregate-only 轻量生成原生 Table 1 衍生报告（不初始化 GPU/Engine，不改动训练/终态权威），可选拉取至本地目录；
+# stop 强制要求 --cell、--config 与离机 --dest-dir，写入停止标志后基于真实可执行 argv（并排除 stop 自身祖先链）等待 runner、detached supervisor 与检查点完整退出，校验 GCS/本地可恢复状态并将恢复状态及既有衍生 Table 1 报告拉取至离机目录后再销毁实例：
+./scripts/colab_ops.sh refresh-token -s fgpo-r3-956ceab-alf \
+  --remote-token-file /run/fgpo-gcs/access-token
+./scripts/colab_ops.sh status -s fgpo-r3-956ceab-alf --cell comparison/alfworld/fgpo/seed-0 \
+  --config /content/fgpo-r3/configs/fgpo-r3-colab-a100.json
+./scripts/colab_ops.sh pull -s fgpo-r3-956ceab-alf comparison/alfworld/fgpo/seed-0 ./outputs/colab_synced \
+  --config /content/fgpo-r3/configs/fgpo-r3-colab-a100.json
+./scripts/colab_ops.sh aggregate -s fgpo-r3-956ceab-alf --config /content/fgpo-r3/configs/fgpo-r3-colab-a100.json \
+  --seeds 0,1,2 --dest-dir ./outputs/colab_synced
+./scripts/colab_ops.sh stop fgpo-r3-956ceab-alf --cell comparison/alfworld/fgpo/seed-0 \
+  --config /content/fgpo-r3/configs/fgpo-r3-colab-a100.json --dest-dir ./outputs/colab_stopped
 
-# 4) 中途需要主动停机：先发 SIGTERM 等 engine.py 安全写完 checkpoint/CURRENT，再停实例
-./scripts/colab_ops.sh stop fgpo-alfworld-s0 --cell comparison/alfworld/fgpo/seed-0
+# 从控制端使用已存在并已部署环境的固定会话，通过单写者锁 (.fgpo-colab-supervisor.lock) 下的远端 setsid 脱离式 supervisor 顺序完成三 seed（将进程归属 .fgpo-colab-supervisor.pid 与首 cell 前置/启动就绪标志 .fgpo-colab-supervisor.ready 分离，首 cell 就绪后才返回成功并断开 SSH/exec）。
+# 若原前台 SSH launcher 退出留下孤儿 runner PID（且子进程继承着旧 `.fgpo-colab-sequence.lock` FD 9），可通过 `--adopt-pid PID` 绑定该 PID 的 `/proc/<pid>/stat` 启动时间戳、完整命令行及精确 cell/config/seed 后接管定期 `sync-logs` 与后续 seed，不删锁、不强制解锁、不向训练进程发信号；
+# 若与旧版前台长连接 SSH 会话共存时，status/pull/refresh-token 须显式传 --transport exec，严禁并发第二条 proxy SSH：
+./scripts/colab_launch_fgpo.sh --session fgpo-r3-956ceab-alf --seeds 0,1,2 \
+  --config /content/fgpo-r3/configs/fgpo-r3-colab-a100.json \
+  --output-dir /content/outputs/fgpo-r3-published-v4-alf \
+  --remote-token-file /run/fgpo-gcs/access-token
 ```
-> ⚠️ 若需要将未完成单卡 cell 从 Colab 迁回 Host B（或反之），须先停止训练、传入完整的 `checkpoint/CURRENT` 指向快照、再在目标机运行 [`relocate_fgpo_cell.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/relocate_fgpo_cell.py)（`--resource-config configs/fgpo-r3-host-b.json --physical-gpu <id>`）后加 `--resume` 续跑。
 
----
+launcher 通过短连接在单写者锁 `$OUTPUT/.fgpo-colab-supervisor.lock`（FD 8）持续持有下完成校验、写 `$OUTPUT/.fgpo-colab-supervisor.sh` 并以 `start_new_session=True` 移交锁描述符拉起脱离式顺序监督进程，在等待 `$OUTPUT/.fgpo-colab-supervisor.ready` 确认配置解析、GCS/本地续跑前提检查、首 cell 冷资产恢复（或接管校验）与首 runner 拉起就绪后才返回退出；所有子进程（`fgpo.runner`、`fgpo_gcs_checkpoint.py` 等）在 `exec` 前显式关闭锁 FD `8/9`，不再向训练子进程泄漏锁。使用 `--adopt-pid PID` 时，launcher 核验旧 `.fgpo-colab-sequence.lock` 除被接管 PID 外无其他持有者、绑定其 `/proc/<pid>/stat` 启动时刻与完整命令行（防止 PID 复用误判）、定期轮询非僵尸状态并触发 `sync-logs`；孤儿进程或自启进程退出后须同时核验本地 `cell_summary.json`（`status="complete"` 且 `finalization_stage="finalized"`）、`.finalization_complete.json`（`terminal_export_completed=true`）以及 GCS `status` DTO（`status="complete"`、`terminal_export_completed=true`、`final_generation` 非空）并接回 `.fgpo-colab-sequence.lock`，随后自动对当前全部已完成 finalized 种子调用 `python -m fgpo.runner ... --aggregate-only` 刷新 `reporting_summary.json`、`comparison/study_reporting_summary.json` 与 `comparison/study_reporting_table1.md`，方才推进下一 seed。监督进程继续在启动时把冷资产恢复收据写入 `FGPO_STARTUP_RECEIPT_FILE` 供 `CostLedger.credit_startup` 将 `runner.cold_asset_restore` 与 `runner.cell_startup` 非重叠启动区间锚定进 `wall_seconds` / `allocated_device_seconds`（不与相位累加混淆）。每个 seed 结束后，`runner` 先回收恢复态并记录 `checkpoint.reclaim_completed_resume_state`，再执行并计量 `engine.publish_final_logs()` 写入 `checkpoint.final_publish_logs`，随后将含该终态事件的 ledger 冻结重写为 `finalization_stage="finalized"` 的 `cell_summary.json`，最后执行一次明确排除在自身成本计量之外的终端导出 `engine.export_final_terminal_state()` 将终态摘要与完整 `costs.jsonl` 同步至 `FINAL`/`LOGS` 并写入 `.finalization_complete.json`（直接运行 `fgpo.runner` 与 launcher 达成等价终态；任何在初步摘要、最终日志或终端导出阶段的中断在 `--resume` 时继续完成而不重跑训练/评价）。每个 seed 的训练失败、日志持久化失败或未产生 finalized cell_summary 都会结束序列。`colab_monitor_ui.py` 默认通过显式 `--transport exec` 调用 `colab_common.sh` 单次直连适配器只读轮询与自动按活跃 seed 跟踪主日志，不触发 `HTTP 429`、CLI 自动重试或隐式回退。launcher 接口使用预先部署的既有实例：申请实例、代码部署、环境冷资产准备和外部 token 刷新由原执行者完成。新 seed 的原始 Qwen 资产使用 `restore-asset --uri gs://r032-pact-rebuild-f1be230a/fgpo-r3/assets/qwen25_7b_instruct.tar.zst --destination /content/models` 流式恢复；若配置切换为 `checkpoint_backend=local`（`checkpoint_interval_rounds=60`），launcher 会跳过 GCS status/sync-logs 并沿用本地断点语义。
 
-## 5. 文件传输、代码更新与配置更新最佳实践
+CPU 预算读取远端 CURRENT manifest 的对象长度，并读取实际 actor cache 的 safetensors header；gradients.pt 的真实长度进入恢复预算。常驻 Adam/reference 继续为 `14P`，保留原 actor 分片临时量、恢复 CPU gradients 字典和最大单 tensor，另加两块传输缓冲。PyTorch file-like 序列化可能临时处理一个 FP32 tensor，预算覆盖 `2L`（L 为最大 BF16 tensor）。实际硬件、软件版本、主机预算、保存/恢复耗时与恢复后的真实参数更新由后续正式操作日志记录；没有本地执行结果。
 
-当前项目 [`src/`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src) 约 `240 KB`、[`configs/`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/configs) 约 `20 KB`，打包后不足 `100 KB`；而冷资产（基座模型/环境）约数十 GB、完整断点可达百 GB。按体量与目标端分流操作，才能兼顾速度与零失误：
-
-### 5.1 分场景最优传输矩阵
-
-| 场景 | 体量 | 推荐通道与工具 | 关键避坑点 |
-| :--- | :--- | :--- | :--- |
-| **本地 Mac → Host B（代码/配置）** | `< 100 KB` | **`rsync -avz --delete`**（走 SSH） | 只同步白名单（`src/`、`configs/`、`scripts/`）；自动清理本地已删除的旧 `.py`，且原子写替换 |
-| **本地 Mac → Colab（代码/配置）** | `< 100 KB` | `./scripts/colab_ops.sh sync-code [session]` | `COPYFILE_DISABLE=1` 防 `._*`；走 Python 直调 GCS REST（1–2s，避开 `gcloud` ~10s 冷启动）；解压前先清空旧 `src/fgpo` |
-| **冷资产 → Colab（venv / Qwen / 数据）** | `~20–30 GB` | `./scripts/colab_stage_assets.sh`（**0-GPU CPU**）→ **Colab 内网流式 `zstd` 解压** | 严禁从本地 Mac 用 `colab upload` 传大文件，也不在 GPU 计费期从外网现下 |
-| **Colab 日常监控（日志/进度）** | `几 KB–MB` | **Colab 60s 轻同步 → `./scripts/colab_ops.sh status`** | 不占用 Colab 单并发 SSH 通道（防 `HTTP 429`）；**不打包上传百 GB `checkpoint/`** |
-| **大成果 / 断点 ↔ Host B / 本地** | `15 GB – 100+ GB` | **`Host B ↔ GCS ↔ Colab` 直连**；Host B ↔ Host A 用 **`rsync -avP --partial`** | 本地 Mac **不做**几十 GB 大文件的二传手；Colab 尽量跑完让 `reclaim_completed_resume_state` 瘦身后只传 ~15 GB `final_checkpoint` |
-
-### 5.2 更新代码的可靠三步法（禁止“热覆盖运行中进程”）
-
-Python 进程启动时已把模块加载进内存，**往正在跑的 `fgpo.runner` 目录直接覆盖 `.py` 不会热更新主循环，反而可能让环境子进程读到新文件导致新旧逻辑混用**。[`colab_ops.sh`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/colab_ops.sh) 的 `sync-code` 默认拦截运行中覆盖：
-
-1. **先停再更**：若会话里正在运行训练，先执行 `./scripts/colab_ops.sh stop <session>`（自动发 `SIGTERM` 等安全保存退出）。
-2. **更新 GCS 代码包及空闲会话**：
-   ```bash
-   # 仅更新 GCS 最新代码包（1–2 秒）
-   ./scripts/colab_ops.sh sync-code
-
-   # 或同步到尚未启动训练的空闲 Colab 会话（先删旧 src/fgpo 再解压）
-   ./scripts/colab_ops.sh sync-code fgpo-alfworld-s0
-   ```
-3. **同步到 Host B（推荐 `rsync` 一条命令完成）**：
-   ```bash
-   rsync -avz --delete \
-     --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' --exclude='._*' \
-     /Users/cxw/Documents/科研方案实现/long-horizon-decision/src/ \
-     <host_b_user>@<host_b_host>:/home/chenxiangwei/workspace/fgpo-r3/src/
-
-   rsync -avz --delete \
-     --exclude='.DS_Store' --exclude='._*' \
-     /Users/cxw/Documents/科研方案实现/long-horizon-decision/configs/ \
-     <host_b_user>@<host_b_host>:/home/chenxiangwei/workspace/fgpo-r3/configs/
-   ```
-   > 仅同步 `src/`、`configs/`、`scripts/`、`pyproject.toml`，绝不将本地 `.git`、`.research*`、`outputs/`、`SSH_Document.md` 或 `*apiKey*.csv` 同步到远端。
-
-### 5.3 更新配置与设置的隔离原则
-
-1. **按机器拆独立配置文件，永不互相覆盖**
-   - Host A：[`configs/fgpo-r3-host-a.json`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/configs/fgpo-r3-host-a.json)
-   - Host B：[`configs/fgpo-r3-host-b.json`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/configs/fgpo-r3-host-b.json)
-   - Colab（`G4` / High-RAM A100）：[`configs/fgpo-r3-colab-a100.json`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/configs/fgpo-r3-colab-a100.json)
-   - 三份文件名彼此独立，全量同步 `configs/` 时零冲突。
-2. **区分“改科学设置”与“改机器资源设置”**
-   - **改科学参数**（如 `rounds`、`learning_rate`、`output_tokens`、`groups` 等）：**必须新建 `--output-dir` 重跑**，旧 `state.pt` 内的 `trainer['config']` 由 `require_training_identity` 严格保护。
-   - **改机器路径 / GPU 编号**（保持卡数一致）：保持科学参数不变，先运行 [`relocate_fgpo_cell.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/relocate_fgpo_cell.py) 重映射路径与 `journal_path`，再加 `--resume` 续跑。
-3. **环境变量固化在启动命令中**
-   - `PYTHONPATH`、`OMP_NUM_THREADS`、`TOKENIZERS_PARALLELISM=false`、`CUDA_VISIBLE_DEVICES` 均固化在启动脚本或 [`runner.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/src/fgpo/runner.py) 内，避免手动 SSH 时漏配。
-
-### 5.4 断点与大文件跨机迁移的原子顺序
-
-若必须把未完成的 cell 断点跨机迁移，严格按以下顺序防止传半截损坏（[`colab_ops.sh`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/colab_ops.sh) 的 `stop --backup-checkpoint` 与 [`colab_launch_fgpo.sh`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/colab_launch_fgpo.sh) 的 `--resume` 均已按此实现）：
-1. 确认 `fgpo.runner` 已退出，读取 `checkpoint/CURRENT` 获知当前唯一有效 snapshot UUID（只传这一个 snapshot 目录）。
-2. 先传 cell 根文件（`config.json`、`official_tasks.json`、`costs.jsonl`、`training_summary.json`、`evaluation-*`）及 `checkpoint/snapshots/<uuid>/` 内的全部文件。
-3. **最后一步再写入/更新目标端的 `checkpoint/CURRENT`**。
-
----
-
-## 6. 常见故障速查表
-
-| 现象 / 报错 | 原因 | 处理方式 |
-| :--- | :--- | :--- |
-| `HTTP 429 Already-active SSH session` | 同一会话同时有超过 1 个 SSH 连接 | 关闭多余终端或等待前一条 SSH 命令结束；日常查看改用 `./scripts/colab_ops.sh status` |
-| `Pre-flight check failed` 并自动 `colab stop` | 分配的 Colab VM 显存 `< 75 GiB`、内存 `< 130 GiB` 或 `/content` 盘 `< 225 GiB`（以及 `--gpu G4 --high-mem` 触发 400） | 脚本已自动止损停机；`G4` 请勿加 `--high-mem`，或将该 cell 改放到 Host B（17 TB 盘）运行 |
-| `The physical allocation includes a GPU excluded by this server configuration` | 直接复用了 `mgt01` 配置的 `excluded_gpu_ids: [0, 2]` | 使用 [`configs/fgpo-r3-colab-a100.json`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/configs/fgpo-r3-colab-a100.json)（`excluded_gpu_ids: []`） |
-| `Existing cell identity differs at model_path` | 恢复运行时的 `model_path` 与保存时不一致 | 保持 `/content/models/Qwen2.5-7B-Instruct` 固定路径，或先用 [`relocate_fgpo_cell.py`](file:///Users/cxw/Documents/科研方案实现/long-horizon-decision/scripts/relocate_fgpo_cell.py) 重映射 |
-| `Exact resume requires the saved number of CUDA RNG streams` | 跨不同 GPU 数量恢复（如 2 卡断点拿到 1 卡 Colab） | 保持 1 卡对 1 卡续跑，不能更改卡数 |
-| `Existing cell requires explicit --resume` / `Cell is already locked` | 目标 cell 已存在且未传 `--resume`，或有另一进程正在写同一 cell | 确认是续跑则加 `--resume`；新任务需分配不同 `seed`/`benchmark` 或换新 `--output-dir` |
-| `colab` 命令报认证失败或无法连接 | 代理 `127.0.0.1:7897` 未开，或 `colab` 被升级覆盖掉了包装逻辑 | 确认代理端口可用，或显式传 `HTTPS_PROXY=... colab --auth adc ...` |
+最终官方 ALFWorld valid_unseen 134 项任务、训练摘要、评价 journal/records/summary、模型与 provenance 都持久化后，runner 才完成恢复态回收、最终日志计量发布、终态 `cell_summary.json` 冻结与 `FINAL`/`LOGS` 终端导出。FINAL 保留官方模型、config/tokenizer、trainer/RNG provenance 和 claim/cost 日志；GC 根据 CURRENT/FINAL/LOGS 及活跃 `readers/` 租约的引用闭包回收，跨 UUID 复用的 reference 或 actor/Adam 会保留。`restore-final` 可物化最终部署模型；其输出明确 `training_resume_supported=false`。当前 Colab v4 配置运行 FGPO，60 rounds、16×8、H50/out512、混合结果组原子更新、$\lambda_{\max}=0.5$ 和三个既定 seed。

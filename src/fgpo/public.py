@@ -12,8 +12,10 @@ from .records import PublicObservation
 IM_START, IM_END, END_OF_TEXT, NEWLINE = 151644, 151645, 151643, 198
 TERMINATORS = frozenset((IM_END, END_OF_TEXT))
 HORIZONS = {"alfworld": 50, "appworld": 100}
-OUTPUT_LIMITS = {"alfworld": 256, "appworld": 1024}
+OUTPUT_LIMITS = {"alfworld": 512, "appworld": 1024}
 EMPTY_STDOUT = "[Empty stdout]"
+_ALFWORLD_THINK_RE = re.compile(r"<think>(?:(?!</?think\b).)*?</think>", re.DOTALL | re.IGNORECASE)
+_ALFWORLD_ACTION_RE = re.compile(r"<action>((?:(?!</?action\b).)*?)</action>", re.DOTALL | re.IGNORECASE)
 
 
 def encode_text(tokenizer, text: str) -> tuple[int, ...]:
@@ -42,14 +44,17 @@ def project_public_observation(tokenizer, benchmark: str, raw_observation: str, 
     text = str(envelope["native_observation"])
     if initial:
         text = re.sub(r"(?:^|\n)Your task is to:.*", "", text).strip()
-    commands = tuple(str(command) for command in action_schema["available_actions"])
-    prefix = ((f"Task: {goal}\n" if initial else "") +
-              "Admissible commands: " + json.dumps(commands, ensure_ascii=False) + "\nCurrent observation:\n")
-    prefix_ids, pure = encode_text(tokenizer, prefix), encode_text(tokenizer, text)
+    step_num = min(int(envelope.get("step", 0)) + 1, HORIZONS["alfworld"])
+    commands = tuple(str(c) for c in action_schema["available_actions"] if str(c) != "help")
+    prefix = f"Task: {goal}\nStep: {step_num}/{HORIZONS['alfworld']}\nCurrent observation:\n"
+    command_lines = "\n".join(commands) if commands else "(none)"
+    suffix = ("\n\nAdmissible commands (choose one exact command without quotes):\n"
+              f"{command_lines}\nEmit concise <think>...</think> then <action>exact command</action>.")
+    prefix_ids, pure, suffix_ids = encode_text(tokenizer, prefix), encode_text(tokenizer, text), encode_text(tokenizer, suffix)
     representation = pure if pure else encode_text(tokenizer, EMPTY_STDOUT)
     # Wrapper and observation are separate integer blocks; BPE cannot merge their boundary.
     return PublicObservation(raw_observation, text, pure, representation, prefix_ids,
-                             prefix_ids + pure, len(prefix_ids), commands)
+                             prefix_ids + pure + suffix_ids, len(prefix_ids), commands, suffix_ids)
 
 
 def pinned_prompt(tokenizer, system_prompt: str, initial: PublicObservation) -> tuple[int, ...]:
@@ -70,10 +75,23 @@ def pinned_prompt(tokenizer, system_prompt: str, initial: PublicObservation) -> 
 def parse_native_response(benchmark: str, text: str):
     """Return the actual native action and syntax/format validity, without action gating."""
     if benchmark == "alfworld":
-        raw = text.strip()
-        match = re.fullmatch(r"(?:<think>.*?</think>\s*)?<action>(.*?)</action>", raw, re.DOTALL)
-        command = match.group(1).strip() if match is not None else raw
-        return {"kind": "native_text", "text": command}, bool(match is not None and command)
+        remainder = _ALFWORLD_THINK_RE.sub("", text)
+        lowered_rem = remainder.lower()
+        if "<think" in lowered_rem or "</think" in lowered_rem:
+            return {"kind": "invalid", "text": ""}, False
+        matches = list(_ALFWORLD_ACTION_RE.finditer(remainder))
+        if len(matches) != 1:
+            return {"kind": "invalid", "text": ""}, False
+        outside = (remainder[:matches[0].start()] + remainder[matches[0].end():]).lower()
+        if "<action" in outside or "</action" in outside:
+            return {"kind": "invalid", "text": ""}, False
+        command = matches[0].group(1).strip()
+        while len(command) >= 2 and command[0] == command[-1] and command[0] in ("'", '"'):
+            command = command[1:-1].strip()
+        command = command.lower()
+        if not command or "\n" in command or "\r" in command:
+            return {"kind": "invalid", "text": ""}, False
+        return {"kind": "native_text", "text": command}, True
     if benchmark != "appworld":
         raise ValueError(benchmark)
     fences = list(re.finditer(r"```", text))

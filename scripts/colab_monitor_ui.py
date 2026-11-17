@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Live local web dashboard for monitoring remote F-GPO Colab experiments.
 
-Reads remote telemetry read-only via SSH over `colab ssh --proxy-mode` (default,
-avoids contending with the Jupyter kernel) with automatic fallback to `colab exec`,
-using Python 3 standard library only (zero extra packages).
+Reads remote telemetry read-only via an explicit transport (`exec` via
+`colab exec`, default so it never contends with single-session SSH, or `ssh` via
+`colab ssh --proxy-mode`) with no hidden fallback, using Python 3 standard
+library only (zero extra packages).
 """
 from __future__ import annotations
 
@@ -45,8 +46,9 @@ data = {
     "loadavg": list(os.getloadavg()),
     "mem_info": sh("free -m"),
     "disk_df": sh("df -B1 /content | tail -n 1"),
-    "procs": sh("ps -eo pid,ppid,pcpu,pmem,etime,args | grep -E 'run_colab_seq|run_fgpo_study|fgpo\\.envs' | grep -v grep"),
-    "log_tail": sh(f"tail -n 80 '{LOG_PATH}' 2>/dev/null || true"),
+    "procs": sh("ps -eo pid,ppid,pcpu,pmem,etime,args | grep -E 'run_colab_seq|run_fgpo_study|fgpo\\.runner|fgpo_gcs_checkpoint|fgpo\\.envs|[.]fgpo-colab-supervisor[.]sh' | grep -v grep"),
+    "log_path": None,
+    "log_tail": "",
     "seeds": {},
 }
 
@@ -56,10 +58,12 @@ if cfg_path.is_file():
     mc = (cfg.get("method_configs") or {}).get(METHOD) or {}
     data["config"] = {
         "protocol": cfg.get("protocol"),
+        "checkpoint_backend": cfg.get("checkpoint_backend", "local"),
+        "checkpoint_gcs_uri": cfg.get("checkpoint_gcs_uri"),
         "rounds": mc.get("rounds") or cfg.get("rounds") or 60,
         "groups": cfg.get("groups") or 16,
         "trajectories": cfg.get("trajectories") or 8,
-        "output_tokens": (mc.get("output_tokens_by_benchmark") or {}).get(BENCHMARK) or cfg.get("output_tokens") or 256,
+        "output_tokens": (mc.get("output_tokens_by_benchmark") or {}).get(BENCHMARK) or cfg.get("output_tokens") or (512 if BENCHMARK == "alfworld" else 1024),
         "checkpoint_interval_rounds": cfg.get("checkpoint_interval_rounds"),
         "host_memory_fraction": cfg.get("host_memory_fraction"),
         "host_runtime_reserve_gib": cfg.get("host_runtime_reserve_gib"),
@@ -202,6 +206,8 @@ for seed in SEEDS:
     ckpt_cur = d / "checkpoint" / "CURRENT"
     if ckpt_cur.is_file():
         s["checkpoint_current"] = json.loads(ckpt_cur.read_text())
+    s["gcs_tx_locked"] = (d / ".gcs-transaction.lock").exists() or (d / "checkpoint" / ".gcs-transaction.lock").exists()
+    s["actor_cache_exists"] = (d / "actor-cache").exists()
     ts = d / "training_summary.json"
     if ts.is_file():
         s["training_summary"] = json.loads(ts.read_text())
@@ -234,6 +240,18 @@ for seed in SEEDS:
         if ev_info:
             s["evaluations"][split] = ev_info
     data["seeds"][str(seed)] = s
+
+resolved_log = LOG_PATH
+if not resolved_log or resolved_log == "auto":
+    active_seed = next(
+        (seed for seed in SEEDS if data["seeds"].get(str(seed), {}).get("exists") and not data["seeds"].get(str(seed), {}).get("cell_summary")),
+        None,
+    )
+    if active_seed is None:
+        active_seed = next((seed for seed in reversed(SEEDS) if data["seeds"].get(str(seed), {}).get("exists")), SEEDS[0] if SEEDS else 0)
+    resolved_log = f"/content/logs/fgpo_{SUITE}_{METHOD}_{BENCHMARK}_s{active_seed}.log"
+data["log_path"] = resolved_log
+data["log_tail"] = sh(f"tail -n 80 '{resolved_log}' 2>/dev/null || true")
 
 print("__FGPO_JSON_START__")
 print(json.dumps(data, ensure_ascii=False))
@@ -424,7 +442,22 @@ class ColabPoller:
         return proc.stdout
 
     def _run_remote_exec(self, script: str, timeout: int) -> str:
-        return self._run_cli(["exec", "-s", self.args.session], stdin_text=script, timeout=timeout)
+        common_sh = Path(__file__).resolve().with_name("colab_common.sh")
+        env = dict(self.env)
+        env["COLAB_CLI"] = self.colab_bin
+        env["COLAB_EXEC_TIMEOUT"] = str(timeout)
+        proc = subprocess.run(
+            ["bash", "-c", 'source "$1" && colab_exec_run "$2" "python3 -"', "colab_exec_bridge", str(common_sh), self.args.session],
+            input=script,
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=timeout + 15,
+        )
+        if proc.returncode != 0:
+            msg = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+            raise RuntimeError(f"colab exec (single-attempt): {msg}")
+        return proc.stdout
 
     def _probe_remote(self, script: str) -> tuple[str, str]:
         mode = self.args.transport
@@ -433,13 +466,7 @@ class ColabPoller:
             return self._run_remote_ssh(script, timeout), "ssh"
         if mode == "exec":
             return self._run_remote_exec(script, timeout), "exec"
-        try:
-            return self._run_remote_ssh(script, min(timeout, 45)), "ssh"
-        except Exception as ssh_err:
-            try:
-                return self._run_remote_exec(script, timeout), "exec(fallback)"
-            except Exception as exec_err:
-                raise RuntimeError(f"SSH 失败 ({ssh_err}); colab exec 回退失败 ({exec_err})")
+        raise RuntimeError(f"Unsupported transport: {mode!r} (expected 'exec' or 'ssh')")
 
     def poll_once(self, *, force_meta: bool = False) -> dict[str, Any]:
         if not self.poll_lock.acquire(blocking=False):
@@ -752,7 +779,7 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
         <div id="procs-wrap" style="overflow:auto;"></div>
       </div>
       <div class="card">
-        <div class="card-h"><span class="card-t">远端主日志尾部 (/content/logs/fgpo_956ceab_alf.log)</span></div>
+        <div class="card-h"><span class="card-t">远端主日志尾部 (<span id="log-path-label">-</span>)</span></div>
         <pre id="log-tail" class="logbox mono">等待拉取...</pre>
       </div>
     </div>
@@ -773,7 +800,7 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
         currentTab = btn.dataset.tab;
         document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
         ["overview", "experiment", "costs", "logs"].forEach((t) => {
-          document.getElementById("panel-" + t).classList.toggle("hidden", t !== currentTab);
+          document.getElementById("tab-" + t).classList.toggle("hidden", t !== currentTab);
         });
       });
     });
@@ -832,6 +859,13 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
       const gDone = Math.max(csum.current_round_groups_done || 0, seedData.current_round_group_files || 0);
       const totalGroups = cfg.groups || 16;
       const role = csum.last_phase_role || "";
+      if (roundsDone === 0 && gDone === 0 && !seedData.checkpoint_current && (seedData.gcs_tx_locked || seedData.actor_cache_exists)) {
+        return {
+          label: `Round 0/${totalRounds}`,
+          cls: "warn",
+          detail: "GCS 初始检查点上传中",
+        };
+      }
       let stage = "采样 Rollout";
       if (role === "reference.single_round_activation") stage = "Reference 前向";
       else if (role === "credit.peer_values") stage = "同深度同伴归因";
@@ -910,7 +944,7 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
       }
 
       document.getElementById("subtitle").textContent =
-        `Session: ${meta.session} | Protocol: ${cfg.protocol || "-"} | Last OK: ${data.last_ok_at || "-"} | Remote UTC: ${t.timestamp_utc || "-"}`;
+        `Session: ${meta.session} | Protocol: ${cfg.protocol || "-"} | Backend: ${cfg.checkpoint_backend || "-"} | Last OK: ${data.last_ok_at || "-"} | Remote UTC: ${t.timestamp_utc || "-"}`;
 
       const errBox = document.getElementById("err-box");
       if (data.last_error) {
@@ -1082,6 +1116,7 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
         <table><thead><tr><th>PID</th><th>PPID</th><th>CPU%</th><th>MEM%</th><th>Elapsed</th><th>Command</th></tr></thead><tbody>
         ${procs.map((p) => `<tr class="mono"><td>${esc(p.pid)}</td><td>${esc(p.ppid)}</td><td>${esc(p.cpu_pct)}</td><td>${esc(p.mem_pct)}</td><td>${esc(p.elapsed)}</td><td style="word-break:break-all;">${esc(p.cmd)}</td></tr>`).join("")}
         </tbody></table>` : `<div class="kpi-sub">未检测到活跃训练/环境进程</div>`;
+      document.getElementById("log-path-label").textContent = t.log_path || meta.log_path || "-";
       document.getElementById("log-tail").textContent = t.log_tail || "(日志为空)";
     }
 
@@ -1138,9 +1173,9 @@ def _background_loop(poller: ColabPoller, interval: int, stop_event: threading.E
 def main() -> None:
     parser = argparse.ArgumentParser(description="Live local monitor UI for F-GPO Colab experiments.")
     parser.add_argument("--session", default="fgpo-r3-956ceab-alf")
-    parser.add_argument("--output-dir", default="/content/outputs/fgpo-r3-956ceab-alf")
-    parser.add_argument("--log-path", default="/content/logs/fgpo_956ceab_alf.log")
-    parser.add_argument("--config-path", default="/content/fgpo-r3/configs/fgpo-r3-colab-956ceab-alf.json")
+    parser.add_argument("--output-dir", default="/content/outputs/fgpo-r3-published-v4-alf")
+    parser.add_argument("--log-path", default="auto")
+    parser.add_argument("--config-path", default="/content/fgpo-r3/configs/fgpo-r3-colab-a100.json")
     parser.add_argument("--suite", default="comparison")
     parser.add_argument("--benchmark", default="alfworld")
     parser.add_argument("--method", default="fgpo")
@@ -1148,7 +1183,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--interval", type=int, default=60, help="Auto-poll interval in seconds (0 = manual only)")
-    parser.add_argument("--transport", choices=("auto", "ssh", "exec"), default="auto")
+    parser.add_argument("--transport", choices=("exec", "ssh"), default="exec")
     parser.add_argument("--timeout", type=int, default=90, help="Remote probe timeout in seconds")
     parser.add_argument("--colab-bin", default="~/.local/bin/colab")
     args = parser.parse_args()

@@ -2,7 +2,7 @@
 from .baseline_specs import PUBLISHED_RECIPES, PUBLISHED_SOURCES, published_recipe
 
 
-PROTOCOL = "fgpo-r3-published-v3"
+PROTOCOL = "fgpo-r3-published-v4"
 ABLATION_METHODS = ("fgpo_obs_only", "fgpo_no_transfer", "fgpo_no_support_weight")
 OWN_METHODS = ("fgpo",) + ABLATION_METHODS
 PUBLISHED_METHODS = tuple(PUBLISHED_RECIPES)
@@ -27,11 +27,11 @@ _OWN_DEFAULTS = {
     "rounds": 60, "groups": 16, "trajectories": 8,
     "learning_rate": 1e-6, "weight_decay": .01, "optimizer_betas": (.9, .999),
     "optimizer_eps": 1e-8, "gamma": 1., "reward_scale": 10.,
-    "syntax_reward_penalty": 0., "ppo_minibatch_rows": 256, "ppo_epochs": 1,
+    "syntax_reward_penalty": 0., "ppo_minibatch_rows": None, "ppo_epochs": 1,
     "loss_normalization": "trajectory", "ppo_clip_ratio": .2, "ppo_dual_clip": 3.,
     "entropy_coef": .001, "kl_coef": .01, "max_grad_norm": 1.,
     "temperature": 1., "eval_temperature": .4, "top_p": 1., "eval_top_p": 1.,
-    "history_length": None, "shuffle": False,
+    "history_length": None, "shuffle": False, "credit_transfer_max": .5,
 }
 _RECIPE_ALIASES = {
     "learning_rate": "lr", "optimizer_betas": "betas", "optimizer_eps": "adam_eps",
@@ -59,7 +59,7 @@ def resolve_method_config(config, method=None, benchmark=None):
         options["loss_normalization"] = "token"
     options.update(config.get("method_configs", {}).get(method, {}))
     if method in OWN_METHODS:
-        limits = options.get("output_tokens_by_benchmark", {"alfworld": 256, "appworld": 1024})
+        limits = options.get("output_tokens_by_benchmark", {"alfworld": 512, "appworld": 1024})
         options["output_tokens"] = int(options.get("output_tokens", limits[benchmark]))
     return options
 
@@ -96,9 +96,12 @@ def require_protocol(config):
                     or options["eval_temperature"] != .4 or options["eval_top_p"] != 1.):
                 raise ValueError("Formal sampling uses train temperature 1, evaluation .4, and top_p 1")
             if method in OWN_METHODS:
+                expected_tokens = 512 if benchmark == "alfworld" else 1024
                 if (options["gamma"] != 1. or options["syntax_reward_penalty"] != 0.
-                        or options["loss_normalization"] != "trajectory" or options["history_length"] is not None):
-                    raise ValueError("Own methods require undiscounted success, whole-turn context and trajectory loss")
+                        or options["loss_normalization"] != "trajectory" or options["history_length"] is not None
+                        or int(options["trajectories"]) != 8 or options["ppo_minibatch_rows"] is not None
+                        or int(options["output_tokens"]) != expected_tokens):
+                    raise ValueError("Own v4 methods require undiscounted success, K=8 atomic mixed groups, 512/1024 output tokens and trajectory loss")
                 continue
             recipe = published_recipe(method, benchmark, config["model_path"])
             required = {**recipe, **{key: recipe[source] for key, source in _RECIPE_ALIASES.items()},
@@ -121,7 +124,7 @@ def effective_training_identity(config):
         "max_context_tokens": int(options.get("max_context_tokens", 32768)),
         "rollout": "bounded_actor_prefix" if method in OWN_METHODS else "released_native_prompt",
         "constant_denominator": method in OWN_METHODS,
-        "runtime": "pytorch_full_finetune_cpu_fp32_adamw_published_virtual_batch_v3",
+        "runtime": "pytorch_full_finetune_cpu_fp32_adamw_published_virtual_batch_v4",
     }
     for key in ("rounds", "groups", "trajectories", "output_tokens", "learning_rate", "weight_decay",
                 "optimizer_eps", "gamma", "reward_scale", "syntax_reward_penalty", "history_length",
@@ -133,7 +136,13 @@ def effective_training_identity(config):
     if method in OWN_METHODS:
         identity.update(credit_radius=float(options.get("credit_radius", .10)),
                         credit_prior_weight=float(options.get("credit_prior_weight", 1.)),
-                        credit_transfer_max=float(options.get("credit_transfer_max", 1.)))
+                        credit_transfer_max=float(options.get("credit_transfer_max", .5)),
+                        own_batching="atomic_mixed_group",
+                        group_denominator=int(options["trajectories"]),
+                        homogeneous_group_bypass=True,
+                        positive_peer_continuation_gate=method != "fgpo_no_transfer",
+                        local_observation_matching="exact_token_id" if benchmark == "alfworld" else "dual_view_cosine",
+                        alfworld_frame="three_block_step_unquoted_commands_strict_tags_v4" if benchmark == "alfworld" else None)
     else:
         identity["published_recipe"] = published_recipe(method, benchmark, options["model_path"])
         identity["published_recipe"]["betas"] = tuple(identity["published_recipe"]["betas"])

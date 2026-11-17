@@ -22,6 +22,26 @@ from typing import Any, Mapping
 import uuid
 
 
+ALFWORLD_TASK_TYPES = {
+    'pick_and_place_simple': 'Pick',
+    'look_at_obj_in_light': 'Look',
+    'pick_clean_then_place_in_recep': 'Clean',
+    'pick_heat_then_place_in_recep': 'Heat',
+    'pick_cool_then_place_in_recep': 'Cool',
+    'pick_two_obj_and_place': 'Pick2',
+}
+ALFWORLD_TABLE_COLUMNS = (*ALFWORLD_TASK_TYPES.values(), 'All')
+
+
+def alfworld_task_type(task_id):
+    """Derive the Table 1 category from the official instance directory."""
+    parts = str(task_id).split('/')
+    prefix = parts[1].split('-', 1)[0] if len(parts) == 4 else None
+    if prefix not in ALFWORLD_TASK_TYPES:
+        raise ValueError(f'Unknown official task-type prefix in task_id: {task_id!r}')
+    return ALFWORLD_TASK_TYPES[prefix]
+
+
 @dataclass
 class StepResult:
     observation: str
@@ -55,8 +75,15 @@ class ALFWorldEnv:
         self.state = None
         self.steps = 0
         self.done = False
-        self.action_schema = {'benchmark': self.benchmark,
-            'native_system_prompt': 'You act in the official ALFWorld text environment. Emit <think>...</think> followed by <action>one native command</action>. Use the disclosed admissible commands. The environment ends when the goal is satisfied.'}
+        self.action_schema = {
+            'benchmark': self.benchmark,
+            'native_system_prompt': (
+                'You act in the official ALFWorld text environment. '
+                'First reason concisely inside <think>...</think>, then output exactly one '
+                'admissible command verbatim without quotes inside <action>...</action>. '
+                'The episode ends when the goal is satisfied or the 50-step horizon is reached.'
+            ),
+        }
 
     def list_tasks(self, split):
         directory = self.SPLITS[split]
@@ -80,7 +107,7 @@ class ALFWorldEnv:
     def _observation(self):
         commands = list(self.state['admissible_commands']) if not self.done else []
         self.action_schema['available_actions'] = commands
-        return json.dumps({'native_observation': str(self.state['feedback']),
+        return json.dumps({'native_observation': str(self.state['feedback']), 'step': self.steps,
                            'classic_text_action_state': {'available_actions': commands}}, ensure_ascii=False)
 
     def reset(self, task_id, initial_seed):

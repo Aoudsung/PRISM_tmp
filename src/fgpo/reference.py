@@ -6,6 +6,7 @@ Each packed segment is released before the next one is evaluated.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 import torch
@@ -85,12 +86,16 @@ def actor_history_embeddings(policy, trajectories):
 
 
 @torch.no_grad()
-def prepare_round(policy, trajectories, *, method="fgpo", config=None):
+def prepare_round(policy, trajectories, *, method="fgpo", config=None, round_index=None):
     config = {} if config is None else config
+    trajectories = tuple(trajectories)
     own = method in OWN_METHODS
+    benchmark = trajectories[0].benchmark if trajectories else config.get("benchmark")
     needs_history = own and method != "fgpo_obs_only"
+    needs_obs = own and benchmark == "appworld"
     scale = float(config.get("reward_scale", 10.))
     chunk = int(config.get("head_chunk_tokens", 64))
+    ledger = getattr(policy, "ledger", None)
     result = ReferenceRound()
     observation_users = {}
     for trajectory in trajectories:
@@ -98,7 +103,7 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None):
         previous = tuple(trajectory.initial_observation_ids)
         for row in trajectory.steps:
             by_segment.setdefault(row.response_span.segment_id, []).append(row)
-            if own:
+            if needs_obs:
                 key = previous or policy.encode("[Empty stdout]")
                 observation_users.setdefault(key, []).append(row.step_id)
                 previous = tuple(row.observation_repr_ids)
@@ -106,23 +111,26 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None):
             rows = by_segment.get(segment.segment_id, ())
             if not rows:
                 continue
-            hidden, layer = policy.packed_segment_hidden(
-                segment.token_ids[:segment.behavior_closed_length],
-                hidden_layer=-8 if needs_history else None,
-                hidden_positions=[row.prompt_length - 1 for row in rows] if needs_history else None,
-                role="reference.packed_segment")
-            histories = None
-            if needs_history:
-                histories = F.normalize(layer[0].float(), dim=-1).cpu()
-            del layer
-            if any(row.response_span.length != len(row.response_ids) for row in rows):
-                raise ValueError("Reference head slices must match each actual response's tokens.")
-            targets = tuple(token for row in rows for token in row.response_ids)
-            positions = [position for row in rows
-                         for position in range(row.response_span.start - 1, row.response_span.stop - 1)]
-            scores = sampled_logprobs(policy, hidden[0], targets, positions=positions,
-                                      role="reference.response_head", chunk_tokens=chunk)
-            del hidden
+            with (ledger.context(group_id=trajectory.group_id, round_index=round_index)
+                  if ledger is not None else nullcontext()), \
+                 (ledger.aggregate_model_calls() if ledger is not None else nullcontext()):
+                hidden, layer = policy.packed_segment_hidden(
+                    segment.token_ids[:segment.behavior_closed_length],
+                    hidden_layer=-8 if needs_history else None,
+                    hidden_positions=[row.prompt_length - 1 for row in rows] if needs_history else None,
+                    role="reference.packed_segment")
+                histories = None
+                if needs_history:
+                    histories = F.normalize(layer[0].float(), dim=-1).cpu()
+                del layer
+                if any(row.response_span.length != len(row.response_ids) for row in rows):
+                    raise ValueError("Reference head slices must match each actual response's tokens.")
+                targets = tuple(token for row in rows for token in row.response_ids)
+                positions = [position for row in rows
+                             for position in range(row.response_span.start - 1, row.response_span.stop - 1)]
+                scores = sampled_logprobs(policy, hidden[0], targets, positions=positions,
+                                          role="reference.response_head", chunk_tokens=chunk)
+                del hidden
             offset = 0
             for index, row in enumerate(rows):
                 stop = offset + len(row.response_ids)
@@ -131,14 +139,25 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None):
                     scores[offset:stop], z_hist=histories[index] if needs_history else None, reward=reward)
                 offset = stop
             del histories, scores, targets, positions
-    if own and observation_users:
+    unique_observations = len(observation_users)
+    if needs_obs and observation_users:
         # The policy implements length-aware, token-budgeted microbatches. A
         # single padded batch of all observation tokens is deliberately avoided.
-        keys = list(observation_users)
-        vectors = policy.observation_embeddings(keys, role="reference.local_observations")
-        for key, vector in zip(keys, vectors, strict=True):
-            for step_id in observation_users[key]:
-                result.steps[step_id].z_obs = vector
-    result.diagnostics = {"actual_actor_prefixes": True, "intrinsic_reward_enabled": False,
-                          "unique_local_observations": len(observation_users)}
+        with (ledger.context(group_id=None, round_index=round_index)
+              if ledger is not None else nullcontext()), \
+             (ledger.aggregate_model_calls() if ledger is not None else nullcontext()):
+            keys = list(observation_users)
+            vectors = policy.observation_embeddings(keys, role="reference.local_observations")
+            for key, vector in zip(keys, vectors, strict=True):
+                for step_id in observation_users[key]:
+                    result.steps[step_id].z_obs = vector
+            observation_users.clear()
+            del keys, vectors
+    result.diagnostics = {
+        "actual_actor_prefixes": True,
+        "intrinsic_reward_enabled": False,
+        "scored_trajectories": len(trajectories),
+        "local_observation_embeddings_computed": bool(needs_obs and unique_observations),
+        "unique_local_observations": unique_observations,
+    }
     return result

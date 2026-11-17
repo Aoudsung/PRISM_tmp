@@ -15,6 +15,9 @@ from typing import Any, Mapping
 import uuid
 
 
+_UNSET = object()
+
+
 def monotonic_seconds() -> float:
     return time.clock_gettime(time.CLOCK_MONOTONIC)
 
@@ -77,6 +80,66 @@ def _last_event_index(path):
         return int(json.loads(b"".join(reversed(pieces)))["event_index"]), discarded
 
 
+def _merge_tail_observations(*sources):
+    merged = {}
+    for source in sources:
+        for identity, size in source.items():
+            merged[identity] = max(merged.get(identity, 0), int(size))
+    return merged
+
+
+def _cost_tail_id(writer_session_id, committed_bytes):
+    # Older journals have one unlabelled observation at their monotonic prefix.
+    origin = f"writer:{writer_session_id}" if writer_session_id else "legacy:costs-monotonic"
+    return f"{origin}:{int(committed_bytes)}"
+
+
+def _read_cost_tail_state(path: Path | None):
+    empty = {"abandoned_costs_tail_bytes": 0, "consumed_tail_observations": {},
+             "writer_session_id": None}
+    if path is None:
+        return empty
+    state_file = path.parent / ".cost-tail-state.json"
+    if not state_file.is_file():
+        # Import the existing cumulative counter without making the GCS
+        # publisher a writer of this cost-owner/recovery provenance file.
+        state_file = path.parent / ".gcs-journal-state.json"
+    if not state_file.is_file():
+        return empty
+    data = json.loads(state_file.read_text(encoding="utf-8"))
+    return {"abandoned_costs_tail_bytes": int(data.get("abandoned_costs_tail_bytes", 0)),
+            "consumed_tail_observations": dict(data.get("consumed_tail_observations", {})),
+            "writer_session_id": data.get("writer_session_id")}
+
+
+def _write_cost_tail_state(path: Path | None, *, count=0, consumed=None, writer_session_id=_UNSET):
+    previous = _read_cost_tail_state(path)
+    if path is None:
+        return previous
+    data = {"abandoned_costs_tail_bytes": max(previous["abandoned_costs_tail_bytes"], int(count)),
+            "consumed_tail_observations": _merge_tail_observations(
+                previous["consumed_tail_observations"], {} if consumed is None else consumed),
+            "writer_session_id": previous["writer_session_id"]}
+    if writer_session_id is not _UNSET:
+        data["writer_session_id"] = writer_session_id
+    state_file = path.parent / ".cost-tail-state.json"
+    if data == previous and state_file.is_file():
+        return data
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    pending = state_file.with_name(state_file.name + f".{uuid.uuid4().hex}.incoming")
+    with pending.open("wb") as handle:
+        handle.write((json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(pending, state_file)
+    directory = os.open(state_file.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    return data
+
+
 class CostLedger:
     """Append-only actual work; no policy resource vector or training cutoff."""
     def __init__(self, path: str | Path | None = None, *, gpu_ids=()):
@@ -85,17 +148,70 @@ class CostLedger:
         self.records: list[CostRecord] = []
         self.started = monotonic_seconds()
         self.session_id = uuid.uuid4().hex
+        tail_state = _read_cost_tail_state(self.path)
         self.event_cursor, self._discarded_tail_bytes = (_last_event_index(self.path)
                              if self.path is not None and self.path.exists() else (0, 0))
+        self._prior_abandoned_tail_bytes = tail_state["abandoned_costs_tail_bytes"]
+        self._consumed_tail_observations = dict(tail_state["consumed_tail_observations"])
+        newly_discarded = 0
+        if self._discarded_tail_bytes:
+            identity = _cost_tail_id(tail_state["writer_session_id"], self.path.stat().st_size)
+            newly_discarded = max(0, self._discarded_tail_bytes
+                                  - self._consumed_tail_observations.get(identity, 0))
+            self._consumed_tail_observations[identity] = max(
+                self._discarded_tail_bytes, self._consumed_tail_observations.get(identity, 0))
+        self._cumulative_abandoned_tail_bytes = self._prior_abandoned_tail_bytes + newly_discarded
+        self._abandoned_tail_bytes_before = 0
+        _write_cost_tail_state(self.path, count=self._cumulative_abandoned_tail_bytes,
+                               consumed=self._consumed_tail_observations, writer_session_id=self.session_id)
         self.durable_offset_bytes = 0
         self._elapsed_before = 0.
         self._device_seconds_before = 0.
+        self._startup_wall_seconds = 0.
+        self._startup_device_seconds = 0.
+        self._startup_credited = False
         self._totals = {name: 0 for name in ("input_tokens", "output_tokens", "forward_tokens", "env_steps", "seconds")}
-        self._usage_complete = not self._discarded_tail_bytes
+        self._usage_complete = not self._cumulative_abandoned_tail_bytes
         self.recovery = None
         self.active_group_id = None
+        self.active_round = None
         self._model_scope_depth = 0
         self._model_calls = {}
+
+    def credit_startup(self, *, pre_engine_seconds=0., startup_details=None, cold_asset_receipt=None):
+        """Anchor session wall/device clocks at actual cell startup and record intervals once."""
+        if self._startup_credited:
+            raise RuntimeError("Startup intervals can only be credited once per ledger session")
+        self._startup_credited = True
+        cold_seconds = 0.
+        if cold_asset_receipt is not None:
+            cold_seconds = max(0., float(cold_asset_receipt.get("seconds") or 0.))
+        pre_seconds = max(0., float(pre_engine_seconds))
+        total_startup = cold_seconds + pre_seconds
+        self._startup_wall_seconds = total_startup
+        self._startup_device_seconds = total_startup * len(self.gpu_ids)
+        if cold_asset_receipt is not None:
+            self.record("initialization", "runner.cold_asset_restore",
+                        seconds=cold_seconds, details=dict(cold_asset_receipt))
+        self.record("initialization", "runner.cell_startup",
+                    seconds=pre_seconds, details={} if startup_details is None else dict(startup_details))
+
+    @contextmanager
+    def context(self, *, group_id=_UNSET, round_index=_UNSET):
+        """Set round/group attribution cleanly, flushing any prior model calls."""
+        self._flush_model_calls()
+        previous_group = self.active_group_id
+        previous_round = self.active_round
+        if group_id is not _UNSET:
+            self.active_group_id = None if group_id is None else str(group_id)
+        if round_index is not _UNSET:
+            self.active_round = None if round_index is None else int(round_index)
+        try:
+            yield
+        finally:
+            self._flush_model_calls()
+            self.active_group_id = previous_group
+            self.active_round = previous_round
 
     @contextmanager
     def aggregate_model_calls(self):
@@ -131,7 +247,8 @@ class CostLedger:
             detail = {} if details is None else dict(details)
             key = (role, devices, detail.get("time_basis"), detail.get("status"),
                    detail.get("use_cache"), detail.get("executed_decoder_layers"),
-                   self.active_group_id)
+                   detail.get("attention_mask_omitted"),
+                   self.active_group_id, self.active_round)
             values = dict(input_tokens=input_tokens, output_tokens=output_tokens,
                           forward_tokens=forward_tokens, seconds=seconds, env_steps=env_steps)
             if key not in self._model_calls:
@@ -142,21 +259,25 @@ class CostLedger:
                 for name, value in values.items():
                     item[name] = None if item[name] is None or value is None else item[name] + value
                 item["details"]["calls"] += 1
-                for name in ("padded_compute_tokens", "positions"):
+                for name in ("padded_compute_tokens", "positions", "cached_query_key_positions"):
                     if name in detail:
                         item["details"][name] = item["details"].get(name, 0) + detail[name]
             return None
         if kind != "model":
             self._flush_model_calls()
         self.event_cursor += 1
-        elapsed = monotonic_seconds() - self.started
+        active_seconds = monotonic_seconds() - self.started
+        elapsed = self._startup_wall_seconds + active_seconds
+        device_elapsed = self._startup_device_seconds + active_seconds * len(self.gpu_ids)
         event_details = {} if details is None else dict(details)
         if self.active_group_id is not None:
             event_details.setdefault("group_id", self.active_group_id)
+        if self.active_round is not None:
+            event_details.setdefault("round", self.active_round)
         row = CostRecord(uuid.uuid4().hex, str(kind), str(role), input_tokens, output_tokens,
                          forward_tokens, seconds, self.gpu_ids if gpu_ids is None else tuple(gpu_ids),
                          event_details, self.event_cursor, int(env_steps),
-                         self.session_id, elapsed, elapsed * len(self.gpu_ids))
+                         self.session_id, elapsed, device_elapsed)
         self.records.append(row)
         for name in self._totals:
             value = getattr(row, name)
@@ -171,17 +292,25 @@ class CostLedger:
                 self.durable_offset_bytes = handle.tell()
         return row
 
+    def _abandoned_tail_total(self):
+        return max(self._abandoned_tail_bytes_before, self._cumulative_abandoned_tail_bytes)
+
     def snapshot(self):
         self._flush_model_calls()
-        elapsed = monotonic_seconds() - self.started
+        active_seconds = monotonic_seconds() - self.started
+        elapsed = self._startup_wall_seconds + active_seconds
+        device_elapsed = self._startup_device_seconds + active_seconds * len(self.gpu_ids)
         return {"events": self.event_cursor, "wall_seconds": self._elapsed_before + elapsed,
-                "allocated_device_seconds": self._device_seconds_before + elapsed * len(self.gpu_ids),
+                "allocated_device_seconds": self._device_seconds_before + device_elapsed,
                 **self._totals, "usage_complete": self._usage_complete,
+                "discarded_incomplete_tail_bytes": self._abandoned_tail_total(),
                 "durable_offset_bytes": self.durable_offset_bytes}
 
     def state_dict(self):
         current = self.snapshot()
         return {"totals": dict(self._totals), "usage_complete": self._usage_complete,
+                "abandoned_tail_bytes": self._abandoned_tail_total(),
+                "consumed_tail_observations": dict(self._consumed_tail_observations),
                 "event_cursor": self.event_cursor, "durable_offset_bytes": self.durable_offset_bytes,
                 "elapsed_active_seconds": current["wall_seconds"],
                 "allocated_device_seconds": current["allocated_device_seconds"],
@@ -190,6 +319,7 @@ class CostLedger:
                 "session_device_seconds": current["allocated_device_seconds"] - self._device_seconds_before,
                 "journal_path": None if self.path is None else str(self.path.resolve()),
                 "active_group_id": self.active_group_id,
+                "active_round": self.active_round,
                 "recovery": self.recovery}
 
     def load_state_dict(self, state):
@@ -200,8 +330,16 @@ class CostLedger:
         Only session maxima and interrupted group identities are retained.
         """
         restore_started = monotonic_seconds()
+        tail_state = _read_cost_tail_state(self.path)
+        sidecar_abandoned = tail_state["abandoned_costs_tail_bytes"]
+        self._consumed_tail_observations = _merge_tail_observations(
+            self._consumed_tail_observations, tail_state["consumed_tail_observations"],
+            state.get("consumed_tail_observations", {}))
+        if sidecar_abandoned > self._cumulative_abandoned_tail_bytes:
+            self._cumulative_abandoned_tail_bytes = sidecar_abandoned
         totals = dict(state["totals"])
-        complete = bool(state["usage_complete"]) and not self._discarded_tail_bytes
+        abandoned = max(int(state.get("abandoned_tail_bytes", 0)), self._cumulative_abandoned_tail_bytes)
+        complete = bool(state["usage_complete"]) and not abandoned
         cursor, offset = int(state["event_cursor"]), int(state["durable_offset_bytes"])
         sessions, groups, imported = {}, set(), 0
         if self.path is None:
@@ -247,6 +385,8 @@ class CostLedger:
                 device -= float(state["session_device_seconds"])
             previous_wall += max(0., elapsed)
             previous_device += max(0., device)
+        self._abandoned_tail_bytes_before = abandoned
+        _write_cost_tail_state(self.path, count=abandoned, consumed=self._consumed_tail_observations)
         self._totals, self._usage_complete = totals, complete
         self.event_cursor, self.durable_offset_bytes = cursor, offset
         self._elapsed_before = float(state["elapsed_active_seconds"]) + previous_wall
@@ -254,13 +394,17 @@ class CostLedger:
         if state["session_id"] == self.session_id:
             self._elapsed_before -= float(state["session_elapsed_seconds"])
             self._device_seconds_before -= float(state["session_device_seconds"])
-        # Keep started: initialization and restore time are the current active
-        # segment, and must not be restarted or added twice here.
+        # Keep started and _startup_*_seconds: initialization and restore time
+        # are the current active segment, and must not be restarted or added twice here.
         self.recovery = {"source_checkpoint_offset_bytes": int(state["durable_offset_bytes"]),
                          "adopted_through_offset_bytes": offset, "imported_events": imported,
                          "discarded_incomplete_tail_bytes": self._discarded_tail_bytes,
+                         "prior_abandoned_tail_bytes": self._prior_abandoned_tail_bytes,
+                         "remote_abandoned_tail_bytes": max(0, sidecar_abandoned - (self._prior_abandoned_tail_bytes + self._discarded_tail_bytes)),
+                         "cumulative_abandoned_tail_bytes": abandoned,
                          "interrupted_group_ids": sorted(groups),
                          "checkpoint_active_group_id": state["active_group_id"],
+                         "checkpoint_active_round": state.get("active_round"),
                          "environment_continuation": "not_restored",
                          "unrecorded_interruption_wall_seconds": None,
                          "unrecorded_interruption_device_seconds": None,
@@ -300,6 +444,7 @@ class PublicObservation:
     user_body_ids: tuple[int, ...]
     observation_body_offset: int
     available_actions: tuple[str, ...] = ()
+    user_suffix_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)

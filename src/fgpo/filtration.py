@@ -27,10 +27,16 @@ class _Segment:
     observation_spans: list[TokenSpan] = field(default_factory=list)
     behavior_closed_length: int = 0
     scoring_tail_start: int | None = None
+    _frozen: SegmentRecord | None = field(default=None, init=False, repr=False, compare=False)
 
     def freeze(self):
-        return SegmentRecord(self.segment_id, tuple(self.tokens), tuple(self.response_spans),
-            tuple(self.observation_spans), self.behavior_closed_length, self.scoring_tail_start, self.kind)
+        if self._frozen is None:
+            self._frozen = SegmentRecord(
+                self.segment_id, tuple(self.tokens), tuple(self.response_spans),
+                tuple(self.observation_spans), self.behavior_closed_length,
+                self.scoring_tail_start, self.kind,
+            )
+        return self._frozen
 
 
 class TokenFiltration:
@@ -55,10 +61,12 @@ class TokenFiltration:
             raise ValueError("The complete pinned goal/bootstrap exceeds the designated native prompt capacity.")
         self.blocks: list[TurnBlock] = []
         self._segments: list[_Segment] = []
+        self._frozen_segments: tuple[SegmentRecord, ...] | None = None
         self.current = self._new_segment(self.pinned_ids, kind)
         self.prompt_ids = self.pinned_ids
 
     def _new_segment(self, token_ids, kind):
+        self._frozen_segments = None
         segment = _Segment(f"{self.trajectory_id}:{kind}:{len(self._segments)}", list(token_ids), kind)
         self._segments.append(segment)
         return segment
@@ -88,6 +96,8 @@ class TokenFiltration:
         if not response_ids:
             raise ValueError("An actual sampled action contains at least one token, including any actual terminator.")
         prompt_length = len(self.prompt_ids)
+        self._frozen_segments = None
+        self.current._frozen = None
         response = TokenSpan(self.current.segment_id, prompt_length, len(response_ids), step_id)
         self.current.tokens.extend(response_ids)
         self.current.response_spans.append(response)
@@ -130,4 +140,6 @@ class TokenFiltration:
         return Advance(prompt_length, response, observation_span, block, next_prompt, mode, delta)
 
     def segments(self) -> tuple[SegmentRecord, ...]:
-        return tuple(segment.freeze() for segment in self._segments)
+        if self._frozen_segments is None:
+            self._frozen_segments = tuple(segment.freeze() for segment in self._segments)
+        return self._frozen_segments

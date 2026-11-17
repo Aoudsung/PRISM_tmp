@@ -1,5 +1,5 @@
 {
-  "protocol": "fgpo-r3-published-v3",
+  "protocol": "fgpo-r3-published-v4",
   "local_files_only": true,
   "benchmarks": [
     "alfworld",
@@ -88,7 +88,7 @@
       "rounds": 60,
       "training_window_source": "predeclared_fgpo_60_rounds",
       "output_tokens_by_benchmark": {
-        "alfworld": 256,
+        "alfworld": 512,
         "appworld": 1024
       }
     },
@@ -96,7 +96,7 @@
       "rounds": 60,
       "training_window_source": "same_as_main_fgpo",
       "output_tokens_by_benchmark": {
-        "alfworld": 256,
+        "alfworld": 512,
         "appworld": 1024
       }
     },
@@ -104,7 +104,7 @@
       "rounds": 60,
       "training_window_source": "same_as_main_fgpo",
       "output_tokens_by_benchmark": {
-        "alfworld": 256,
+        "alfworld": 512,
         "appworld": 1024
       }
     },
@@ -112,7 +112,7 @@
       "rounds": 60,
       "training_window_source": "same_as_main_fgpo",
       "output_tokens_by_benchmark": {
-        "alfworld": 256,
+        "alfworld": 512,
         "appworld": 1024
       }
     },
@@ -133,7 +133,7 @@
     "resolution": "Source recipe sets all published semantic defaults; common resource options remain configurable."
   },
   "adaptations": [
-    "fresh_published_v3_study_no_v1_or_v2_resume",
+    "fresh_published_v4_study_no_v1_v2_or_v3_resume",
     "Qwen2.5_7B_backbone_and_full_official_evaluation",
     "published_ALFWorld_credit_prompt_reward_and_training_recipes",
     "AppWorld_native_Python_transfer_not_original_paper_experiment",
@@ -141,6 +141,8 @@
     "released_copy_balance_virtual_microbatch_weights_for_published_PPO",
     "GiGPO_published_1_5B_full_finetune_recipe_transferred_to_study_7B",
     "own_fixed_trajectory_loss_and_undiscounted_terminal_success",
+    "own_atomic_mixed_group_updates_with_homogeneous_bypass",
+    "own_positive_peer_gated_continuation_and_exact_alfworld_obs_match",
     "own_ablations_only_on_ALFWorld_reusing_main_FGPO",
     "diagnostics_reuse_formal_records_no_additional_rollouts"
   ],
@@ -161,7 +163,7 @@
   "reward_scale": 10,
   "credit_radius": 0.1,
   "credit_prior_weight": 1,
-  "credit_transfer_max": 1,
+  "credit_transfer_max": 0.5,
   "ppo_clip_ratio": 0.2,
   "ppo_dual_clip": 3,
   "entropy_coef": 0.001,
