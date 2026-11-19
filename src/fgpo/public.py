@@ -7,15 +7,18 @@ import re
 from typing import Mapping
 
 from .records import PublicObservation
+from .textcraft import (TEXTCRAFT_HORIZON, TEXTCRAFT_OUTPUT_TOKENS, textcraft_action,
+                        textcraft_observation)
 
 
 IM_START, IM_END, END_OF_TEXT, NEWLINE = 151644, 151645, 151643, 198
 TERMINATORS = frozenset((IM_END, END_OF_TEXT))
-HORIZONS = {"alfworld": 50, "appworld": 100}
-OUTPUT_LIMITS = {"alfworld": 512, "appworld": 1024}
+HORIZONS = {"alfworld": 50, "appworld": 100, "webshop": 15, "textcraft": TEXTCRAFT_HORIZON}
+OUTPUT_LIMITS = {"alfworld": 512, "appworld": 1024, "webshop": 512, "textcraft": TEXTCRAFT_OUTPUT_TOKENS}
+EXACT_OBSERVATION_BENCHMARKS = frozenset(("alfworld", "textcraft"))
 EMPTY_STDOUT = "[Empty stdout]"
-_ALFWORLD_THINK_RE = re.compile(r"<think>(?:(?!</?think\b).)*?</think>", re.DOTALL | re.IGNORECASE)
-_ALFWORLD_ACTION_RE = re.compile(r"<action>((?:(?!</?action\b).)*?)</action>", re.DOTALL | re.IGNORECASE)
+_TEXT_THINK_RE = re.compile(r"<think>(?:(?!</?think\b).)*?</think>", re.DOTALL | re.IGNORECASE)
+_TEXT_ACTION_RE = re.compile(r"<action>((?:(?!</?action\b).)*?)</action>", re.DOTALL | re.IGNORECASE)
 
 
 def encode_text(tokenizer, text: str) -> tuple[int, ...]:
@@ -25,6 +28,10 @@ def encode_text(tokenizer, text: str) -> tuple[int, ...]:
 
 def project_public_observation(tokenizer, benchmark: str, raw_observation: str, *,
                                action_schema: Mapping, goal: str, initial=False) -> PublicObservation:
+    if benchmark == "textcraft":
+        text = textcraft_observation(raw_observation)
+        pure = encode_text(tokenizer, text)
+        return PublicObservation(raw_observation, text, pure, pure, (), pure, 0)
     if benchmark == "appworld":
         pure = encode_text(tokenizer, raw_observation)
         if not initial and len(pure) > 1024:
@@ -38,18 +45,24 @@ def project_public_observation(tokenizer, benchmark: str, raw_observation: str, 
         else:
             body, offset = representation, 0
         return PublicObservation(raw_observation, text, pure, representation, (), body, offset)
-    if benchmark != "alfworld":
+    if benchmark == "webshop":
+        text = raw_observation
+        step_num = min(int(action_schema["step"]) + 1, HORIZONS[benchmark])
+        commands = tuple(action_schema["available_actions"])
+        suffix = "\nAdmissible actions:\n" + ("\n".join(commands) if commands else "(none)")
+    elif benchmark == "alfworld":
+        envelope = json.loads(raw_observation)
+        text = str(envelope["native_observation"])
+        if initial:
+            text = re.sub(r"(?:^|\n)Your task is to:.*", "", text).strip()
+        step_num = min(int(envelope.get("step", 0)) + 1, HORIZONS[benchmark])
+        commands = tuple(str(c) for c in action_schema["available_actions"] if str(c) != "help")
+        command_lines = "\n".join(commands) if commands else "(none)"
+        suffix = ("\n\nAdmissible commands (choose one exact command without quotes):\n"
+                  f"{command_lines}\nEmit concise <think>...</think> then <action>exact command</action>.")
+    else:
         raise ValueError(f"Unsupported official F-GPO benchmark: {benchmark}")
-    envelope = json.loads(raw_observation)
-    text = str(envelope["native_observation"])
-    if initial:
-        text = re.sub(r"(?:^|\n)Your task is to:.*", "", text).strip()
-    step_num = min(int(envelope.get("step", 0)) + 1, HORIZONS["alfworld"])
-    commands = tuple(str(c) for c in action_schema["available_actions"] if str(c) != "help")
-    prefix = f"Task: {goal}\nStep: {step_num}/{HORIZONS['alfworld']}\nCurrent observation:\n"
-    command_lines = "\n".join(commands) if commands else "(none)"
-    suffix = ("\n\nAdmissible commands (choose one exact command without quotes):\n"
-              f"{command_lines}\nEmit concise <think>...</think> then <action>exact command</action>.")
+    prefix = f"Task: {goal}\nStep: {step_num}/{HORIZONS[benchmark]}\nCurrent observation:\n"
     prefix_ids, pure, suffix_ids = encode_text(tokenizer, prefix), encode_text(tokenizer, text), encode_text(tokenizer, suffix)
     representation = pure if pure else encode_text(tokenizer, EMPTY_STDOUT)
     # Wrapper and observation are separate integer blocks; BPE cannot merge their boundary.
@@ -74,12 +87,15 @@ def pinned_prompt(tokenizer, system_prompt: str, initial: PublicObservation) -> 
 
 def parse_native_response(benchmark: str, text: str):
     """Return the actual native action and syntax/format validity, without action gating."""
-    if benchmark == "alfworld":
-        remainder = _ALFWORLD_THINK_RE.sub("", text)
+    if benchmark == "textcraft":
+        command, valid = textcraft_action(text)
+        return {"kind": "native_text" if command else "invalid", "text": command}, valid
+    if benchmark in ("alfworld", "webshop"):
+        remainder = _TEXT_THINK_RE.sub("", text)
         lowered_rem = remainder.lower()
         if "<think" in lowered_rem or "</think" in lowered_rem:
             return {"kind": "invalid", "text": ""}, False
-        matches = list(_ALFWORLD_ACTION_RE.finditer(remainder))
+        matches = list(_TEXT_ACTION_RE.finditer(remainder))
         if len(matches) != 1:
             return {"kind": "invalid", "text": ""}, False
         outside = (remainder[:matches[0].start()] + remainder[matches[0].end():]).lower()

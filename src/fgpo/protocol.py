@@ -1,5 +1,9 @@
 """Published comparisons and claim-scoped own ablations; independent of torch."""
-from .baseline_specs import PUBLISHED_RECIPES, PUBLISHED_SOURCES, published_recipe
+from .baseline_specs import (PUBLISHED_RECIPES, PUBLISHED_SOURCES, UPSTREAM_COMMIT, published_recipe,
+                             supports_published_benchmark)
+from .public import EXACT_OBSERVATION_BENCHMARKS, HORIZONS as OFFICIAL_HORIZONS, OUTPUT_LIMITS
+from .textcraft import TEXTCRAFT_CONTEXT_TOKENS, TEXTCRAFT_COUNTS, TEXTCRAFT_SOURCE_COMMIT, TEXTCRAFT_TRAIN_GROUPS, TEXTCRAFT_TRAIN_ROUNDS
+from .webshop import TRAIN_GROUPS, TRAIN_ROUNDS, VALIDATION_SESSIONS, VALIDATION_WORKERS
 
 
 PROTOCOL = "fgpo-r3-published-v4"
@@ -15,13 +19,14 @@ METHOD_ROLES = {method: ("proposed_method" if method == "fgpo" else
                          "own_ablation" if method in ABLATION_METHODS else
                          "published_baseline") for method in METHODS}
 
-OFFICIAL_HORIZONS = {"alfworld": 50, "appworld": 100}
 OFFICIAL_EVALUATION_SPLITS = {
     "alfworld": ("valid_unseen",),
     "appworld": ("test_normal", "test_challenge"),
+    "webshop": ("test",),
+    "textcraft": ("val",),
 }
 SUITE_METHODS = {"comparison": COMPARISON_METHODS, "ablation": ABLATION_METHODS}
-SUITE_BENCHMARKS = {"comparison": ("alfworld", "appworld"), "ablation": ("alfworld",)}
+SUITE_BENCHMARKS = {"comparison": tuple(OFFICIAL_HORIZONS), "ablation": ("alfworld", "webshop", "textcraft")}
 
 _OWN_DEFAULTS = {
     "rounds": 60, "groups": 16, "trajectories": 8,
@@ -42,6 +47,14 @@ _RECIPE_ALIASES = {
 }
 
 
+def method_benchmark_pairs(methods, benchmarks):
+    """Keep the declared iteration order and select each available recipe."""
+    return tuple((benchmark, method) for benchmark in benchmarks for method in methods
+                 if (benchmark != "webshop" or method in ("fgpo", "fgpo_obs_only", "fgpo_no_transfer"))
+                 and (benchmark != "textcraft" or method in (*OWN_METHODS, "graphgpo", "g2po"))
+                 and (method not in PUBLISHED_METHODS or supports_published_benchmark(method, benchmark)))
+
+
 def resolve_method_config(config, method=None, benchmark=None):
     """Resolve source recipes without leaking own-method defaults into them.
 
@@ -51,7 +64,9 @@ def resolve_method_config(config, method=None, benchmark=None):
     """
     method = config["method"] if method is None else method
     benchmark = config["benchmark"] if benchmark is None else benchmark
-    options = {**_OWN_DEFAULTS, **config, "method": method, "benchmark": benchmark}
+    defaults = (dict(_OWN_DEFAULTS, rounds=TEXTCRAFT_TRAIN_ROUNDS, max_context_tokens=TEXTCRAFT_CONTEXT_TOKENS)
+                if benchmark == "textcraft" else _OWN_DEFAULTS)
+    options = {**defaults, **config, "method": method, "benchmark": benchmark}
     if method in PUBLISHED_METHODS:
         recipe = published_recipe(method, benchmark, config["model_path"])
         options.update(recipe)
@@ -59,7 +74,7 @@ def resolve_method_config(config, method=None, benchmark=None):
         options["loss_normalization"] = "token"
     options.update(config.get("method_configs", {}).get(method, {}))
     if method in OWN_METHODS:
-        limits = options.get("output_tokens_by_benchmark", {"alfworld": 512, "appworld": 1024})
+        limits = {**OUTPUT_LIMITS, **options.get("output_tokens_by_benchmark", {})}
         options["output_tokens"] = int(options.get("output_tokens", limits[benchmark]))
     return options
 
@@ -80,35 +95,48 @@ def require_protocol(config):
     benchmarks = (config["benchmark"],) if "benchmark" in config else tuple(config.get("benchmarks", ()))
     for benchmark, horizon in config.get("horizons", {}).items():
         if benchmark not in OFFICIAL_HORIZONS or horizon != OFFICIAL_HORIZONS[benchmark]:
-            raise ValueError("Official horizons are ALFWorld 50 and AppWorld 100")
+            raise ValueError(f"Invalid official horizon for {benchmark!r}")
     for benchmark, splits in config.get("evaluation_splits", {}).items():
         if benchmark not in OFFICIAL_EVALUATION_SPLITS or tuple(splits) != OFFICIAL_EVALUATION_SPLITS[benchmark]:
             raise ValueError("Evaluation uses each declared complete official split")
-    for method in methods:
-        for benchmark in benchmarks:
-            if benchmark not in OFFICIAL_HORIZONS:
-                raise ValueError(f"Unknown official benchmark {benchmark!r}")
-            options = resolve_method_config(config, method, benchmark)
-            if options["ppo_epochs"] != 1 or options["shuffle"]:
-                raise ValueError("This implementation uses one PPO epoch with the released stable row order")
-            # PPO old/current/reference probabilities all use the unit-temperature law.
-            if (options["temperature"] != 1. or options["top_p"] != 1.
-                    or options["eval_temperature"] != .4 or options["eval_top_p"] != 1.):
-                raise ValueError("Formal sampling uses train temperature 1, evaluation .4, and top_p 1")
-            if method in OWN_METHODS:
-                expected_tokens = 512 if benchmark == "alfworld" else 1024
-                if (options["gamma"] != 1. or options["syntax_reward_penalty"] != 0.
-                        or options["loss_normalization"] != "trajectory" or options["history_length"] is not None
-                        or int(options["trajectories"]) != 8 or options["ppo_minibatch_rows"] is not None
-                        or int(options["output_tokens"]) != expected_tokens):
-                    raise ValueError("Own v4 methods require undiscounted success, K=8 atomic mixed groups, 512/1024 output tokens and trajectory loss")
-                continue
-            recipe = published_recipe(method, benchmark, config["model_path"])
-            required = {**recipe, **{key: recipe[source] for key, source in _RECIPE_ALIASES.items()},
-                        "loss_normalization": "token"}
-            changed = [key for key, value in required.items() if not _same_value(options.get(key), value)]
-            if changed:
-                raise ValueError(f"Published {method} source recipe differs at {', '.join(changed)}")
+    for benchmark in benchmarks:
+        if benchmark not in OFFICIAL_HORIZONS:
+            raise ValueError(f"Unknown official benchmark {benchmark!r}")
+    pairs = method_benchmark_pairs(methods, benchmarks)
+    if methods and benchmarks and not pairs:
+        raise ValueError("Selected methods have no published recipe for the selected benchmarks")
+    for benchmark, method in pairs:
+        options = resolve_method_config(config, method, benchmark)
+        if options["ppo_epochs"] != 1 or options["shuffle"]:
+            raise ValueError("This implementation uses one PPO epoch with the released stable row order")
+        # PPO old/current/reference probabilities all use the unit-temperature law.
+        if (options["temperature"] != 1. or options["top_p"] != 1.
+                or options["eval_temperature"] != .4 or options["eval_top_p"] != 1.):
+            raise ValueError("Formal sampling uses train temperature 1, evaluation .4, and top_p 1")
+        if benchmark == "textcraft" and (
+                options["rounds"] != TEXTCRAFT_TRAIN_ROUNDS or options["groups"] != TEXTCRAFT_TRAIN_GROUPS
+                or options["trajectories"] != 8 or options.get("seed", 0) not in (0, 1, 2)
+                or options["reward_scale"] != 10. or options["output_tokens"] != OUTPUT_LIMITS[benchmark]
+                or options["max_context_tokens"] != TEXTCRAFT_CONTEXT_TOKENS):
+            raise ValueError("TextCraft uses 50 rounds, 16 eight-slot groups, seeds 0–2, an 8192-token context and 128-token responses")
+        if method in OWN_METHODS:
+            if (options["gamma"] != 1. or options["syntax_reward_penalty"] != 0.
+                    or options["loss_normalization"] != "trajectory" or options["history_length"] is not None
+                    or int(options["trajectories"]) != 8 or options["ppo_minibatch_rows"] is not None
+                    or int(options["output_tokens"]) != OUTPUT_LIMITS[benchmark]):
+                raise ValueError("Own V4 methods require undiscounted success, K=8 atomic mixed groups, official output limits and trajectory loss")
+            if benchmark == "webshop" and (
+                    options["rounds"] != TRAIN_ROUNDS or options["groups"] != TRAIN_GROUPS
+                    or options.get("seed", 0) not in (0, 1, 2) or options["reward_scale"] != 10.
+                    or options.get("max_context_tokens", 32768) != 32768):
+                raise ValueError("WebShop F-GPO uses 60 rounds, 16 groups, seeds 0–2, a 32768-token context and a full-success reward of 10")
+            continue
+        recipe = published_recipe(method, benchmark, config["model_path"])
+        required = {**recipe, **{key: recipe[source] for key, source in _RECIPE_ALIASES.items()},
+                    "loss_normalization": "token"}
+        changed = [key for key, value in required.items() if not _same_value(options.get(key), value)]
+        if changed:
+            raise ValueError(f"Published {method} source recipe differs at {', '.join(changed)}")
 
 
 def effective_training_identity(config):
@@ -141,12 +169,30 @@ def effective_training_identity(config):
                         group_denominator=int(options["trajectories"]),
                         homogeneous_group_bypass=True,
                         positive_peer_continuation_gate=method != "fgpo_no_transfer",
-                        local_observation_matching="exact_token_id" if benchmark == "alfworld" else "dual_view_cosine",
+                        local_observation_matching=("exact_token_id" if benchmark in EXACT_OBSERVATION_BENCHMARKS
+                                                    else "dual_view_cosine"),
                         alfworld_frame="three_block_step_unquoted_commands_strict_tags_v4" if benchmark == "alfworld" else None)
+        if benchmark == "webshop":
+            identity["webshop_recipe"] = {
+                "source_commit": UPSTREAM_COMMIT, "observation_mode": "text_rich", "use_small": True,
+                "human_goals": False, "validation_workers": VALIDATION_WORKERS,
+                "validation_session_population": VALIDATION_SESSIONS,
+                "task_selection": "released_worker_seed_and_session_index",
+                "terminal_outcome": "native_purchase_score_equals_one",
+            }
     else:
         identity["published_recipe"] = published_recipe(method, benchmark, options["model_path"])
+        # This description records the existing schedule and leaves cell identity stable.
+        identity["published_recipe"].pop("task_schedule_migration", None)
         identity["published_recipe"]["betas"] = tuple(identity["published_recipe"]["betas"])
         identity["source_commit"] = PUBLISHED_SOURCES[method]["repo_commit"]
+    if benchmark == "textcraft":
+        identity["textcraft_recipe"] = {
+            "source_commit": TEXTCRAFT_SOURCE_COMMIT, "split_counts": dict(TEXTCRAFT_COUNTS),
+            "observation": "native_feedback_and_visible_inventory",
+            "action": "single_tagged_native_command_or_empty_native_rejection",
+            "terminal_outcome": "native_worker_won", "environment_seed": "seed_times_1000003_plus_episode_ordinal",
+        }
     return identity
 
 

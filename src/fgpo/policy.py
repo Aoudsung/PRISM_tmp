@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import partial
 import math
 import time
 from typing import Any, Mapping, Sequence
@@ -11,6 +13,7 @@ import torch
 from torch import nn
 
 from .cache import ArenaCache, ArenaLayer
+from .public import OUTPUT_LIMITS
 
 
 def clock() -> float:
@@ -36,9 +39,9 @@ class _DecodeWorkspace:
     buffers are reused. All writes/consumers on each device use its current
     stream; cached selection tensors are immutable until the active set changes.
     """
-    def __init__(self, policy, state, max_tokens):
+    def __init__(self, state, max_tokens, *, split_kv_factory=None):
         self.batch = len(state.lengths)
-        self.device = policy.device
+        self.device = state.valid_mask.device
         self.physical = state.valid_mask.shape[1]
         self.steps = 0
         self.max_appends = max(0, int(max_tokens) - 1)
@@ -53,6 +56,8 @@ class _DecodeWorkspace:
         self.cache_pos_offset = 0
         self.selections = {}
         self.sampled_tokens, self.sampled_rows = None, ()
+        self.split_kv = (None if split_kv_factory is None else
+                         split_kv_factory(state, self.max_appends))
 
     def indices(self, rows, device, purpose="rows"):
         rows, device = tuple(rows), torch.device(device)
@@ -90,12 +95,26 @@ class _DecodeWorkspace:
         else:
             self.mask = self.mask.index_select(0, selected)
         self.lengths = self.lengths.index_select(0, selected)
+        if self.split_kv is not None:
+            self.split_kv.select_rows(selected, new_physical)
         self.sampled_tokens = self.sampled_tokens.index_select(0, self.indices(rows, self.sampled_tokens.device))
         self.batch = len(rows)
         self.ids = self.ids[:self.batch]
         self.positions = self.positions[:self.batch]
         self.sampled_rows = tuple(range(self.batch))
         self.selections.clear()
+
+    def rebase(self, state):
+        """Refresh the physical layout after compaction without consuming the draw."""
+        self.physical = state.valid_mask.shape[1]
+        remaining = self.max_appends - self.steps
+        self.mask = self.mask[:, :self.physical + remaining]
+        self.mask[:, :self.physical].copy_(state.valid_mask)
+        self.cache_positions = torch.arange(self.physical, self.physical + remaining,
+                                            dtype=torch.long, device=self.device)
+        self.cache_pos_offset = 0
+        if self.split_kv is not None:
+            self.split_kv.rebase(state)
 
     def prepare(self, state, continuing):
         continuing = tuple(continuing)
@@ -121,10 +140,35 @@ class _DecodeWorkspace:
         self.selections.clear()
         self.ids = self.positions = self.lengths = self.mask = None
         self.cache_positions = None
+        self.split_kv = None
 
 
 class _LayerCaptured(Exception):
     """Internal control flow for a no-grad intermediate-layer representation."""
+
+
+def _decode_input_on_device(value, device, copies):
+    if isinstance(value, tuple):
+        return tuple(_decode_input_on_device(item, device, copies) for item in value)
+    if not isinstance(value, torch.Tensor) or value.device == device:
+        return value
+    key = id(value), device
+    pair = copies.get(key)
+    if pair is None:
+        # Keep the original alive for the lifetime of its identity key.
+        pair = value, value.to(device, non_blocking=False)
+        copies[key] = pair
+    return pair[1]
+
+
+def _reuse_decode_layer_inputs(context, device, _layer, args, kwargs):
+    copies = context.get()
+    if copies is None:
+        return None
+    for name in ("attention_mask", "position_ids", "cache_position", "position_embeddings"):
+        if name in kwargs:
+            kwargs[name] = _decode_input_on_device(kwargs[name], device, copies)
+    return args, kwargs
 
 
 def layer_device_map(config, gpu_ids, free_gib=None, *, full_training=True, working_memory_gib=6.):
@@ -170,13 +214,26 @@ class CausalPolicy(nn.Module):
                  max_context_tokens: int | None = None, max_new_tokens: int | None = None,
                  cache_initial_capacity: int = 1024, representation_token_budget: int = 8192,
                  representation_batch_size: int = 8, working_memory_gib: float = 6.,
-                 checkpoint_shard_mib: float = 1024.):
+                 checkpoint_shard_mib: float = 1024., reuse_sharded_decode_inputs: bool = False,
+                 host_b_masked_decode: bool = False, host_b_split_kv_decode: bool = False,
+                 host_b_paged_graph_decode: bool = False, host_b_direct_page_decode: bool = False):
         super().__init__()
         from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
         # These are the actual compute devices. The Engine/ledger separately
         # retain the full allocated device set and all saved RNG contexts.
         self.model_path, self.gpu_ids, self.ledger = str(model_path), tuple(gpu_ids), ledger
         self.adaptation, self.benchmark = adaptation, benchmark
+        if host_b_masked_decode and (benchmark != "appworld" or len(self.gpu_ids) != 1 or adaptation is not None):
+            raise ValueError("Host B masked decode requires a single-GPU AppWorld policy without adapters")
+        if host_b_split_kv_decode and (benchmark != "appworld" or len(self.gpu_ids) != 1
+                                       or adaptation is not None or host_b_masked_decode):
+            raise ValueError("Host B Split KV decode requires a single-GPU AppWorld policy without adapters or folded SDPA")
+        if host_b_paged_graph_decode and (benchmark != "appworld" or len(self.gpu_ids) != 1
+                                         or adaptation is not None or host_b_masked_decode or host_b_split_kv_decode):
+            raise ValueError("Host B Paged Graph decode requires a single-GPU AppWorld policy with exclusive attention")
+        if host_b_direct_page_decode and (benchmark != "appworld" or adaptation is not None
+                or host_b_masked_decode or host_b_split_kv_decode or host_b_paged_graph_decode):
+            raise ValueError("Direct page decode requires an AppWorld policy with exclusive attention")
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=False)
         cfg = AutoConfig.from_pretrained(model_path, local_files_only=True, trust_remote_code=False)
         if cfg.model_type != "qwen2":
@@ -209,10 +266,29 @@ class CausalPolicy(nn.Module):
             self.model.enable_input_require_grads()
         self.model.config.use_cache = False
         self.model.eval()
+        self._masked_decode_forward = None
+        self._split_kv_factory = None
+        self.direct_page_enabled = bool(host_b_direct_page_decode)
+        self.paged_graph_enabled = bool(host_b_paged_graph_decode or host_b_direct_page_decode)
+        self._paged_session = None
+        if host_b_masked_decode:
+            from .masked_decode import forward_masked_decode, install_masked_decode
+
+            install_masked_decode(self.model)
+            self._masked_decode_forward = forward_masked_decode
+        if host_b_split_kv_decode:
+            from .split_kv import SplitKVWorkspace, install_split_kv
+
+            install_split_kv(self.model)
+            self._split_kv_factory = SplitKVWorkspace
+        if self.paged_graph_enabled:
+            from .paged_graph import install_paged_graph
+
+            install_paged_graph(self.model, sharded=self.direct_page_enabled)
         self.activation_offload = bool(activation_offload)
         supported_context = min(32768, int(cfg.max_position_embeddings))
         self.max_context_tokens = supported_context if max_context_tokens is None else int(max_context_tokens)
-        self.max_new_tokens = (512 if benchmark == "alfworld" else 1024) if max_new_tokens is None else int(max_new_tokens)
+        self.max_new_tokens = OUTPUT_LIMITS[benchmark] if max_new_tokens is None else int(max_new_tokens)
         if not 0 < self.max_new_tokens < self.max_context_tokens <= supported_context:
             raise ValueError("Generation/context limits must fit the configured Qwen context")
         self.cache_initial_capacity = int(cache_initial_capacity)
@@ -229,12 +305,31 @@ class CausalPolicy(nn.Module):
         self.eos_token_ids = (151645, 151643)
         self.sampling_temperature = 1.
         self._reference_active = False
+        self._collection_backbone = ContextVar("collection_backbone", default=None)
+        self._sharded_decode_inputs = None
+        if reuse_sharded_decode_inputs:
+            input_device = self.device
+            for layer in self.base.model.layers:
+                device = next(layer.parameters()).device
+                if device != input_device:
+                    if self._sharded_decode_inputs is None:
+                        self._sharded_decode_inputs = ContextVar("sharded_decode_inputs", default=None)
+                    # PyTorch runs this before Accelerate's wrapped forward.
+                    layer.register_forward_pre_hook(
+                        partial(_reuse_decode_layer_inputs, self._sharded_decode_inputs, device), with_kwargs=True)
         self.metadata = {"base_model": model_path, "adaptation": adaptation, "dtype": "bfloat16",
                          "compute_logical_gpu_ids":list(self.gpu_ids),
                          "attention": "sdpa", "device_map": dict(self.device_map),
-                         "kv_cache": "geometric_arena", "cache_initial_capacity": self.cache_initial_capacity,
+                         "kv_cache": ("direct_page_runs_bf16" if self.direct_page_enabled else
+                                      "paged_bf16" if self.paged_graph_enabled else "geometric_arena"),
+                         "cache_initial_capacity": self.cache_initial_capacity,
                          "rollout_batching": "turn_barrier_owned_cohort_merge",
                          "rollout_decode_inputs": "retained_device_tokens_active_rows_v3",
+                         "host_b_masked_decode": self._masked_decode_forward is not None,
+                         "host_b_split_kv_decode": self._split_kv_factory is not None,
+                         "host_b_paged_graph_decode": bool(host_b_paged_graph_decode),
+                         "appworld_direct_page_decode": self.direct_page_enabled,
+                         "reuse_sharded_decode_inputs": self._sharded_decode_inputs is not None,
                          "activation_offload": self.activation_offload,
                          "representation_token_budget": self.representation_token_budget,
                          "representation_batch_size": self.representation_batch_size,
@@ -249,6 +344,22 @@ class CausalPolicy(nn.Module):
     @property
     def base(self):
         return self.model.get_base_model() if self.adaptation else self.model
+
+    @contextmanager
+    def use_collection_replica(self, backbone):
+        if backbone is None:
+            yield
+            return
+        token = self._collection_backbone.set(backbone)
+        try:
+            yield
+        finally:
+            self._collection_backbone.reset(token)
+
+    @property
+    def _collection_input_device(self):
+        backbone = self._collection_backbone.get()
+        return self.device if backbone is None else backbone.embed_tokens.weight.device
 
     @property
     def sampling_temperature(self):
@@ -277,7 +388,7 @@ class CausalPolicy(nn.Module):
             yield
 
     @contextmanager
-    def phase(self, role):
+    def phase(self, role, *, details=None):
         self.synchronize()
         outermost = self._phase_depth == 0
         if outermost:
@@ -299,7 +410,7 @@ class CausalPolicy(nn.Module):
                                 "peak_reserved_bytes": torch.cuda.max_memory_reserved(gpu)}
                       for gpu in self.gpu_ids}
             self.record("compute", role, seconds=clock()-start,
-                        details={"status": status, "time_basis": "synchronized_wall",
+                        details={**(details or {}), "status": status, "time_basis": "synchronized_wall",
                                  "memory_scope": "phase" if outermost else "enclosing_phase",
                                  "cuda_memory": memory})
 
@@ -310,6 +421,39 @@ class CausalPolicy(nn.Module):
         generator = torch.Generator(device=self.model.get_output_embeddings().weight.device)
         generator.manual_seed(int(seed))
         return generator
+
+    @contextmanager
+    def paged_rollout(self, row_count, root_count, *, context_limit=None):
+        backbone = self._collection_backbone.get()
+        if (not self.paged_graph_enabled or self._paged_session is not None or self._reference_active
+                or (backbone is not None and not self.direct_page_enabled)):
+            raise RuntimeError("Paged Graph collection needs exclusive access to the frozen actor")
+        if self.model.training:
+            self.model.eval()
+        start = clock()
+        length = self.max_context_tokens if context_limit is None else int(context_limit)
+        if not self.max_new_tokens < length <= self.max_context_tokens:
+            raise ValueError("Actor cache capacity must fit the configured Qwen context")
+        if self.direct_page_enabled:
+            from .direct_page_graph import DirectGraphSession
+
+            session = DirectGraphSession(self.base, row_count, root_count, length, self.record, backbone=backbone)
+        else:
+            from .paged_graph import PagedGraphSession
+
+            session = PagedGraphSession(self.base, row_count, root_count, length, self.max_new_tokens)
+        self._paged_session = session
+        try:
+            self.record("model", "rollout.paged_kv_allocate", seconds=clock()-start,
+                        details={"row_count": row_count, "root_count": root_count,"context_limit":length,
+                                 "time_basis": "host_dispatch"})
+            yield
+        finally:
+            try:
+                self.synchronize()
+                session.close()
+            finally:
+                self._paged_session = None
 
     def head(self, hidden: torch.Tensor, *, role="vocabulary_projection"):
         started, status = clock(), "OK"
@@ -328,8 +472,15 @@ class CausalPolicy(nn.Module):
     def body(self, input_ids, *, attention_mask=None, position_ids=None, cache=None,
              cache_position=None, use_cache=False, hidden_layer=None, role="forward", teacher_forced=False,
              actual_tokens=None, logical_length=None, stop_at_hidden_layer=False, hidden_positions=None,
-             all_keys_valid: bool | None = None):
-        ids = torch.as_tensor(input_ids, dtype=torch.long, device=self.device)
+             all_keys_valid: bool | None = None, masked_sampled_decode: bool = False, split_sampled_decode=None):
+        backbone = self._collection_backbone.get()
+        if backbone is None:
+            device = self.device
+        else:
+            if not use_cache or teacher_forced or hidden_layer is not None or torch.is_grad_enabled():
+                raise ValueError("The collection backbone is restricted to cached sampling")
+            device = backbone.embed_tokens.weight.device
+        ids = torch.as_tensor(input_ids, dtype=torch.long, device=device)
         if ids.ndim == 1:
             ids = ids.unsqueeze(0)
         if ids.ndim != 2 or ids.shape[1] == 0:
@@ -345,16 +496,16 @@ class CausalPolicy(nn.Module):
                 mask = None
                 model_mask = None
                 if position_ids is None:
-                    position_ids = torch.full((ids.shape[0], 1), past, dtype=torch.long, device=self.device)
+                    position_ids = torch.full((ids.shape[0], 1), past, dtype=torch.long, device=device)
                 else:
-                    position_ids = position_ids.to(self.device)
+                    position_ids = position_ids.to(device)
             else:
-                mask = torch.ones((ids.shape[0], key_width), dtype=torch.bool, device=self.device)
+                mask = torch.ones((ids.shape[0], key_width), dtype=torch.bool, device=device)
                 model_mask = mask
                 if position_ids is None:
                     position_ids = (mask.long().cumsum(-1)-1).clamp_min(0)[:, -ids.shape[1]:]
                 else:
-                    position_ids = position_ids.to(self.device)
+                    position_ids = position_ids.to(device)
             if logical_length is None:
                 logical_length = key_width
             if actual_tokens is None:
@@ -364,16 +515,16 @@ class CausalPolicy(nn.Module):
             if all_valid_single_token:
                 model_mask = None
                 if position_ids is None or logical_length is None or actual_tokens is None:
-                    mask = attention_mask.to(self.device)
+                    mask = attention_mask.to(device)
                 else:
                     mask = None
             else:
-                mask = attention_mask.to(self.device)
+                mask = attention_mask.to(device)
                 model_mask = mask
             if position_ids is None:
                 position_ids = (mask.long().cumsum(-1)-1).clamp_min(0)[:, -ids.shape[1]:]
             else:
-                position_ids = position_ids.to(self.device)
+                position_ids = position_ids.to(device)
         # The rollout passes lengths already known on the host.  No per-token
         # scalar readback is needed for capacity checks or work accounting.
         if logical_length is None:
@@ -382,6 +533,13 @@ class CausalPolicy(nn.Module):
             raise ValueError("Exact Qwen context capacity exceeded")
         if actual_tokens is None:
             actual_tokens = int(mask[:, -ids.shape[1]:].sum())
+        if split_sampled_decode is not None:
+            if (self._split_kv_factory is None or backbone is not None or not use_cache
+                    or not isinstance(cache, ArenaCache) or past < 1 or ids.shape[1] != 1
+                    or teacher_forced or hidden_layer is not None or self._reference_active
+                    or self.model.training or torch.is_grad_enabled() or masked_sampled_decode):
+                raise ValueError("Split KV attention is restricted to the one-token sampled Arena decode")
+            model_mask = None
         if stop_at_hidden_layer and (hidden_layer is None or use_cache or torch.is_grad_enabled()):
             raise ValueError("Layer early exit is restricted to no-grad, uncached representation forwards")
         if hidden_positions is not None and hidden_layer is None:
@@ -404,12 +562,35 @@ class CausalPolicy(nn.Module):
             hook = layers[index].register_forward_hook(capture)
         kwargs = dict(input_ids=ids, attention_mask=model_mask, position_ids=position_ids,
                       past_key_values=cache, use_cache=use_cache)
+        if split_sampled_decode is not None:
+            # Qwen accepts a prepared mask mapping, avoiding HF's mask construction.
+            kwargs["attention_mask"] = {"full_attention": None}
+            kwargs["fgpo_split_kv"] = split_sampled_decode, logical_length
         if cache_position is not None:
-            kwargs["cache_position"] = cache_position.to(self.device)
+            kwargs["cache_position"] = cache_position.to(device)
         start, status = clock(), "OK"
+        decode_inputs = self._sharded_decode_inputs if backbone is None else None
         try:
             with self.activation_saving():
-                output = self.base.model(**kwargs)
+                scope = None
+                if decode_inputs is not None:
+                    reuse = (use_cache and past > 0 and ids.shape[1] == 1 and not teacher_forced
+                             and not self._reference_active and not self.model.training
+                             and not torch.is_grad_enabled())
+                    copies = {} if reuse else None
+                    scope = decode_inputs.set(copies)
+                try:
+                    if backbone is not None:
+                        output = backbone(**kwargs)
+                    elif masked_sampled_decode:
+                        output = self._masked_decode_forward(self.base.model, **kwargs)
+                    else:
+                        output = self.base.model(**kwargs)
+                finally:
+                    if scope is not None:
+                        decode_inputs.reset(scope)
+                        if copies is not None:
+                            copies.clear()
             selected = captures[0] if captures else None
             return output.last_hidden_state, selected, output.past_key_values if use_cache else None
         except _LayerCaptured:
@@ -477,6 +658,27 @@ class CausalPolicy(nn.Module):
             del hidden, vectors, ids, valid
         return result
 
+    def _cache_root(self, ids, valid, lengths, role):
+        paged = self._paged_session
+        if paged is None:
+            cache = ArenaCache(len(self.base.model.layers), initial_capacity=self.cache_initial_capacity,
+                               growth_limit=self.max_context_tokens)
+            hidden, _, cache = self.body(ids, attention_mask=valid, cache=cache, use_cache=True, role=role,
+                                         actual_tokens=sum(lengths), logical_length=max(lengths))
+            return hidden, cache
+        cache = paged.empty(len(lengths))
+        if self.direct_page_enabled:
+            from .direct_page_graph import EagerDirectAppend
+
+            append = EagerDirectAppend(cache, 0, lengths, max(lengths))
+        else:
+            from .paged_graph import EagerPagedAppend
+
+            append = EagerPagedAppend(cache, 0, ((),) * len(lengths), (0,) * len(lengths), lengths, lengths)
+        hidden, _, _ = self.body(ids, attention_mask=valid, cache=append, use_cache=True, role=role,
+                                 actual_tokens=sum(lengths), logical_length=max(lengths))
+        return hidden, cache
+
     @torch.no_grad()
     def prefill_root(self, token_ids, *, role="rollout.root"):
         if self.model.training:
@@ -484,12 +686,9 @@ class CausalPolicy(nn.Module):
         ids = tuple(token_ids)
         if not ids:
             raise ValueError("A causal root needs at least one prompt token")
-        cache = ArenaCache(len(self.base.model.layers), initial_capacity=self.cache_initial_capacity,
-                           growth_limit=self.max_context_tokens)
-        hidden, _, cache = self.body(ids, cache=cache, use_cache=True, role=role,
-                                     actual_tokens=len(ids), logical_length=len(ids))
+        hidden, cache = self._cache_root(ids, None, (len(ids),), role)
         logits = self.head(hidden[:, -1], role=role+".head")
-        return KVState(cache, torch.ones((1,len(ids)), dtype=torch.bool, device=self.device),
+        return KVState(cache, torch.ones((1,len(ids)), dtype=torch.bool, device=self._collection_input_device),
                        logits, (len(ids),), (((0, len(ids)),),))
 
     @torch.no_grad()
@@ -509,14 +708,12 @@ class CausalPolicy(nn.Module):
         width = max(lengths)
         if width > self.max_context_tokens:
             raise ValueError("A complete prompt exceeds the logical context capacity")
+        device = self._collection_input_device
         ids = torch.tensor([prompt + (self.tokenizer.pad_token_id,) * (width - len(prompt))
-                            for prompt in prompts], dtype=torch.long, device=self.device)
-        counts = torch.tensor(lengths, dtype=torch.long, device=self.device)
-        valid = torch.arange(width, device=self.device)[None, :] < counts[:, None]
-        cache = ArenaCache(len(self.base.model.layers), initial_capacity=self.cache_initial_capacity,
-                           growth_limit=self.max_context_tokens)
-        hidden, _, cache = self.body(ids, attention_mask=valid, cache=cache, use_cache=True, role=role,
-                                     actual_tokens=sum(lengths), logical_length=width)
+                            for prompt in prompts], dtype=torch.long, device=device)
+        counts = torch.tensor(lengths, dtype=torch.long, device=device)
+        valid = torch.arange(width, device=device)[None, :] < counts[:, None]
+        hidden, cache = self._cache_root(ids, valid, lengths, role)
         row_indices = torch.arange(len(prompts), device=hidden.device)
         last = counts.to(hidden.device) - 1
         logits = self.head(hidden[row_indices, last], role=role+".head")
@@ -569,7 +766,8 @@ class CausalPolicy(nn.Module):
         if consume:
             if indices == tuple(range(state.valid_mask.shape[0])):
                 if width < state.valid_mask.shape[1]:
-                    state.cache.crop(width)
+                    if self._paged_session is None:
+                        state.cache.crop(width)
                     state.valid_mask = state.valid_mask[:, :width]
                 state.right_padded = right_padded
                 return state
@@ -592,12 +790,15 @@ class CausalPolicy(nn.Module):
         state.valid_spans = ()
 
     @torch.no_grad()
-    def split_cache(self, state: KVState, row_groups, *, preserve_capacity=True):
+    def split_cache(self, state: KVState, row_groups, *, preserve_capacity=True, drop_unselected=False):
         """Consume one state into disjoint owners without recomputing tokens."""
         row_groups = tuple(tuple(int(row) for row in rows) for rows in row_groups)
+        selected = sorted(row for rows in row_groups for row in rows)
         if (not row_groups or any(not rows for rows in row_groups) or
-                sorted(row for rows in row_groups for row in rows) != list(range(len(state.lengths)))):
-            raise ValueError("Cache splitting requires a complete disjoint partition of its rows")
+                (drop_unselected and (len(selected) != len(set(selected)) or selected[0] < 0
+                                      or selected[-1] >= len(state.lengths))) or
+                (not drop_unselected and selected != list(range(len(state.lengths))))):
+            raise ValueError("Cache splitting requires disjoint owned rows")
         if len(row_groups) == 1:
             keep_cap = preserve_capacity if isinstance(preserve_capacity, bool) else bool(preserve_capacity[0])
             return [self.select_cache(state, row_groups[0], consume=True, preserve_capacity=keep_cap)]
@@ -615,7 +816,10 @@ class CausalPolicy(nn.Module):
             return result
         except BaseException:
             for cache in caches:
-                cache.layers.clear()
+                if self._paged_session is None:
+                    cache.layers.clear()
+                else:
+                    cache.close()
             for owned in result:
                 self.release_cache(owned)
             raise
@@ -648,13 +852,14 @@ class CausalPolicy(nn.Module):
             return self.select_cache(states[0], inverse, consume=True)
         width = max(state.valid_mask.shape[1] for state in states)
         lengths, spans = [None] * count, [None] * count
-        valid = torch.zeros((count, width), dtype=torch.bool, device=self.device)
+        mask_device = states[0].valid_mask.device
+        valid = torch.zeros((count, width), dtype=torch.bool, device=mask_device)
         logits = states[0].next_logits.new_empty((count, states[0].next_logits.shape[1]))
         start = 0
         for index, state in enumerate(states):
             stop = start + len(state.lengths)
             destinations = tuple(range(start, stop)) if row_groups is None else row_groups[index]
-            rows = torch.tensor(destinations, dtype=torch.long, device=self.device)
+            rows = torch.tensor(destinations, dtype=torch.long, device=mask_device)
             valid[:, :state.valid_mask.shape[1]].index_copy_(0, rows, state.valid_mask)
             logits.index_copy_(0, rows.to(logits.device), state.next_logits)
             for source, destination in enumerate(destinations):
@@ -662,7 +867,7 @@ class CausalPolicy(nn.Module):
             start = stop
         right_padded = all(state.right_padded for state in states)
         try:
-            cache = ArenaCache.merge_owned([state.cache for state in states], row_groups=row_groups)
+            cache = type(states[0].cache).merge_owned([state.cache for state in states], row_groups=row_groups)
             return KVState(cache, valid, logits, tuple(lengths), tuple(spans), right_padded)
         finally:
             for state in states:
@@ -672,22 +877,33 @@ class CausalPolicy(nn.Module):
     def compact_cache(self, state: KVState):
         """Compact real padding only; retained arena capacity is reusable."""
         length = max(state.lengths, default=0)
+        device = state.valid_mask.device
         if state.right_padded and state.valid_mask.shape[1] == length:
             return state
-        if state.right_padded:
-            state.cache.crop(length)
-        else:
-            positions = [
-                None if (not spans or (len(spans) == 1 and spans[0][0] == 0)) else
-                torch.cat([torch.arange(start, stop, device=self.device) for start, stop in spans])
-                for spans in state.valid_spans
-            ]
-            state.cache.compact(positions, state.lengths)
-        counts = torch.tensor(state.lengths, device=self.device)
-        state.valid_mask = torch.arange(length, device=self.device)[None, :] < counts[:, None]
+        if self.direct_page_enabled and self._paged_session is not None:
+            state.cache.compact_physical(state.valid_spans, state.lengths)
+        elif self._paged_session is None:
+            if state.right_padded:
+                state.cache.crop(length)
+            else:
+                positions = [
+                    None if (not spans or (len(spans) == 1 and spans[0][0] == 0)) else
+                    torch.cat([torch.arange(start, stop, device=device) for start, stop in spans])
+                    for spans in state.valid_spans
+                ]
+                state.cache.compact(positions, state.lengths)
+        counts = torch.tensor(state.lengths, device=device)
+        state.valid_mask = torch.arange(length, device=device)[None, :] < counts[:, None]
         state.valid_spans = tuple(((0, count),) if count else () for count in state.lengths)
         state.right_padded = True
         return state
+
+    def _append_needs_compaction(self, state, width):
+        if state.right_padded:
+            return False
+        physical = state.valid_mask.shape[1]
+        return (physical + width > self.max_context_tokens or
+                physical - max(state.lengths, default=0) > self.cache_initial_capacity)
 
     @torch.no_grad()
     def append_cache(self, state: KVState, rows: Sequence[Sequence[int]], *, role="rollout.increment"):
@@ -704,12 +920,9 @@ class CausalPolicy(nn.Module):
         totals = tuple(old + new for old, new in zip(state.lengths, lengths, strict=True))
         if max(totals) > self.max_context_tokens:
             raise ValueError("Cache append exceeds the logical context capacity")
-        physical = state.valid_mask.shape[1]
-        if not state.right_padded and (
-                physical + width > self.max_context_tokens or
-                physical - max(state.lengths, default=0) > self.cache_initial_capacity):
+        if self._append_needs_compaction(state, width):
             state = self.compact_cache(state)
-            physical = state.valid_mask.shape[1]
+        physical = state.valid_mask.shape[1]
         if physical + width > self.max_context_tokens:
             order = sorted(range(batch), key=lambda i: state.lengths[i])
             buckets, cur_bucket, cur_max_old, cur_max_new = [], [], 0, 0
@@ -743,6 +956,7 @@ class CausalPolicy(nn.Module):
                 raise
         chunk_width = width if width == 1 else max(1, self.representation_token_budget // max(1, batch))
         current = state
+        device = state.valid_mask.device
         for start in range(0, width, chunk_width):
             stop = min(width, start + chunk_width)
             sub_width = stop - start
@@ -751,19 +965,19 @@ class CausalPolicy(nn.Module):
             sub_totals = (totals if start == 0 and stop == width
                           else tuple(old + new for old, new in zip(current.lengths, sub_lengths, strict=True)))
             ids = torch.tensor([tuple(row) + (self.tokenizer.pad_token_id,) * (sub_width - len(row))
-                                for row in sub_rows], dtype=torch.long, device=self.device)
-            added = torch.tensor(sub_lengths, device=self.device)
-            offsets = torch.arange(sub_width, device=self.device)
+                                for row in sub_rows], dtype=torch.long, device=device)
+            added = torch.tensor(sub_lengths, device=device)
+            offsets = torch.arange(sub_width, device=device)
             valid = offsets[None, :] < added[:, None]
-            mask = torch.cat((current.valid_mask.to(self.device), valid), dim=1)
-            previous = torch.tensor(current.lengths, device=self.device)
+            mask = torch.cat((current.valid_mask, valid), dim=1)
+            previous = torch.tensor(current.lengths, device=device)
             positions = torch.minimum(previous[:, None] + offsets[None, :],
                                       (previous + added - 1)[:, None]).clamp_min(0)
             cur_physical = current.valid_mask.shape[1]
             active = tuple(i for i in range(batch) if sub_lengths[i] > 0 and start + sub_lengths[i] == lengths[i])
             next_state = self._append_prepared_cache(
                 current, ids, mask, positions,
-                torch.arange(cur_physical, cur_physical + sub_width, device=self.device),
+                torch.arange(cur_physical, cur_physical + sub_width, device=device),
                 lengths=sub_lengths, totals=sub_totals, active=active, role=role)
             if current is not state:
                 self.release_cache(current)
@@ -771,11 +985,14 @@ class CausalPolicy(nn.Module):
         return current
 
     @torch.no_grad()
-    def decode_workspace(self, state: KVState, max_tokens):
-        return _DecodeWorkspace(self, state, max_tokens)
+    def decode_workspace(self, state: KVState, max_tokens, *, split_kv=False):
+        if split_kv and self._split_kv_factory is None:
+            raise ValueError("Split KV sampling requires an enabled Split KV policy")
+        return _DecodeWorkspace(state, max_tokens, split_kv_factory=self._split_kv_factory if split_kv else None)
 
     @torch.no_grad()
-    def append_sampled_cache(self, state: KVState, workspace, continuing, *, role="rollout.decode"):
+    def append_sampled_cache(self, state: KVState, workspace, continuing, *, role="rollout.decode",
+                             compact_before_append=False):
         """Append retained GPU samples; EOS/cap decisions remain with the caller."""
         if self.model.training:
             self.model.eval()
@@ -786,6 +1003,9 @@ class CausalPolicy(nn.Module):
         if max(totals) > self.max_context_tokens:
             raise ValueError("Cache append exceeds the logical context capacity")
         try:
+            if compact_before_append and self._append_needs_compaction(state, 1):
+                state = self.compact_cache(state)
+                workspace.rebase(state)
             ids, mask, positions, cache_position, lengths = workspace.prepare(state, continuing)
             return self._append_prepared_cache(state, ids, mask, positions, cache_position,
                 lengths=lengths, totals=totals, active=continuing, role=role, workspace=workspace)
@@ -799,32 +1019,76 @@ class CausalPolicy(nn.Module):
         all_keys_valid = (width == 1 and state.right_padded and physical > 0
                           and all(n == physical for n in state.lengths)
                           and all(n == 1 for n in lengths))
-        hidden, _, cache = self.body(
-            ids, attention_mask=mask, position_ids=positions, cache=state.cache,
-            cache_position=cache_position, use_cache=True, role=role,
-            actual_tokens=sum(lengths), logical_length=max(totals),
-            all_keys_valid=all_keys_valid)
-        if not active:
-            logits = state.next_logits
+        masked_sampled_decode = (self._masked_decode_forward is not None and workspace is not None
+                                 and width == 1 and len(active) == batch and physical > 0
+                                 and not all_keys_valid)
+        paged = self._paged_session
+        cache = state.cache
+        if paged is not None and workspace is not None:
+            if self.direct_page_enabled:
+                cache.prepare_sampled()
+            start = clock()
+            table = None if self.direct_page_enabled else cache.prepare(state.lengths, totals)
+            logits, capacity, setup = paged.decode(ids, positions, table, mask, all_keys_valid)
+            dispatch = clock() - start
+            forward = {"status":"OK","padded_compute_tokens":batch,"use_cache":True,
+                       "attention_mask_omitted":all_keys_valid,"includes_output_head":True,
+                       "cached_query_key_positions":sum(totals),
+                       "executed_decoder_layers":len(self.base.model.layers)}
+            if self.direct_page_enabled:
+                cache.pool.finish_append(cache.rows, physical, lengths)
+                forward["kv_direct_write_bytes"] = batch * cache.pool.bytes_per_column
+            head = {"status":"OK","time_basis":"included_in_actor_forward",
+                    "projection_continuation":True,"positions":batch}
+            if setup is not None:
+                warmup, capture = setup
+                dispatch -= warmup + capture
+                backend = "flash" if all_keys_valid else "efficient"
+                shape = {"graph_shape":(batch, capacity, backend),"batch":batch,
+                         "key_capacity":capacity,"sdpa_backend":backend}
+                self.record("model", role+".graph_warmup", forward_tokens=batch, seconds=warmup,
+                            details={**forward,**shape,"time_basis":"synchronized_wall"})
+                self.record("model", role+".graph_warmup.head", details={**head,**shape})
+                self.record("model", role+".graph_capture", seconds=capture,
+                            details={**shape,"status":"OK","time_basis":"host_wall"})
+            self.record("model", role, input_tokens=batch, seconds=dispatch,
+                        details={**forward,"time_basis":"host_dispatch"})
+            self.record("model", role+".head", details=head)
         else:
-            if workspace is not None:
-                # A sampled append now contains exactly the continuing rows.
-                selected = hidden[:, 0]
-            else:
-                indices = torch.tensor(active, dtype=torch.long, device=hidden.device)
-                last = torch.tensor([lengths[i] - 1 for i in active], device=hidden.device)
-                selected = hidden[indices, last]
-            projected = self.head(selected, role=role + ".head")
-            if len(active) == batch:
-                logits = projected
-            else:
-                # Inactive slots keep their last causal distribution. Like the KV
-                # arena, this buffer is exclusively owned and transferred by the
-                # caller, so it can be updated without cloning a full vocabulary
-                # table or projecting padding tokens for completed responses.
+            forward_cache = cache
+            if paged is not None and self.direct_page_enabled:
+                from .direct_page_graph import EagerDirectAppend
+
+                forward_cache = EagerDirectAppend(cache, physical, lengths, width)
+            elif paged is not None:
+                from .paged_graph import EagerPagedAppend
+
+                forward_cache = EagerPagedAppend(cache, physical, state.valid_spans,
+                                                state.lengths, lengths, totals)
+            hidden, _, returned = self.body(
+                ids, attention_mask=mask, position_ids=positions, cache=forward_cache,
+                cache_position=cache_position, use_cache=True, role=role,
+                actual_tokens=sum(lengths), logical_length=max(totals),
+                all_keys_valid=all_keys_valid, masked_sampled_decode=masked_sampled_decode,
+                split_sampled_decode=workspace.split_kv if workspace is not None else None)
+            if paged is None:
+                cache = returned
+            if not active:
                 logits = state.next_logits
-                target_indices = indices.to(logits.device)
-                logits.index_copy_(0, target_indices, projected)
+            else:
+                if workspace is not None:
+                    selected = hidden[:, 0]
+                else:
+                    indices = torch.tensor(active, dtype=torch.long, device=hidden.device)
+                    last = torch.tensor([lengths[i] - 1 for i in active], device=hidden.device)
+                    selected = hidden[indices, last]
+                projected = self.head(selected, role=role + ".head")
+                if len(active) == batch:
+                    logits = projected
+                else:
+                    # Inactive slots keep their last causal distribution.
+                    logits = state.next_logits
+                    logits.index_copy_(0, indices.to(logits.device), projected)
         right_padded = state.right_padded and all(not n or state.lengths[i] == physical
                                                 for i, n in enumerate(lengths))
         spans = tuple(old if not count else
@@ -865,7 +1129,10 @@ class CausalPolicy(nn.Module):
         # The CPU needs termination decisions before dispatching environments.
         # One packed readback replaces per-slot int/float synchronization while
         # multinomial still consumes each slot's independent generator stream.
-        sampled = torch.stack((tokens.double(), scores.double()), dim=1).cpu().tolist()
+        if self._masked_decode_forward is not None and workspace is not None:
+            sampled = torch.stack((tokens.float(), scores), dim=1).cpu().tolist()
+        else:
+            sampled = torch.stack((tokens.double(), scores.double()), dim=1).cpu().tolist()
         ids = [int(row[0]) for row in sampled]
         logprobs = [row[1] for row in sampled]
         if workspace is not None:

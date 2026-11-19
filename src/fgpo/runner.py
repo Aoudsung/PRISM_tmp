@@ -7,14 +7,17 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 from statistics import fmean, stdev
 
 from .envs import make_env, EnvironmentPool, ALFWORLD_TABLE_COLUMNS
 from .metrics import official_summary
 from .baseline_specs import PUBLISHED_SOURCES
 from .records import CostLedger, monotonic_seconds
-from .protocol import (METHODS, METHOD_ROLES, SUITE_METHODS, SUITE_BENCHMARKS,
-                       resolve_method_config, require_protocol, require_training_identity)
+from .protocol import (METHODS, METHOD_ROLES, OFFICIAL_EVALUATION_SPLITS, OFFICIAL_HORIZONS, SUITE_METHODS, SUITE_BENCHMARKS,
+                       method_benchmark_pairs, resolve_method_config, require_protocol,
+                       require_training_identity)
+from .textcraft import TEXTCRAFT_COUNTS
 
 
 def write_json(path, value, *, durable=False):
@@ -64,6 +67,34 @@ def compute_allocation(physical_ids, model_physical_ids=None):
     return compute, [allocated.index(gpu) for gpu in compute]
 
 
+def _bind_compute_pair_cpu_affinity(config, compute_physical_ids):
+    if len(compute_physical_ids) != 2:
+        return None
+    mapping = config.get('cpu_affinity_by_compute_gpu_pair', {})
+    if not isinstance(mapping, dict):
+        raise ValueError('cpu_affinity_by_compute_gpu_pair must map sorted physical GPU pairs to CPU lists.')
+    pair = ','.join(map(str, sorted(compute_physical_ids)))
+    if pair not in mapping:
+        return None
+    cpu_list = mapping[pair]
+    if not isinstance(cpu_list, str) or not re.fullmatch(r'[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*', cpu_list):
+        raise ValueError(f'Invalid CPU affinity list for compute GPU pair {pair}: {cpu_list!r}')
+    if not hasattr(os, 'sched_getaffinity') or not hasattr(os, 'sched_setaffinity'):
+        raise RuntimeError('Configured CPU affinity requires Linux sched_getaffinity and sched_setaffinity.')
+    inherited = os.sched_getaffinity(0)
+    selected = set()
+    for item in cpu_list.split(','):
+        first, _, last = item.partition('-')
+        start, end = int(first), int(last or first)
+        if end < start:
+            raise ValueError(f'Descending CPU affinity range for compute GPU pair {pair}: {item}')
+        selected.update(cpu for cpu in inherited if start <= cpu <= end)
+    if not selected:
+        raise ValueError(f'CPU affinity for compute GPU pair {pair} has no CPUs in the inherited mask.')
+    os.sched_setaffinity(0, selected)
+    return sorted(os.sched_getaffinity(0))
+
+
 @contextmanager
 def _file_lock(path, *, nonblocking=False, error_message=None):
     path = Path(path)
@@ -81,8 +112,9 @@ def _file_lock(path, *, nonblocking=False, error_message=None):
 
 
 def _validate_suite_cells(cells, config, suite):
-    if any(saved['protocol'] != config['protocol'] or saved['method'] not in SUITE_METHODS[suite]
-           or saved['benchmark'] not in SUITE_BENCHMARKS[suite] for saved in cells):
+    allowed = set(method_benchmark_pairs(SUITE_METHODS[suite], SUITE_BENCHMARKS[suite]))
+    if any(saved['protocol'] != config['protocol']
+           or (saved['benchmark'], saved['method']) not in allowed for saved in cells):
         raise ValueError('Existing suite summary belongs to another experiment definition')
 
 
@@ -270,6 +302,7 @@ def _resume_pending_finalization(config, cell_config, output, complete_path, com
 def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, Engine, resume, startup_receipt=None):
     resume_from = None
     catalog_seconds = 0.0
+    evaluation_splits = config.get('evaluation_splits', {}).get(benchmark, OFFICIAL_EVALUATION_SPLITS[benchmark])
     if output.exists():
         if not resume:
             raise FileExistsError(f'Existing cell requires explicit --resume: {output}')
@@ -292,7 +325,7 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
             raise FileNotFoundError(f'Existing incomplete cell has no actual checkpoint: {resume_from}')
         official_tasks = json.loads((output / 'official_tasks.json').read_text())
         train_tasks = official_tasks['train']
-        evaluation_tasks = {split: official_tasks[split] for split in config['evaluation_splits'][benchmark]}
+        evaluation_tasks = {split: official_tasks[split] for split in evaluation_splits}
         # Checkpoint retains prior execution provenance; config records this
         # explicit continuation's physical-to-logical allocation.
         write_json(output / 'config.json', cell_config)
@@ -302,16 +335,26 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
         catalog_started = monotonic_seconds()
         catalog = make_env(cell_config, benchmark, output / 'environments/catalog', seed=seed)
         try:
-            train_tasks = catalog.list_tasks('train')
+            if benchmark == 'appworld' and method == 'g2po':
+                train_tasks = [task for difficulty in cell_config['appworld_train_difficulties']
+                               for task in catalog.list_tasks('train', difficulty=difficulty)]
+            else:
+                train_tasks = catalog.list_tasks('train')
             evaluation_tasks = {split: catalog.list_tasks(split)
-                                for split in config['evaluation_splits'][benchmark]}
+                                for split in evaluation_splits}
         finally:
             catalog.close()
         write_json(output / 'official_tasks.json', {'train': train_tasks, **evaluation_tasks})
         catalog_seconds = monotonic_seconds() - catalog_started
 
+    if benchmark == 'textcraft' and (len(train_tasks) != TEXTCRAFT_COUNTS['train']
+            or len(evaluation_tasks['val']) != TEXTCRAFT_COUNTS['val']):
+        raise ValueError('TextCraft requires the original full train and val catalogs.')
+
     pre_engine_seconds = (monotonic_seconds() - startup_receipt['started']) if startup_receipt else catalog_seconds
     startup_details = {'catalog_seconds': catalog_seconds, 'resumed': resume_from is not None}
+    if 'effective_cpu_affinity' in cell_config:
+        startup_details['effective_cpu_affinity'] = cell_config['effective_cpu_affinity']
     cold_asset_restore = None
     cold_asset_receipt_file = None
     if startup_receipt is not None:
@@ -325,8 +368,14 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
         'details': startup_details,
         'cold_asset_restore': cold_asset_restore,
     }
-    env_factory = EnvironmentPool(cell_config, benchmark, output / 'environments/pool',
-                                  size=int(cell_config.get('environment_pool_size',cell_config.get('trajectories',8))))
+    trajectories = int(cell_config.get('trajectories', 8))
+    pool_size = int(cell_config.get('environment_pool_size', trajectories))
+    if benchmark == 'appworld':
+        from .appworld_batch import appworld_eval_batch_size, appworld_fgpo_rollout_groups, appworld_hgpo_rollout_groups
+        pool_size = max(pool_size, appworld_eval_batch_size(cell_config),
+                        trajectories * appworld_fgpo_rollout_groups(cell_config),
+                        trajectories * appworld_hgpo_rollout_groups(cell_config))
+    env_factory = EnvironmentPool(cell_config, benchmark, output / 'environments/pool', size=pool_size)
     engine = None
     try:
         engine = Engine(cell_config, output, resume_from=resume_from, startup_receipt=engine_startup)
@@ -420,11 +469,12 @@ def aggregate_cells(cells):
         for split, scores in cell['evaluation'].items():
             if not scores['dataset_complete']:
                 continue
-            if cell['benchmark'] == 'alfworld':
+            if cell['benchmark'] in ('alfworld', 'webshop', 'textcraft'):
                 identity = (cell['benchmark'], cell['method'], split, cell['seed'])
                 if identity in seen:
                     raise ValueError(f'Duplicate seed in official split aggregation: {identity}')
                 seen.add(identity)
+            if cell['benchmark'] == 'alfworld':
                 for category, item in scores.get('task_types', {}).items():
                     if category != 'All' and item['dataset_complete'] and item['SR'] is not None:
                         key = (cell['benchmark'], cell['method'], split, category)
@@ -432,7 +482,12 @@ def aggregate_cells(cells):
                 if scores.get('SR') is not None:
                     key = (cell['benchmark'], cell['method'], split, 'All')
                     categories.setdefault(key, []).append((cell['seed'], scores['SR']))
-            for metric in ('SR','TGC','SGC'):
+            elif cell['benchmark'] == 'textcraft':
+                for depth, item in scores['recipe_depths'].items():
+                    if item['dataset_complete'] and item['SR'] is not None:
+                        key = (cell['benchmark'], cell['method'], split, depth)
+                        categories.setdefault(key, []).append((cell['seed'], item['SR']))
+            for metric in ('SR','TGC','SGC','Score'):
                 if scores.get(metric) is not None:
                     key = (cell['benchmark'],cell['method'],split,metric)
                     grouped.setdefault(key,[]).append((cell['seed'],scores[metric]))
@@ -453,6 +508,10 @@ def aggregate_cells(cells):
             row['task_types'] = {
                 category: statistics(categories.get((row['benchmark'], row['method'], row['split'], category), []))
                 for category in ALFWORLD_TABLE_COLUMNS}
+        elif row['benchmark'] == 'textcraft' and row['metric'] == 'SR':
+            prefix = (row['benchmark'], row['method'], row['split'])
+            row['recipe_depths'] = {key[3]:statistics(categories[key]) for key in sorted(categories)
+                                    if key[:3] == prefix}
     return rows
 
 
@@ -514,7 +573,7 @@ def aggregate_only(selected, suite_dir, config, suite, *, records_format):
                     raise ValueError(f'Official receipt model version differs: {path}')
             scores = official_summary(benchmark, records, official_tasks[split])
             for key in ('dataset_complete', 'official_task_count', 'evaluated_count',
-                        'success_count', 'SR', 'TGC', 'SGC'):
+                        'success_count', 'SR', 'TGC', 'SGC', 'Score', 'recipe_depths'):
                 if key in saved and scores.get(key) != saved[key]:
                     raise ValueError(f'Derived report differs from terminal {key}: {path}')
             evaluation[split] = {**saved, **scores}
@@ -558,7 +617,7 @@ def main(argv=None):
     parser.add_argument('--suite', choices=tuple(SUITE_METHODS), default='comparison',
                         help='Published comparison or own ALFWorld ablations; stored separately.')
     parser.add_argument('--methods', nargs='+', choices=METHODS)
-    parser.add_argument('--benchmarks', nargs='+', choices=('alfworld', 'appworld'))
+    parser.add_argument('--benchmarks', nargs='+', choices=tuple(OFFICIAL_HORIZONS))
     parser.add_argument('--seeds', nargs='+', type=int)
     parser.add_argument('--gpu', nargs='+', type=int,
                         help='Physical GPU IDs; Engine uses isolated process-local logical indices.')
@@ -583,21 +642,31 @@ def main(argv=None):
         raise ValueError('CLI selection must be a subset of the declared claim-scoped suite')
     if any(len(values) != len(set(values)) for values in (methods,benchmarks,seeds)):
         raise ValueError('Select each method, benchmark and seed only once')
+    pairs = method_benchmark_pairs(methods, benchmarks)
+    if not pairs or (args.methods is not None and set(methods) - {method for _, method in pairs}):
+        raise ValueError('Each explicitly selected method requires a recipe for at least one selected benchmark')
     config = dict(config,suite=args.suite,methods=list(methods),benchmarks=list(benchmarks))
     require_protocol(config)
     suite_dir = args.output_dir / args.suite
     selected = [(benchmark, method, seed, suite_dir / benchmark / method / f'seed-{seed}')
-                for benchmark in benchmarks for method in methods for seed in seeds]
+                for benchmark, method in pairs for seed in seeds]
     if args.aggregate_only:
         report = aggregate_only(selected, suite_dir, config, args.suite,
                                 records_format=args.evaluation_records_format)
-        print(report['alfworld_table1']['markdown'], end='')
+        if benchmarks == ['textcraft']:
+            print(json.dumps(report['aggregates'], ensure_ascii=False, indent=2))
+        else:
+            print(report['alfworld_table1']['markdown'], end='')
         return 0
     if args.gpu is None:
         parser.error('--gpu is required for training/evaluation')
     os.environ['PYTHONPATH'] = str(Path(__file__).resolve().parents[1])
     isolate_gpus(args.gpu, config['excluded_gpu_ids'])
-    compute_allocation(args.gpu, args.model_gpu)
+    compute_physical, _ = compute_allocation(args.gpu, args.model_gpu)
+    # Linux threads and child processes inherit the CLI thread's affinity.
+    cpu_affinity = _bind_compute_pair_cpu_affinity(config, compute_physical)
+    if cpu_affinity is not None:
+        config['effective_cpu_affinity'] = cpu_affinity
     if args.resume:
         from .checkpoint_gcs import configured
         if configured(config):

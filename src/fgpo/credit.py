@@ -14,7 +14,7 @@ from typing import Mapping
 import torch
 import torch.nn.functional as F
 
-from .public import HORIZONS
+from .public import EXACT_OBSERVATION_BENCHMARKS, HORIZONS
 from .protocol import OWN_METHODS as METHODS, RETIRED_METHODS
 
 
@@ -129,7 +129,7 @@ class CrossTrajectoryCredit:
         features[self.times, self.owners] = flat
         return features
 
-    def _alfworld_obs_match(self) -> torch.Tensor:
+    def _exact_obs_match(self) -> torch.Tensor:
         codes = torch.zeros((self.depth, self.count), dtype=torch.long, device="cpu")
         vocab: dict[tuple[int, ...], int] = {}
         for owner, trajectory in enumerate(self.trajectories):
@@ -143,7 +143,8 @@ class CrossTrajectoryCredit:
 
     @torch.no_grad()
     def advantages(self):
-        matching_mode = "exact_token_id" if self.benchmark == "alfworld" else "dual_view_cosine"
+        matching_mode = ("exact_token_id" if self.benchmark in EXACT_OBSERVATION_BENCHMARKS
+                         else "dual_view_cosine")
         if not self.rows:
             self.diagnostics = {
                 "algorithm": ALGORITHM, "method": self.method,
@@ -204,8 +205,8 @@ class CrossTrajectoryCredit:
         # O(H*K^2) matches, rather than comparing every pair of temporal nodes.
         eligible = self.valid[:, :, None] & self.valid[:, None, :]
         eligible &= ~torch.eye(self.count, dtype=torch.bool, device="cpu")[None, :, :]
-        if self.benchmark == "alfworld":
-            obs_match = self._alfworld_obs_match()
+        if self.benchmark in EXACT_OBSERVATION_BENCHMARKS:
+            obs_match = self._exact_obs_match()
             if self.method == "fgpo_obs_only":
                 weights = (obs_match & eligible).to(torch.float64)
             else:

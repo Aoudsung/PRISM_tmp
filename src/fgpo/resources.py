@@ -1,9 +1,9 @@
-"""Cooperative Linux host-memory reservations before importing the model runtime.
+"""Host-memory reservations and startup warming of the native CUDA allocator.
 
 The formal study loads unique saved parameters as bf16 and retains a bf16
-reference plus three fp32 Adam tensors. Only safetensors headers are read here.
-Reservations coordinate this user's study processes; MemAvailable also accounts
-for memory already consumed by other work on the host.
+reference plus three fp32 Adam tensors. Host estimates read safetensors headers.
+Host reservations coordinate this user's study processes; MemAvailable also
+accounts for memory already consumed by other work on the host.
 """
 from __future__ import annotations
 
@@ -19,6 +19,11 @@ import uuid
 _MIB = 1024 ** 2
 _GIB = 1024 ** 3
 _FORMAT = "fgpo-host-memory-v1"
+_CUDA_RUNTIME_RESERVE = _GIB
+_CUDA_SMALL_POOL_TARGET = 32 * _MIB
+_CUDA_LARGE_BLOCK_MAX = 2 * _GIB
+_CUDA_LARGE_BLOCK_MIN = 16 * _MIB
+_CUDA_SEGMENT_ROUNDING = 20 * _MIB
 
 
 def _tensor_inventory(model_path):
@@ -72,6 +77,97 @@ def _configured_bytes(config, key, default, unit, *, allow_zero=False):
     if result == 0 and value != 0:
         raise ValueError(f"{key} must specify at least one byte")
     return result
+
+
+def preallocate_cuda_memory(config, *, gpu_ids):
+    """Warm this process's CUDA pools before loading or restoring an actor."""
+    enabled = config.get("gpu_preallocate", False)
+    if type(enabled) is not bool:
+        raise ValueError("gpu_preallocate must be a boolean")
+    if not enabled:
+        return None
+
+    import torch
+
+    cuda = torch.cuda
+    backend = cuda.get_allocator_backend()
+    if backend != "native" or os.environ.get("PYTORCH_NO_CUDA_MEMORY_CACHING") == "1":
+        raise ValueError("gpu_preallocate requires the native CUDA caching allocator")
+    configured_cap = (_configured_bytes(config, "gpu_allocator_cap_gib", None, _GIB)
+                      if "gpu_allocator_cap_gib" in config else None)
+    model = json.loads((Path(config["model_path"]) / "config.json").read_text(encoding="utf-8"))
+    vocab, hidden = int(model["vocab_size"]), int(model["hidden_size"])
+    bf16_vocab_weight = 2 * vocab * hidden
+    fp32_vocab_chunk = 4 * vocab * int(config.get("head_chunk_tokens", 64))
+    transfer = 4 * _configured_bytes(config, "optimizer_bucket_mib", 64., _MIB)
+    # Leave space for weight-sized requests, PPO head scratch, two AdamW copy
+    # streams and allocator segments outside the default-stream warm cache.
+    allocator_slack = 2 * bf16_vocab_weight + 3 * fp32_vocab_chunk + transfer + 256 * _MIB
+    physical_ids = config.get("allocated_physical_gpu_ids", config.get("physical_gpu_ids"))
+    physical_by_logical = (dict(zip(config["gpu_ids"], physical_ids, strict=True))
+                           if physical_ids is not None else {})
+
+    devices = []
+    for gpu in gpu_ids:
+        device = torch.device("cuda", gpu)
+        with cuda.device(gpu):
+            free_before, total = cuda.mem_get_info(gpu)
+            current_cap = int(total * cuda.get_per_process_memory_fraction(gpu))
+            cap = current_cap if configured_cap is None else min(current_cap, configured_cap)
+            if cap < current_cap:
+                cuda.set_per_process_memory_fraction(cap / total, gpu)
+                cap = int(total * cuda.get_per_process_memory_fraction(gpu))
+            before = cuda.memory_stats_as_nested_dict(gpu)
+            reserved_before = before["reserved_bytes"]["all"]["current"]
+            target = max(0, min(cap, reserved_before + free_before - _CUDA_RUNTIME_RESERVE) - allocator_slack)
+            # PyTorch reports the native allocator's unlimited split size as -1.
+            max_split_size = before["max_split_size"]
+            max_block = _CUDA_LARGE_BLOCK_MAX
+            if max_split_size != -1:
+                max_block = min(max_block, max_split_size - 1)
+            small_bytes, large_bytes = 0, 0
+            held = []
+            try:
+                # The native allocator packs <= 1 MiB requests into its own pool.
+                if target - reserved_before >= _CUDA_SMALL_POOL_TARGET + _CUDA_SEGMENT_ROUNDING:
+                    for _ in range(_CUDA_SMALL_POOL_TARGET // _MIB):
+                        held.append(torch.empty(_MIB, dtype=torch.uint8, device=device))
+                    small_bytes = _CUDA_SMALL_POOL_TARGET
+                while True:
+                    free, _ = cuda.mem_get_info(gpu)
+                    reserved = cuda.memory_reserved(gpu)
+                    room = min(target - reserved, free - _CUDA_RUNTIME_RESERVE - allocator_slack)
+                    limit = min(max_block, room - _CUDA_SEGMENT_ROUNDING)
+                    if limit < _CUDA_LARGE_BLOCK_MIN:
+                        break
+                    # Power-of-two requests avoid size-class rounding. Holding
+                    # them together makes reservations grow instead of reusing one block.
+                    block = 1 << (limit.bit_length() - 1)
+                    held.append(torch.empty(block, dtype=torch.uint8, device=device))
+                    large_bytes += block
+                if held:
+                    cuda.current_stream(gpu).synchronize()
+            finally:
+                held.clear()
+
+            free_after, _ = cuda.mem_get_info(gpu)
+            after = cuda.memory_stats_as_nested_dict(gpu)
+            reserved_after = after["reserved_bytes"]["all"]["current"]
+            active_after = after["active_bytes"]["all"]["current"]
+            cached = reserved_after - active_after
+            placement = max(0, min(cap - active_after, free_after + cached - _CUDA_RUNTIME_RESERVE))
+            devices.append({"logical_gpu_id": gpu, "physical_gpu_id": physical_by_logical.get(gpu),
+                            "total_bytes": total, "allocator_cap_bytes": cap,
+                            "free_before_bytes": free_before, "free_after_bytes": free_after,
+                            "reserved_before_bytes": reserved_before, "reserved_after_bytes": reserved_after,
+                            "small_reserved_before_bytes": before["reserved_bytes"]["small_pool"]["current"],
+                            "small_reserved_after_bytes": after["reserved_bytes"]["small_pool"]["current"],
+                            "active_after_bytes": active_after,
+                            "target_reserved_bytes": target, "cached_after_bytes": cached,
+                            "small_request_bytes": small_bytes, "large_request_bytes": large_bytes,
+                            "effective_placement_bytes": placement})
+    return {"allocator_backend": backend, "runtime_reserve_bytes": _CUDA_RUNTIME_RESERVE,
+            "allocator_slack_bytes": allocator_slack, "devices": devices}
 
 
 def _estimate(config, model_gpu_count, resume_checkpoint):

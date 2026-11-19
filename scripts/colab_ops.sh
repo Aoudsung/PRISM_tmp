@@ -4,6 +4,8 @@
 #   refresh-token -s SESSION [--remote-token-file PATH] [--transport ssh|exec]
 #   status -s SESSION [--cell SUITE/BM/METHOD/seed-N --config REMOTE_CFG] [--output-dir REMOTE_OUT] [--remote-token-file PATH] [--ssh] [--transport ssh|exec]
 #   pull -s SESSION <SUITE/BM/METHOD/seed-N> [dest_dir] --config REMOTE_CFG [--output-dir REMOTE_OUT] [--remote-token-file PATH] [--with-final-model] [--transport ssh|exec]
+#   pack-history -s SESSION [--cell SUITE/BM/METHOD/seed-N] --config REMOTE_CFG [--output-dir REMOTE_OUT] [--remote-token-file PATH] [--dest-dir LOCAL_DEST] [--transport ssh|exec]
+#   unpack-history -s SESSION --cell SUITE/BM/METHOD/seed-N [--output-dir REMOTE_OUT] [--transport ssh|exec]
 #   aggregate -s SESSION --config REMOTE_CFG [--output-dir REMOTE_OUT] [--suite comparison|ablation] [--method fgpo] [--benchmark alfworld] [--seeds 0,1,2] [--records-format json|jsonl] [--dest-dir LOCAL_DEST] [--transport ssh|exec]
 #   stop <session> --cell SUITE/BM/METHOD/seed-N [--cell ...] --config REMOTE_CFG --dest-dir LOCAL_DEST [--output-dir REMOTE_OUT] [--remote-token-file PATH] [--wait-seconds N] [--with-final-model] [--transport ssh|exec]
 set -euo pipefail
@@ -25,7 +27,7 @@ parse_cell_id() {
   fi
   case "$CELL_SUITE" in comparison|ablation) ;; *) echo "Invalid suite '$CELL_SUITE' in '$cell_id'" >&2; exit 2 ;; esac
   case "$CELL_BENCHMARK" in alfworld|appworld) ;; *) echo "Invalid benchmark '$CELL_BENCHMARK' in '$cell_id'" >&2; exit 2 ;; esac
-  case "$CELL_METHOD" in fgpo|fgpo_obs_only|fgpo_no_transfer|fgpo_no_support_weight|gigpo|hgpo|graphgpo) ;; *) echo "Invalid method '$CELL_METHOD' in '$cell_id'" >&2; exit 2 ;; esac
+  case "$CELL_METHOD" in fgpo|fgpo_obs_only|fgpo_no_transfer|fgpo_no_support_weight|gigpo|hgpo|graphgpo|g2po|ecpo) ;; *) echo "Invalid method '$CELL_METHOD' in '$cell_id'" >&2; exit 2 ;; esac
   case "$CELL_SEED_DIR" in
     seed-0|seed-1|seed-2) CELL_SEED="${CELL_SEED_DIR#seed-}" ;;
     *) echo "Invalid seed directory '$CELL_SEED_DIR' in cell ID '$cell_id'" >&2; exit 2 ;;
@@ -146,8 +148,46 @@ elif action == "term":
 SCANNER_B64_EOF
 )"
 
+HISTORY_ARCHIVE_B64="$(fgpo_emit_history_archive_py | "$COLAB_PY" -c 'import base64, sys; print(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))')"
+
+verify_local_pulled_bundle() {
+  local cell_dest="$1"
+  local require_retention="${2:-0}"
+  "$COLAB_PY" - "$cell_dest" "$require_retention" << 'VERIFY_PULLED_PY'
+import json, pathlib, sys
+
+cell_dest = pathlib.Path(sys.argv[1])
+require_ret = sys.argv[2] == "1"
+man_p = cell_dest / "history_bundle.manifest.json"
+bun_p = cell_dest / "history_bundle.tar.zst"
+rcpt_p = cell_dest / ".stage_retention_receipt.json"
+
+if man_p.exists() or bun_p.exists():
+    if not bun_p.is_file() or bun_p.stat().st_size <= 0:
+        raise SystemExit(f"Missing or empty real history_bundle.tar.zst in {cell_dest}")
+    if man_p.is_file():
+        man = json.loads(man_p.read_text(encoding="utf-8"))
+        exp_bytes = int(man.get("bundle_bytes", -1))
+        act_bytes = bun_p.stat().st_size
+        if exp_bytes != act_bytes:
+            raise SystemExit(f"Pulled bundle size mismatch in {cell_dest}: {act_bytes} != {exp_bytes}")
+
+if rcpt_p.is_file():
+    rcpt = json.loads(rcpt_p.read_text(encoding="utf-8"))
+    for live_name in rcpt.get("live_reclaimable_roots") or []:
+        if not (cell_dest / live_name).exists():
+            raise SystemExit(f"Missing live runtime material {live_name!r} in {cell_dest}")
+    if rcpt.get("has_bundle"):
+        exp_b = int(rcpt.get("expected_bundle_bytes") or -1)
+        if not bun_p.is_file() or (exp_b > 0 and bun_p.stat().st_size != exp_b):
+            raise SystemExit(f"Missing or truncated history_bundle.tar.zst in {cell_dest}")
+elif require_ret:
+    raise SystemExit(f"Missing .stage_retention_receipt.json in {cell_dest}")
+VERIFY_PULLED_PY
+}
+
 CMD="${1:-}"
-[ -n "$CMD" ] || { echo "Usage: $0 {sync-code|refresh-token|status|pull|aggregate|stop} [options]" >&2; exit 2; }
+[ -n "$CMD" ] || { echo "Usage: $0 {sync-code|refresh-token|status|pull|pack-history|unpack-history|aggregate|stop} [options]" >&2; exit 2; }
 shift
 
 case "$CMD" in
@@ -339,7 +379,7 @@ STATUS_EOF
     DEST_DIR="${DEST_ROOT}/${CELL_ID}"
     mkdir -p "$DEST_ROOT"
     colab_remote_run "$TRANSPORT" "$SESSION" \
-      "PY='$REMOTE_PY' CLI='$REMOTE_GCS_CLI' CONFIG_PATH='$CONFIG_PATH' REMOTE_OUTPUT='$REMOTE_OUTPUT' CELL_ID='$CELL_ID' CELL_DIR='${REMOTE_OUTPUT}/${CELL_ID}' CELL_SUITE='$CELL_SUITE' CELL_BENCHMARK='$CELL_BENCHMARK' CELL_METHOD='$CELL_METHOD' CELL_SEED='$CELL_SEED' REMOTE_TOKEN_FILE='$REMOTE_TOKEN_FILE' WITH_MODEL='$WITH_MODEL' bash -s" << 'PULL_EOF' | tar -xzf - -C "$DEST_ROOT"
+      "PY='$REMOTE_PY' CLI='$REMOTE_GCS_CLI' CONFIG_PATH='$CONFIG_PATH' REMOTE_OUTPUT='$REMOTE_OUTPUT' CELL_ID='$CELL_ID' CELL_DIR='${REMOTE_OUTPUT}/${CELL_ID}' CELL_SUITE='$CELL_SUITE' CELL_BENCHMARK='$CELL_BENCHMARK' CELL_METHOD='$CELL_METHOD' CELL_SEED='$CELL_SEED' REMOTE_TOKEN_FILE='$REMOTE_TOKEN_FILE' WITH_MODEL='$WITH_MODEL' ARCHIVE_B64='$HISTORY_ARCHIVE_B64' bash -s" << 'PULL_EOF' | tar -xzf - -C "$DEST_ROOT"
 set -euo pipefail
 export PYTHONPATH=/content/fgpo-r3/src
 export FGPO_GCS_ACCESS_TOKEN_FILE="$REMOTE_TOKEN_FILE"
@@ -358,8 +398,9 @@ fi
   --suite "$CELL_SUITE" --method "$CELL_METHOD" \
   --benchmark "$CELL_BENCHMARK" --seed "$CELL_SEED" \
   --dest-dir "$CELL_STAGE" ${EXTRA[@]+"${EXTRA[@]}"} > "$CELL_STAGE/.pull_receipt.json"
-if [ -f "$CELL_DIR/reporting_summary.json" ]; then
-  cp -f "$CELL_DIR/reporting_summary.json" "$CELL_STAGE/reporting_summary.json"
+if [ -d "$CELL_DIR" ]; then
+  "$PY" -c 'import base64, os, sys; sys.argv = ["fgpo_history_archive", *sys.argv[1:]]; exec(compile(base64.b64decode(os.environ["ARCHIVE_B64"]), "fgpo_history_archive", "exec"))' \
+    ensure-stage-bundle --cell-dir "$CELL_DIR" --stage-dir "$CELL_STAGE" --config "$CONFIG_PATH" --copy-live-reclaimables --materialize-costs
 fi
 for report_name in study_reporting_summary.json study_reporting_table1.md; do
   if [ -f "$REMOTE_OUTPUT/$CELL_SUITE/$report_name" ]; then
@@ -372,6 +413,7 @@ PULL_EOF
       echo "[pull] Missing pull receipt after transfer into $DEST_DIR" >&2
       exit 1
     fi
+    verify_local_pulled_bundle "$DEST_DIR"
     cat "$DEST_DIR/.pull_receipt.json"
     printf '\n'
     ;;
@@ -406,7 +448,7 @@ PULL_EOF
     [ -n "$CONFIG_PATH" ] || { echo "[aggregate] --config REMOTE_CONFIG_PATH is required." >&2; exit 2; }
     case "$AGG_SUITE" in comparison|ablation) ;; *) echo "Invalid --suite: $AGG_SUITE" >&2; exit 2 ;; esac
     case "$AGG_BENCHMARK" in alfworld|appworld) ;; *) echo "Invalid --benchmark: $AGG_BENCHMARK" >&2; exit 2 ;; esac
-    case "$AGG_METHOD" in fgpo|fgpo_obs_only|fgpo_no_transfer|fgpo_no_support_weight|gigpo|hgpo|graphgpo) ;; *) echo "Invalid --method: $AGG_METHOD" >&2; exit 2 ;; esac
+    case "$AGG_METHOD" in fgpo|fgpo_obs_only|fgpo_no_transfer|fgpo_no_support_weight|gigpo|hgpo|graphgpo|g2po|ecpo) ;; *) echo "Invalid --method: $AGG_METHOD" >&2; exit 2 ;; esac
     case "$RECORDS_FORMAT" in json|jsonl) ;; *) echo "Invalid --records-format: $RECORDS_FORMAT" >&2; exit 2 ;; esac
     IFS=, read -r -a _AGG_SEED_ARR <<< "$AGG_SEEDS"
     [ "${#_AGG_SEED_ARR[@]}" -ge 1 ] || { echo "[aggregate] At least one seed is required." >&2; exit 2; }
@@ -520,7 +562,7 @@ AGG_PULL_EOF
 
     echo "[stop] Requesting graceful shutdown on '$SESSION' via $TRANSPORT and verifying cell persistence..."
     BACKEND="$(COLAB_EXEC_TIMEOUT="$STOP_EXEC_TIMEOUT" colab_remote_run "$TRANSPORT" "$SESSION" \
-      "PY='$REMOTE_PY' CLI='$REMOTE_GCS_CLI' WAIT_SECONDS='$WAIT_SECONDS' CELL_CSV='$CELL_CSV' REMOTE_OUTPUT='$REMOTE_OUTPUT' REMOTE_CONFIG='$REMOTE_CONFIG' REMOTE_TOKEN_FILE='$REMOTE_TOKEN_FILE' SCANNER_B64='$REMOTE_PROC_SCANNER_B64' bash -s" << 'STOP_VERIFY_EOF'
+      "PY='$REMOTE_PY' CLI='$REMOTE_GCS_CLI' WAIT_SECONDS='$WAIT_SECONDS' CELL_CSV='$CELL_CSV' REMOTE_OUTPUT='$REMOTE_OUTPUT' REMOTE_CONFIG='$REMOTE_CONFIG' REMOTE_TOKEN_FILE='$REMOTE_TOKEN_FILE' SCANNER_B64='$REMOTE_PROC_SCANNER_B64' ARCHIVE_B64='$HISTORY_ARCHIVE_B64' bash -s" << 'STOP_VERIFY_EOF'
 set -euo pipefail
 export PYTHONPATH=/content/fgpo-r3/src
 export FGPO_GCS_ACCESS_TOKEN_FILE="$REMOTE_TOKEN_FILE"
@@ -566,9 +608,28 @@ for cid in "${EXPECTED_CELLS[@]}"; do
   seed="${sd#seed-}"
   CELL_DIR="${REMOTE_OUTPUT}/${cid}"
   [ -d "$CELL_DIR" ] || { echo "[stop] Missing cell directory on runtime: ${CELL_DIR}" >&2; exit 1; }
-  [ -f "${CELL_DIR}/costs.jsonl" ] && [ -f "${CELL_DIR}/config.json" ] || {
-    echo "[stop] Cell ${cid} lacks config.json or costs.jsonl on runtime" >&2; exit 1;
+  { [ -s "${CELL_DIR}/costs.jsonl" ] || [ -s "${CELL_DIR}/history_bundle.tar.zst" ] || { [ "$BACKEND" = "gcs" ] && [ -f "${CELL_DIR}/history_bundle.manifest.json" ]; }; } && [ -f "${CELL_DIR}/config.json" ] || {
+    echo "[stop] Cell ${cid} lacks config.json or recoverable costs.jsonl/history_bundle.tar.zst on runtime" >&2; exit 1;
   }
+  "$PY" - "$CELL_DIR" "$BACKEND" << 'STOP_BUNDLE_CHK_PY'
+import json, pathlib, sys
+cell = pathlib.Path(sys.argv[1])
+backend = sys.argv[2]
+bun = cell / "history_bundle.tar.zst"
+man = cell / "history_bundle.manifest.json"
+if man.is_file():
+    md = json.loads(man.read_text(encoding="utf-8"))
+    exp = int(md.get("bundle_bytes", -1))
+    if exp <= 0:
+        raise SystemExit(f"Invalid bundle_bytes in {man}")
+    if bun.is_file():
+        if bun.stat().st_size != exp:
+            raise SystemExit(f"Runtime bundle size mismatch in {cell}")
+    elif backend != "gcs" or not md.get("gcs_bundle_generation") or not (md.get("gcs_bundle_name") or md.get("gcs_bundle_uri")):
+        raise SystemExit(f"Manifest {man} lacks local bundle and immutable GCS generation")
+elif bun.exists() and (not bun.is_file() or bun.stat().st_size <= 0):
+    raise SystemExit(f"Empty or invalid runtime bundle {bun}")
+STOP_BUNDLE_CHK_PY
   CUR_PTR="${CELL_DIR}/checkpoint/CURRENT"
   FIN_PTR="${CELL_DIR}/final_checkpoint/CURRENT"
   if [ ! -f "$CUR_PTR" ] && [ ! -f "$FIN_PTR" ]; then
@@ -580,9 +641,11 @@ for cid in "${EXPECTED_CELLS[@]}"; do
       echo "[stop] Refused VM destruction: missing GCS token file ${REMOTE_TOKEN_FILE}" >&2
       exit 1
     }
-    "$PY" "$CLI" sync-logs \
-      --config "$REMOTE_CONFIG" --cell-dir "$CELL_DIR" \
-      --suite "$s" --method "$m" --benchmark "$b" --seed "$seed" >/dev/null
+    if [ -f "${CELL_DIR}/costs.jsonl" ] && [ ! -f "${CELL_DIR}/.finalization_complete.json" ]; then
+      "$PY" "$CLI" sync-logs \
+        --config "$REMOTE_CONFIG" --cell-dir "$CELL_DIR" \
+        --suite "$s" --method "$m" --benchmark "$b" --seed "$seed" >/dev/null
+    fi
     STATUS_JSON=$("$PY" "$CLI" status \
       --config "$REMOTE_CONFIG" --cell-dir "$CELL_DIR" \
       --suite "$s" --method "$m" --benchmark "$b" --seed "$seed")
@@ -623,9 +686,9 @@ STOP_VERIFY_EOF
       CELL_DEST="${DEST_ROOT}/${cid}"
       mkdir -p "$DEST_ROOT"
       if [ "$BACKEND" = "gcs" ]; then
-        echo "[stop] Pulling retained GCS artifacts/journals and derived reporting outputs for ${cid} into ${CELL_DEST}..."
+        echo "[stop] Pulling retained GCS artifacts/journals, real history bundle, and derived reporting outputs for ${cid} into ${CELL_DEST}..."
         colab_remote_run "$TRANSPORT" "$SESSION" \
-          "PY='$REMOTE_PY' CLI='$REMOTE_GCS_CLI' CONFIG_PATH='$REMOTE_CONFIG' REMOTE_OUTPUT='$REMOTE_OUTPUT' CELL_ID='$cid' CELL_DIR='${REMOTE_OUTPUT}/${cid}' CELL_SUITE='$CELL_SUITE' CELL_BENCHMARK='$CELL_BENCHMARK' CELL_METHOD='$CELL_METHOD' CELL_SEED='$CELL_SEED' REMOTE_TOKEN_FILE='$REMOTE_TOKEN_FILE' WITH_MODEL='$WITH_MODEL' bash -s" << 'STOP_PULL_EOF' | tar -xzf - -C "$DEST_ROOT"
+          "PY='$REMOTE_PY' CLI='$REMOTE_GCS_CLI' CONFIG_PATH='$REMOTE_CONFIG' REMOTE_OUTPUT='$REMOTE_OUTPUT' CELL_ID='$cid' CELL_DIR='${REMOTE_OUTPUT}/${cid}' CELL_SUITE='$CELL_SUITE' CELL_BENCHMARK='$CELL_BENCHMARK' CELL_METHOD='$CELL_METHOD' CELL_SEED='$CELL_SEED' REMOTE_TOKEN_FILE='$REMOTE_TOKEN_FILE' WITH_MODEL='$WITH_MODEL' ARCHIVE_B64='$HISTORY_ARCHIVE_B64' bash -s" << 'STOP_PULL_EOF' | tar -xzf - -C "$DEST_ROOT"
 set -euo pipefail
 export PYTHONPATH=/content/fgpo-r3/src
 export FGPO_GCS_ACCESS_TOKEN_FILE="$REMOTE_TOKEN_FILE"
@@ -643,9 +706,8 @@ fi
   --suite "$CELL_SUITE" --method "$CELL_METHOD" \
   --benchmark "$CELL_BENCHMARK" --seed "$CELL_SEED" \
   --dest-dir "$CELL_STAGE" ${EXTRA[@]+"${EXTRA[@]}"} > "$CELL_STAGE/.pull_receipt.json"
-if [ -f "$CELL_DIR/reporting_summary.json" ]; then
-  cp -f "$CELL_DIR/reporting_summary.json" "$CELL_STAGE/reporting_summary.json"
-fi
+"$PY" -c 'import base64, os, sys; sys.argv = ["fgpo_history_archive", *sys.argv[1:]]; exec(compile(base64.b64decode(os.environ["ARCHIVE_B64"]), "fgpo_history_archive", "exec"))' \
+  ensure-stage-bundle --cell-dir "$CELL_DIR" --stage-dir "$CELL_STAGE" --config "$CONFIG_PATH" --copy-live-reclaimables --materialize-costs --require-retention
 for report_name in study_reporting_summary.json study_reporting_table1.md; do
   if [ -f "$REMOTE_OUTPUT/$CELL_SUITE/$report_name" ]; then
     cp -f "$REMOTE_OUTPUT/$CELL_SUITE/$report_name" "$SUITE_STAGE/$report_name"
@@ -653,19 +715,22 @@ for report_name in study_reporting_summary.json study_reporting_table1.md; do
 done
 tar -czf - -C "$STAGE_ROOT" .
 STOP_PULL_EOF
-        [ -f "$CELL_DEST/.pull_receipt.json" ] && [ -f "$CELL_DEST/costs.jsonl" ] && [ -f "$CELL_DEST/config.json" ] || {
+        [ -f "$CELL_DEST/.pull_receipt.json" ] && [ -s "$CELL_DEST/costs.jsonl" ] && [ -f "$CELL_DEST/config.json" ] || {
           echo "[stop] Refused VM destruction: failed off-instance GCS retention in ${CELL_DEST}" >&2
           exit 1
         }
+        verify_local_pulled_bundle "$CELL_DEST" 1
       else
-        echo "[stop] Transferring full local cell state and derived reporting outputs for ${cid} off-instance into ${CELL_DEST}..."
+        echo "[stop] Transferring full local cell state, live raw materials, real history bundle, and derived reporting outputs for ${cid} off-instance into ${CELL_DEST}..."
         colab_remote_run "$TRANSPORT" "$SESSION" \
-          "REMOTE_OUTPUT='$REMOTE_OUTPUT' CELL_ID='$cid' CELL_SUITE='$CELL_SUITE' bash -s" << 'STOP_LOCAL_PULL_EOF' | tar -xzf - -C "$DEST_ROOT"
+          "PY='$REMOTE_PY' REMOTE_OUTPUT='$REMOTE_OUTPUT' REMOTE_CONFIG='$REMOTE_CONFIG' CELL_ID='$cid' CELL_SUITE='$CELL_SUITE' ARCHIVE_B64='$HISTORY_ARCHIVE_B64' bash -s" << 'STOP_LOCAL_PULL_EOF' | tar -xzf - -C "$DEST_ROOT"
 set -euo pipefail
 STAGE_ROOT="$(mktemp -d /tmp/fgpo_stop_local_XXXXXX)"
 trap 'rm -rf "$STAGE_ROOT"' EXIT
 mkdir -p "$STAGE_ROOT/$CELL_ID" "$STAGE_ROOT/$CELL_SUITE"
-tar --exclude='environments' -cf - -C "$REMOTE_OUTPUT/$CELL_ID" . | tar -xf - -C "$STAGE_ROOT/$CELL_ID"
+tar -cf - -C "$REMOTE_OUTPUT/$CELL_ID" . | tar -xf - -C "$STAGE_ROOT/$CELL_ID"
+"$PY" -c 'import base64, os, sys; sys.argv = ["fgpo_history_archive", *sys.argv[1:]]; exec(compile(base64.b64decode(os.environ["ARCHIVE_B64"]), "fgpo_history_archive", "exec"))' \
+  ensure-stage-bundle --cell-dir "$REMOTE_OUTPUT/$CELL_ID" --stage-dir "$STAGE_ROOT/$CELL_ID" --config "$REMOTE_CONFIG" --copy-live-reclaimables --materialize-costs --require-retention
 for report_name in study_reporting_summary.json study_reporting_table1.md; do
   if [ -f "$REMOTE_OUTPUT/$CELL_SUITE/$report_name" ]; then
     cp -f "$REMOTE_OUTPUT/$CELL_SUITE/$report_name" "$STAGE_ROOT/$CELL_SUITE/$report_name"
@@ -673,10 +738,11 @@ for report_name in study_reporting_summary.json study_reporting_table1.md; do
 done
 tar -czf - -C "$STAGE_ROOT" .
 STOP_LOCAL_PULL_EOF
-        [ -f "$CELL_DEST/costs.jsonl" ] && [ -f "$CELL_DEST/config.json" ] && { [ -f "$CELL_DEST/checkpoint/CURRENT" ] || [ -f "$CELL_DEST/final_checkpoint/CURRENT" ]; } || {
+        [ -s "$CELL_DEST/costs.jsonl" ] && [ -f "$CELL_DEST/config.json" ] && { [ -f "$CELL_DEST/checkpoint/CURRENT" ] || [ -f "$CELL_DEST/final_checkpoint/CURRENT" ]; } || {
           echo "[stop] Refused VM destruction: failed off-instance local cell transfer in ${CELL_DEST}" >&2
           exit 1
         }
+        verify_local_pulled_bundle "$CELL_DEST" 1
       fi
     done
 
@@ -685,8 +751,139 @@ STOP_LOCAL_PULL_EOF
     "$COLAB_CLI" sessions || true
     ;;
 
+  pack-history)
+    SESSION=""
+    CELL_ID=""
+    REMOTE_CONFIG="/content/fgpo-r3/configs/fgpo-r3-colab-a100.json"
+    REMOTE_OUTPUT="$DEFAULT_REMOTE_OUTPUT"
+    REMOTE_TOKEN_FILE="$DEFAULT_REMOTE_TOKEN_FILE"
+    DEST_DIR=""
+    TRANSPORT="exec"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -s|--session) SESSION="$2"; shift 2 ;;
+        --cell) CELL_ID="$2"; shift 2 ;;
+        --config) REMOTE_CONFIG="$2"; shift 2 ;;
+        --output-dir) REMOTE_OUTPUT="$2"; shift 2 ;;
+        --remote-token-file) REMOTE_TOKEN_FILE="$2"; shift 2 ;;
+        --dest-dir) DEST_DIR="$2"; shift 2 ;;
+        --transport) TRANSPORT="$2"; shift 2 ;;
+        *) echo "Unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$SESSION" ] || { echo "[pack-history] --session SESSION is required." >&2; exit 2; }
+    colab_validate_transport "$TRANSPORT"
+    validate_safe_path "--config" "$REMOTE_CONFIG"
+    validate_safe_path "--output-dir" "$REMOTE_OUTPUT"
+    validate_safe_path "--remote-token-file" "$REMOTE_TOKEN_FILE"
+    if [ -n "$CELL_ID" ]; then
+      parse_cell_id "$CELL_ID"
+    fi
+
+    colab_remote_run "$TRANSPORT" "$SESSION" \
+      "PY='$REMOTE_PY' REMOTE_CONFIG='$REMOTE_CONFIG' REMOTE_OUTPUT='$REMOTE_OUTPUT' REMOTE_TOKEN_FILE='$REMOTE_TOKEN_FILE' TARGET_CELL='$CELL_ID' ARCHIVE_B64='$HISTORY_ARCHIVE_B64' bash -s" << 'PACK_HISTORY_EOF'
+set -euo pipefail
+export PYTHONPATH=/content/fgpo-r3/src
+export FGPO_GCS_ACCESS_TOKEN_FILE="$REMOTE_TOKEN_FILE"
+
+LIB_SO="/content/venvs/alfworld/lib/python3.11/site-packages/fast_downward/libdownward.so"
+if [ -f "$LIB_SO" ] && command -v strip >/dev/null 2>&1; then
+  CUR_SZ=$(stat -c '%s' "$LIB_SO" 2>/dev/null || echo 0)
+  if [ "$CUR_SZ" -gt 5000000 ]; then
+    TMP_SO="${LIB_SO}.stripped.$$"
+    cp -p "$LIB_SO" "$TMP_SO"
+    if strip --strip-debug "$TMP_SO" && chmod 0755 "$TMP_SO" && /content/venvs/alfworld/bin/python -c 'import ctypes, sys; lib = ctypes.CDLL(sys.argv[1]); _ = lib.cleanup' "$TMP_SO"; then
+      mv -f "$TMP_SO" "$LIB_SO"
+      echo "[pack-history] Stripped DWARF debug sections from libdownward.so (${CUR_SZ} -> $(stat -c '%s' "$LIB_SO") bytes)"
+    else
+      rm -f "$TMP_SO"
+    fi
+  fi
+fi
+
+EXTRA_CELL_ARGS=()
+if [ -n "$TARGET_CELL" ]; then
+  EXTRA_CELL_ARGS=(--cell "$TARGET_CELL")
+fi
+"$PY" -c 'import base64, os, sys; sys.argv = ["fgpo_history_archive", *sys.argv[1:]]; exec(compile(base64.b64decode(os.environ["ARCHIVE_B64"]), "fgpo_history_archive", "exec"))' \
+  pack --output-dir "$REMOTE_OUTPUT" --config "$REMOTE_CONFIG" ${EXTRA_CELL_ARGS[@]+"${EXTRA_CELL_ARGS[@]}"}
+PACK_HISTORY_EOF
+
+    if [ -n "$DEST_DIR" ]; then
+      mkdir -p "$DEST_DIR"
+      colab_remote_run "$TRANSPORT" "$SESSION" "PY='$REMOTE_PY' REMOTE_OUTPUT='$REMOTE_OUTPUT' REMOTE_CONFIG='$REMOTE_CONFIG' REMOTE_TOKEN_FILE='$REMOTE_TOKEN_FILE' TARGET_CELL='$CELL_ID' ARCHIVE_B64='$HISTORY_ARCHIVE_B64' bash -s" << 'PULL_BUNDLES_EOF' | tar -xzf - -C "$DEST_DIR"
+set -euo pipefail
+export PYTHONPATH=/content/fgpo-r3/src
+export FGPO_GCS_ACCESS_TOKEN_FILE="$REMOTE_TOKEN_FILE"
+STAGE="$(mktemp -d /tmp/fgpo_pull_bundles_XXXXXX)"
+trap 'rm -rf "$STAGE"' EXIT
+if [ -n "$TARGET_CELL" ]; then
+  SEARCH_PATHS=("$REMOTE_OUTPUT/$TARGET_CELL")
+else
+  SEARCH_PATHS=()
+  while IFS= read -r d; do
+    SEARCH_PATHS+=("$d")
+  done < <(find "$REMOTE_OUTPUT" -mindepth 4 -maxdepth 4 -type d -name 'seed-*' 2>/dev/null)
+fi
+for cdir in ${SEARCH_PATHS[@]+"${SEARCH_PATHS[@]}"}; do
+  [ -d "$cdir" ] || continue
+  if [ -f "$cdir/history_bundle.tar.zst" ] || [ -f "$cdir/history_bundle.manifest.json" ] || [ -f "$cdir/cell_summary.json" ]; then
+    rel="${cdir#${REMOTE_OUTPUT}/}"
+    mkdir -p "$STAGE/$rel"
+    for fn in cell_summary.json reporting_summary.json costs_summary.json .finalization_complete.json; do
+      [ -f "$cdir/$fn" ] && cp -f "$cdir/$fn" "$STAGE/$rel/$fn"
+    done
+    if [ -f "$cdir/history_bundle.tar.zst" ] || [ -f "$cdir/history_bundle.manifest.json" ]; then
+      "$PY" -c 'import base64, os, sys; sys.argv = ["fgpo_history_archive", *sys.argv[1:]]; exec(compile(base64.b64decode(os.environ["ARCHIVE_B64"]), "fgpo_history_archive", "exec"))' \
+        ensure-stage-bundle --cell-dir "$cdir" --stage-dir "$STAGE/$rel" --config "$REMOTE_CONFIG"
+      rm -f "$STAGE/$rel/costs.jsonl"
+    fi
+  fi
+done
+tar -czf - -C "$STAGE" .
+PULL_BUNDLES_EOF
+      while IFS= read -r local_man; do
+        verify_local_pulled_bundle "$(dirname "$local_man")"
+      done < <(find "$DEST_DIR" -type f -name 'history_bundle.manifest.json' 2>/dev/null)
+      echo "[pack-history] Mirrored verified packed bundles & summaries into local '${DEST_DIR}'."
+    fi
+    ;;
+
+  unpack-history)
+    SESSION=""
+    CELL_ID=""
+    MEMBERS=""
+    REMOTE_OUTPUT="$DEFAULT_REMOTE_OUTPUT"
+    TRANSPORT="exec"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -s|--session) SESSION="$2"; shift 2 ;;
+        --cell) CELL_ID="$2"; shift 2 ;;
+        --members) MEMBERS="$2"; shift 2 ;;
+        --output-dir) REMOTE_OUTPUT="$2"; shift 2 ;;
+        --transport) TRANSPORT="$2"; shift 2 ;;
+        *) echo "Unknown flag: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$SESSION" ] || { echo "[unpack-history] --session SESSION is required." >&2; exit 2; }
+    [ -n "$CELL_ID" ] || { echo "[unpack-history] --cell SUITE/BM/METHOD/seed-N is required." >&2; exit 2; }
+    parse_cell_id "$CELL_ID"
+    colab_validate_transport "$TRANSPORT"
+    validate_safe_path "--output-dir" "$REMOTE_OUTPUT"
+    colab_remote_run "$TRANSPORT" "$SESSION" "PY='$REMOTE_PY' REMOTE_OUTPUT='$REMOTE_OUTPUT' CELL_ID='$CELL_ID' MEMBERS='$MEMBERS' ARCHIVE_B64='$HISTORY_ARCHIVE_B64' bash -s" << 'UNPACK_EOF'
+set -euo pipefail
+EXTRA_MEM=()
+if [ -n "$MEMBERS" ]; then
+  EXTRA_MEM=(--members "$MEMBERS")
+fi
+"$PY" -c 'import base64, os, sys; sys.argv = ["fgpo_history_archive", *sys.argv[1:]]; exec(compile(base64.b64decode(os.environ["ARCHIVE_B64"]), "fgpo_history_archive", "exec"))' \
+  unpack --output-dir "$REMOTE_OUTPUT" --cell "$CELL_ID" ${EXTRA_MEM[@]+"${EXTRA_MEM[@]}"}
+ls -lh "${REMOTE_OUTPUT}/${CELL_ID}/costs.jsonl" "${REMOTE_OUTPUT}/${CELL_ID}/cell_summary.json"
+UNPACK_EOF
+    ;;
+
   *)
-    echo "Unknown command: $CMD (expected sync-code|refresh-token|status|pull|aggregate|stop)" >&2
+    echo "Unknown command: $CMD (expected sync-code|refresh-token|status|pull|pack-history|unpack-history|aggregate|stop)" >&2
     exit 2
     ;;
 esac

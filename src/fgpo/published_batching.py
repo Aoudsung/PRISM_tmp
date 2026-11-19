@@ -18,7 +18,7 @@ from __future__ import annotations
 import heapq
 import math
 
-from .baseline_specs import UPSTREAM_COMMIT, published_recipe
+from .baseline_specs import PUBLISHED_SOURCES, published_recipe
 
 
 def _balanced_partitions(lengths, world_size):
@@ -87,9 +87,8 @@ def plan_published_batch(trajectories, method, *, config=None, rng=None):
     ``minibatches`` is a tuple of tuples of ``(step_id, coefficient)``. Each
     coefficient multiplies every response token's full PPO + KL - entropy
     objective. Repeated occurrences of a step are merged only within the same
-    optimizer update. ``credit_row_ids`` includes copies for GiGPO, whose
-    trainer adjusts/balances before computing credit; the other recipes compute
-    credit first, on the original rollout rows.
+    optimizer update. ``credit_row_ids`` includes copies for recipes whose
+    trainers adjust and balance before computing the final advantage.
     """
     trajectories = tuple(trajectories)
     if not trajectories:
@@ -154,7 +153,7 @@ def plan_published_batch(trajectories, method, *, config=None, rng=None):
     return {
         "format": "published-verl-batch-v1",
         "method": method,
-        "source_commit": UPSTREAM_COMMIT,
+        "source_commit": PUBLISHED_SOURCES[method]["repo_commit"],
         "credit_row_ids": tuple(rows[index].step_id for index in credit_indices),
         "minibatches": tuple(minibatches),
         "diagnostics": {

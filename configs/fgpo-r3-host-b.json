@@ -14,7 +14,9 @@
     "fgpo",
     "gigpo",
     "hgpo",
-    "graphgpo"
+    "graphgpo",
+    "g2po",
+    "ecpo"
   ],
   "experiment_suites": {
     "comparison": {
@@ -22,19 +24,21 @@
         "fgpo",
         "gigpo",
         "hgpo",
-        "graphgpo"
+        "graphgpo",
+        "g2po",
+        "ecpo"
       ],
       "benchmarks": [
         "alfworld",
         "appworld"
       ],
-      "planned_cells": 24,
+      "planned_cells": 33,
       "claims": [
         "C1_method_level_official_success",
         "C5_actual_end_to_end_cost"
       ],
-      "necessity": "Compare the complete proposed method with three published predecessors on both official benchmarks.",
-      "interpretation": "Released-source ALFWorld recipes; AppWorld is an explicit native-code transfer. Report recipe cost beside final performance.",
+      "necessity": "Compare the proposed method with five published baselines on ALFWorld and four on AppWorld.",
+      "interpretation": "Use the published estimators with declared benchmark and backbone transfers, including the G2PO AppWorld V4 migration. Report recipe cost beside final performance.",
       "checkpoint_selection": "final_predeclared_training_round_only"
     },
     "ablation": {
@@ -82,6 +86,8 @@
   "trajectories": 8,
   "max_context_tokens": 32768,
   "activation_offload": false,
+  "gpu_preallocate": true,
+  "gpu_allocator_cap_gib": 79,
   "gpu_id_semantics": "CLI_physical_allocation_with_isolated_process_local_CUDA_indices",
   "method_configs": {
     "fgpo": {

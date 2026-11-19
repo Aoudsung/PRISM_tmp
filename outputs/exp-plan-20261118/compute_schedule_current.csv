@@ -1,0 +1,34 @@
+host,physical_gpu_ids,device_count,lane_order,suite,benchmark,method,seed,rounds,training_trajectories,horizon,official_eval,status_snapshot,sampling_layout,dependency,output_subdir,official_endpoint_tasks
+Colab,0,1,0,comparison,alfworld,fgpo,0,60,7680,50,valid_unseen,completed,existing_g4,正式结果已归档,,134
+Colab,0,1,1,comparison,alfworld,fgpo,1,60,7680,50,valid_unseen,completed,existing_g4,正式结果已归档,,134
+Colab,0,1,2,comparison,alfworld,fgpo,2,60,7680,50,valid_unseen,planned,existing_g4,等 Colab 有正式 GPU 会话再接续,,134
+Colab,0,1,3,ablation,alfworld,fgpo_no_transfer,0,60,7680,50,valid_unseen,planned,existing_g4,完整方法三种子结束后且 Colab 额度可用,,134
+Colab,0,1,4,ablation,alfworld,fgpo_no_transfer,1,60,7680,50,valid_unseen,planned,existing_g4,在 No-Transfer seed 0 后接续,,134
+Colab,0,1,5,ablation,alfworld,fgpo_no_transfer,2,60,7680,50,valid_unseen,planned,existing_g4,在 No-Transfer seed 1 后接续,,134
+Host B,0,1,1,comparison,webshop,fgpo,0,60,7680,15,test,started,WebShop 搜索菜单修复版,现有正式进程,output-webshop-menu-fixed-20261119,128
+Host B,0,1,2,comparison,webshop,fgpo,2,60,7680,15,test,queued,WebShop 搜索菜单修复版,同卡上一单元完成终评后接续,output-webshop-menu-fixed-20261119,128
+Host B,0,1,3,ablation,webshop,fgpo_obs_only,0,60,7680,15,test,queued,WebShop 搜索菜单修复版,上一单元和 F-GPO seed 0 均完成终评后接续,output-webshop-menu-fixed-20261119,128
+Host B,0,1,4,ablation,webshop,fgpo_obs_only,2,60,7680,15,test,queued,WebShop 搜索菜单修复版,上一单元和 F-GPO seed 2 均完成终评后接续,output-webshop-menu-fixed-20261119,128
+Host B,0,1,5,ablation,webshop,fgpo_no_transfer,2,60,7680,15,test,queued,WebShop 搜索菜单修复版,上一单元和 F-GPO seed 2 均完成终评后接续,output-webshop-menu-fixed-20261119,128
+Host B,2,1,1,comparison,webshop,fgpo,1,60,7680,15,test,started,WebShop 搜索菜单修复版,现有正式进程,output-webshop-menu-fixed-20261119,128
+Host B,2,1,2,ablation,webshop,fgpo_obs_only,1,60,7680,15,test,queued,WebShop 搜索菜单修复版,上一单元和 F-GPO seed 1 均完成终评后接续,output-webshop-menu-fixed-20261119,128
+Host B,2,1,3,ablation,webshop,fgpo_no_transfer,1,60,7680,15,test,queued,WebShop 搜索菜单修复版,上一单元和 F-GPO seed 1 均完成终评后接续,output-webshop-menu-fixed-20261119,128
+Host B,2,1,4,ablation,webshop,fgpo_no_transfer,0,60,7680,15,test,queued,WebShop 搜索菜单修复版,上一单元和 F-GPO seed 0 均完成终评后接续,output-webshop-menu-fixed-20261119,128
+Host A,3+4,2,1,comparison,textcraft,fgpo,0,50,6400,30,val,planned,双卡 L40,正式入口上线后启动,,79
+Host A,3+4,2,2,comparison,textcraft,fgpo,1,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,3+4,2,3,comparison,textcraft,fgpo,2,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,3+4,2,4,ablation,textcraft,fgpo_obs_only,0,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,3+4,2,5,ablation,textcraft,fgpo_obs_only,1,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,3+4,2,6,ablation,textcraft,fgpo_obs_only,2,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,3+4,2,7,ablation,textcraft,fgpo_no_support_weight,0,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,3+4,2,8,ablation,textcraft,fgpo_no_support_weight,1,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,3+4,2,9,ablation,textcraft,fgpo_no_support_weight,2,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,1+7,2,1,comparison,textcraft,graphgpo,0,50,6400,30,val,planned,双卡 L40,正式入口上线后启动,,79
+Host A,1+7,2,2,comparison,textcraft,graphgpo,1,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,1+7,2,3,comparison,textcraft,graphgpo,2,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,1+7,2,4,comparison,textcraft,g2po,0,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,1+7,2,5,comparison,textcraft,g2po,1,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,1+7,2,6,comparison,textcraft,g2po,2,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,1+7,2,7,ablation,textcraft,fgpo_no_transfer,0,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,1+7,2,8,ablation,textcraft,fgpo_no_transfer,1,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79
+Host A,1+7,2,9,ablation,textcraft,fgpo_no_transfer,2,50,6400,30,val,planned,双卡 L40,同卡上一单元完成终评后接续,,79

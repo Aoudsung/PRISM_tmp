@@ -56,7 +56,13 @@ runner 在构造 CostLedger 和 CPU 模型运行时之前恢复 cell 数据。`s
 # status/pull 通过 --session 与 --config 在指定远端实例重建并回传结果，拒绝无效的 --bucket/--prefix 覆盖，并自动随同保留已生成的 reporting_summary.json / study_reporting_summary.json / study_reporting_table1.md；
 # refresh-token 使用目标目录内唯一 mktemp 文件原子替换远端短期 access token；
 # aggregate 在远端以 --aggregate-only 轻量生成原生 Table 1 衍生报告（不初始化 GPU/Engine，不改动训练/终态权威），可选拉取至本地目录；
-# stop 强制要求 --cell、--config 与离机 --dest-dir，写入停止标志后基于真实可执行 argv（并排除 stop 自身祖先链）等待 runner、detached supervisor 与检查点完整退出，校验 GCS/本地可恢复状态并将恢复状态及既有衍生 Table 1 报告拉取至离机目录后再销毁实例：
+# pack-history / unpack-history 由 colab_common.sh 的统一归档器（fgpo-history-bundle-v2）驱动，同时支持 checkpoint_backend=gcs（Colab）与 checkpoint_backend=local（Host A / Host B）：
+#   1) 复用 runner 同级互斥锁 <method>/.seed-<N>.lock 串行化 pack / unpack，活跃 cell 自动跳过或显式拒绝；
+#   2) 仅归档并回收本次新包实际打入的可释放原始大文件（costs.jsonl、environments/、groups/、trajectories/、reference-round-*.pt），原位生成只读摘要 costs_summary.json；
+#      终态权威与模型/评测/任务目录（final_checkpoint/、cell_summary.json、.finalization_complete.json、training_summary.json、reporting_summary.json、official_tasks.json、config.json、training.jsonl、evaluation-*.jsonl、<split>/）始终原位保留，绝不入包覆盖；
+#   3) 以 finalized snapshot/cell identity、os.link 不可覆盖对象与 GCS ifGenerationMatch=0 不可变 generation + 成功传输长度作为持久发布依据（不做 SHA 或重复整包扫描）；复用既有 bundle 仅补交远端发布或缺失 manifest，绝不回收当前已恢复/新生成的同名文件；GCS token 不可用时完整保留原始文件；
+#   4) unpack-history 单遍流式仅创建缺失且允许的原始成员（os.link 保留一切已存在文件），不触碰模型/终态指标/指针或源码；
+# stop / pull 强制把运行时实际存在的原始材料（含未打包时的 environments/、groups/ 等）与/或按不可变 GCS generation 锁定的真实 history_bundle.tar.zst 一并拉取至离机目录（含 local 后端，禁止因缺少 manifest 跳过活数据或仅落盘悬空 manifest），核验通过后再销毁实例：
 ./scripts/colab_ops.sh refresh-token -s fgpo-r3-956ceab-alf \
   --remote-token-file /run/fgpo-gcs/access-token
 ./scripts/colab_ops.sh status -s fgpo-r3-956ceab-alf --cell comparison/alfworld/fgpo/seed-0 \
@@ -65,8 +71,17 @@ runner 在构造 CostLedger 和 CPU 模型运行时之前恢复 cell 数据。`s
   --config /content/fgpo-r3/configs/fgpo-r3-colab-a100.json
 ./scripts/colab_ops.sh aggregate -s fgpo-r3-956ceab-alf --config /content/fgpo-r3/configs/fgpo-r3-colab-a100.json \
   --seeds 0,1,2 --dest-dir ./outputs/colab_synced
+./scripts/colab_ops.sh pack-history -s fgpo-r3-956ceab-alf --config /content/fgpo-r3/configs/fgpo-r3-colab-a100.json \
+  --transport exec --dest-dir ./outputs/colab_archives
+./scripts/colab_ops.sh unpack-history -s fgpo-r3-956ceab-alf --cell comparison/alfworld/fgpo/seed-0 --transport exec
 ./scripts/colab_ops.sh stop fgpo-r3-956ceab-alf --cell comparison/alfworld/fgpo/seed-0 \
   --config /content/fgpo-r3/configs/fgpo-r3-colab-a100.json --dest-dir ./outputs/colab_stopped
+
+# Host A / Host B（checkpoint_backend=local）直接在本机复用同一归档器（无需 Colab 会话或 GCS token）：
+bash -c 'source scripts/colab_common.sh && FGPO_ARCHIVE_PYTHON=/path/to/venv/bin/python fgpo_local_history_archive pack \
+  --output-dir /path/to/outputs --config /path/to/server-config.json'
+bash -c 'source scripts/colab_common.sh && FGPO_ARCHIVE_PYTHON=/path/to/venv/bin/python fgpo_local_history_archive unpack \
+  --output-dir /path/to/outputs --cell comparison/alfworld/gigpo/seed-0'
 
 # 从控制端使用已存在并已部署环境的固定会话，通过单写者锁 (.fgpo-colab-supervisor.lock) 下的远端 setsid 脱离式 supervisor 顺序完成三 seed（将进程归属 .fgpo-colab-supervisor.pid 与首 cell 前置/启动就绪标志 .fgpo-colab-supervisor.ready 分离，首 cell 就绪后才返回成功并断开 SSH/exec）。
 # 若原前台 SSH launcher 退出留下孤儿 runner PID（且子进程继承着旧 `.fgpo-colab-sequence.lock` FD 9），可通过 `--adopt-pid PID` 绑定该 PID 的 `/proc/<pid>/stat` 启动时间戳、完整命令行及精确 cell/config/seed 后接管定期 `sync-logs` 与后续 seed，不删锁、不强制解锁、不向训练进程发信号；

@@ -42,7 +42,7 @@ done
 [ -n "$SESSION" ] || { echo "An existing --session is required" >&2; exit 2; }
 [ "$BENCHMARK" = alfworld ] || { echo "Colab is assigned ALFWorld only" >&2; exit 2; }
 case "$SUITE" in comparison|ablation) ;; *) echo "Invalid suite: $SUITE" >&2; exit 2 ;; esac
-case "$METHOD" in fgpo|fgpo_obs_only|fgpo_no_transfer|fgpo_no_support_weight|gigpo|hgpo|graphgpo) ;; *) echo "Invalid method: $METHOD" >&2; exit 2 ;; esac
+case "$METHOD" in fgpo|fgpo_obs_only|fgpo_no_transfer|fgpo_no_support_weight|gigpo|hgpo|graphgpo|g2po|ecpo) ;; *) echo "Invalid method: $METHOD" >&2; exit 2 ;; esac
 [ "${#SEEDS[@]}" -ge 1 ] || { echo "At least one seed is required" >&2; exit 2; }
 for seed in "${SEEDS[@]}"; do
   case "$seed" in 0|1|2) ;; *) echo "Invalid seed" >&2; exit 2 ;; esac
@@ -60,9 +60,10 @@ for path_arg in "$REMOTE_TOKEN_FILE" "$CONFIG" "$OUTPUT"; do
   case "$path_arg" in *[!a-zA-Z0-9_./-]*) echo "Unsupported path characters: $path_arg" >&2; exit 2 ;; esac
 done
 SEED_CSV=$(IFS=,; echo "${SEEDS[*]}")
+HISTORY_ARCHIVE_B64="$(fgpo_emit_history_archive_py | "$COLAB_PY" -c 'import base64, sys; print(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))')"
 
 COLAB_EXEC_TIMEOUT="${COLAB_EXEC_TIMEOUT:-600}" colab_remote_run "$TRANSPORT" "$SESSION" \
-  "FGPO_GCS_ACCESS_TOKEN_FILE='$REMOTE_TOKEN_FILE' FGPO_SUITE='$SUITE' FGPO_METHOD='$METHOD' FGPO_CONFIG='$CONFIG' FGPO_OUTPUT='$OUTPUT' FGPO_SEEDS='$SEED_CSV' FGPO_RESUME='$RESUME' FGPO_ADOPT_PID='$ADOPT_PID' FGPO_LAUNCH_READY_TIMEOUT='${FGPO_LAUNCH_READY_TIMEOUT:-480}' bash -s" <<'OUTER_REMOTE_EOF'
+  "FGPO_GCS_ACCESS_TOKEN_FILE='$REMOTE_TOKEN_FILE' FGPO_SUITE='$SUITE' FGPO_METHOD='$METHOD' FGPO_CONFIG='$CONFIG' FGPO_OUTPUT='$OUTPUT' FGPO_SEEDS='$SEED_CSV' FGPO_RESUME='$RESUME' FGPO_ADOPT_PID='$ADOPT_PID' FGPO_HISTORY_ARCHIVE_B64='$HISTORY_ARCHIVE_B64' FGPO_LAUNCH_READY_TIMEOUT='${FGPO_LAUNCH_READY_TIMEOUT:-480}' bash -s" <<'OUTER_REMOTE_EOF'
 set -euo pipefail
 PY=/content/venvs/fgpo-main/bin/python
 [ -x "$PY" ] || { echo "Missing $PY" >&2; exit 1; }
@@ -227,6 +228,40 @@ if backend == "gcs":
 INNER_VERIFY_PY_EOF
 }
 
+ensure_alfworld_libdownward_stripped() {
+  local lib_so="/content/venvs/alfworld/lib/python3.11/site-packages/fast_downward/libdownward.so"
+  [ -f "$lib_so" ] || return 0
+  local cur_size
+  cur_size=$(stat -c '%s' "$lib_so" 2>/dev/null || echo 0)
+  if [ "$cur_size" -gt 5000000 ] && command -v strip >/dev/null 2>&1; then
+    local tmp_so="${lib_so}.stripped.$$"
+    cp -p "$lib_so" "$tmp_so"
+    # Validate dynamic load in an isolated short-lived subprocess without dlclose
+    # (libdownward.so exports STB_GNU_UNIQUE symbols pinned by ld-linux until exit).
+    if strip --strip-debug "$tmp_so" && chmod 0755 "$tmp_so" && /content/venvs/alfworld/bin/python -c 'import ctypes, sys; lib = ctypes.CDLL(sys.argv[1]); _ = lib.cleanup' "$tmp_so"
+    then
+      mv -f "$tmp_so" "$lib_so"
+      echo "[supervisor] Stripped DWARF debug sections from libdownward.so (${cur_size} -> $(stat -c '%s' "$lib_so") bytes)"
+    else
+      rm -f "$tmp_so"
+    fi
+  fi
+}
+
+pack_completed_cell_history() {
+  local pack_seed="$1"
+  local avail_kib
+  avail_kib=$(df -Pk "$OUTPUT" 2>/dev/null | awk 'NR==2 {print $4}')
+  if [ "${FGPO_AUTO_PACK_HISTORY:-0}" != "1" ] && [ "${avail_kib:-999999999}" -ge 67108864 ]; then
+    return 0
+  fi
+  local rel_cell="${FGPO_SUITE}/alfworld/${FGPO_METHOD}/seed-${pack_seed}"
+  if ! run_unlocked "$PY" -c 'import base64, os, sys; sys.argv = ["fgpo_history_archive", *sys.argv[1:]]; exec(compile(base64.b64decode(os.environ["HISTORY_ARCHIVE_B64"]), "fgpo_history_archive", "exec"))' \
+      pack --output-dir "$OUTPUT" --config "$CONFIG" --cell "$rel_cell" --defer-on-missing-gcs-token; then
+    echo "[supervisor] Warning: history archive deferred for ${rel_cell}; raw files remain preserved." >&2
+  fi
+}
+
 cleanup() {
   if [ -f "$PID_FILE" ] && [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$$" ]; then
     rm -f "$PID_FILE" "$READY_FILE"
@@ -257,11 +292,19 @@ trap on_signal INT TERM
 BACKEND=$(run_unlocked "$PY" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("checkpoint_backend","local"))' "$CONFIG")
 MODEL_DIR=$(run_unlocked "$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["model_path"])' "$CONFIG")
 mkdir -p /content/logs "$OUTPUT"
+ensure_alfworld_libdownward_stripped
+for prev_s in 0 1 2; do
+  prev_cell="$OUTPUT/$FGPO_SUITE/alfworld/$FGPO_METHOD/seed-$prev_s"
+  if [ -f "$prev_cell/.finalization_complete.json" ]; then
+    pack_completed_cell_history "$prev_s"
+  fi
+done
 
 IFS=, read -r -a seeds <<< "$FGPO_SEEDS"
 seed_index=0
 for seed in "${seeds[@]}"; do
   [ ! -f "$STOP_FLAG" ] || { echo "[supervisor] Stop requested before seed-$seed; exiting cleanly."; exit 0; }
+  ensure_alfworld_libdownward_stripped
   cell="$OUTPUT/$FGPO_SUITE/alfworld/$FGPO_METHOD/seed-$seed"
 
   if [ "$seed_index" -eq 0 ] && [ -n "$ADOPT_PID" ]; then
@@ -295,6 +338,7 @@ for seed in "${seeds[@]}"; do
     fi
     verify_cell_completed "$cell" "$seed"
     run_aggregate_reports
+    pack_completed_cell_history "$seed"
     if [ "$LEGACY_LOCK_HELD" != "1" ]; then
       exec 9>"$LEGACY_LOCK_FILE"
       flock -n 9 || {
@@ -384,6 +428,7 @@ for seed in "${seeds[@]}"; do
   [ "$runner_rc" = 0 ] || exit "$runner_rc"
   verify_cell_completed "$cell" "$seed"
   run_aggregate_reports
+  pack_completed_cell_history "$seed"
   seed_index=$((seed_index + 1))
 done
 INNER_SUP_BODY_EOF
@@ -408,6 +453,7 @@ config = os.environ["FGPO_CONFIG"]
 output = Path(os.environ["FGPO_OUTPUT"])
 seeds_csv = os.environ["FGPO_SEEDS"]
 resume = os.environ["FGPO_RESUME"]
+history_archive_b64 = os.environ["FGPO_HISTORY_ARCHIVE_B64"]
 adopt_pid_raw = os.environ.get("FGPO_ADOPT_PID", "").strip()
 py_bin = "/content/venvs/fgpo-main/bin/python"
 
@@ -620,6 +666,7 @@ header = "\n".join([
     f"ADOPT_STARTTIME={shlex.quote(adopt_starttime)}",
     f"ADOPT_CMDLINE_B64={shlex.quote(adopt_cmdline_b64)}",
     f"LEGACY_LOCK_HELD={shlex.quote(legacy_held_flag)}",
+    f"export HISTORY_ARCHIVE_B64={shlex.quote(history_archive_b64)}",
     "",
 ])
 

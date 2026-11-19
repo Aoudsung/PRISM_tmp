@@ -14,11 +14,13 @@ Window-rollover siblings merge back into one batch at that same boundary.
 from __future__ import annotations
 
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import partial
 from threading import Lock
 
+from .appworld_batch import EvaluationEpisode, RolloutGroupSpec
 from .filtration import TokenFiltration
 from .public import HORIZONS, TERMINATORS, encode_text, pinned_prompt, parse_native_response, project_public_observation
 from .records import GroupRecord, StepRecord, TrajectoryRecord, monotonic_seconds
@@ -46,18 +48,21 @@ def _environment_request(call):
         return _RequestResult(None, error, monotonic_seconds() - started)
 
 
+def _record_request(ledger, role, details, result, *, env_steps=0):
+    receipt = dict(details)
+    receipt["outcome"] = "success" if result.error is None else "error"
+    if result.error is not None:
+        receipt.update(error_type=type(result.error).__name__, error=str(result.error))
+    return ledger.record("environment", role, seconds=result.seconds, env_steps=env_steps, details=receipt)
+
+
 def _drain_requests(submitted, ledger, role, *, env_steps=0):
     """Join outstanding requests and record their actual work in slot order."""
     completed = [(slot, details, future.result())
                  for slot, details, future in sorted(submitted, key=lambda item: item[0])]
     results = {}
     for slot, details, result in completed:
-        receipt = dict(details)
-        receipt["outcome"] = "success" if result.error is None else "error"
-        if result.error is not None:
-            receipt.update(error_type=type(result.error).__name__, error=str(result.error))
-        cost = ledger.record("environment", role, seconds=result.seconds,
-                             env_steps=env_steps, details=receipt)
+        cost = _record_request(ledger, role, details, result, env_steps=env_steps)
         results[slot] = (result, cost)
     return results
 
@@ -82,6 +87,48 @@ def _raise_request_error(results):
             raise result.error.with_traceback(result.error.__traceback__)
 
 
+def _score_and_release(environment):
+    scored = _environment_request(environment.finalize_evaluation)
+    released = _environment_request(environment.close)
+    return scored, released
+
+
+def _finish_appworld_episodes(pool, environments, rows, details, ledger, *, score_role, close_role, on_complete):
+    """Publish each completed lease on the caller thread while other scores drain."""
+    submitted = {}
+    first_error = None
+    try:
+        for row in rows:
+            submitted[pool.submit(_score_and_release, environments[row])] = row
+    except BaseException as error:
+        first_error = error
+    publication_failed = False
+    for future in as_completed(submitted):
+        row = submitted[future]
+        try:
+            scored, released = future.result()
+            if released.error is None:
+                environments[row] = None
+            score_cost = _record_request(ledger, score_role, details(row), scored)
+            _record_request(ledger, close_role, details(row), released)
+        except BaseException as error:
+            first_error = first_error or error
+            continue
+        error = scored.error if scored.error is not None else released.error
+        if error is not None:
+            first_error = first_error or error
+        elif not publication_failed:
+            try:
+                on_complete(row, dict(scored.value), score_cost)
+            except BaseException as error:
+                # An interrupted append can leave a partial final line.
+                # Stop appending to that journal while other leases release.
+                publication_failed = isinstance(error, OSError)
+                first_error = first_error or error
+    if first_error is not None:
+        raise first_error.with_traceback(first_error.__traceback__)
+
+
 def _reset_environment(environment, task_id, initial_seed):
     context = environment.reset(task_id, initial_seed=initial_seed)
     return context, environment.action_schema
@@ -104,13 +151,16 @@ def _release_cohort(policy, cohort):
             cohort.suffix = None
 
 
-def _sample_turn(policy, cohort, generators, max_tokens, *, on_response=None):
+def _sample_turn(policy, cohort, generators, max_tokens, *, on_response=None, split_kv=False):
     state = cohort.state
     ids = [[] for _ in cohort.slots]
     logprobs = [[] for _ in cohort.slots]
     active = list(range(len(cohort.slots)))
     parked = []
-    workspace = policy.decode_workspace(state, max_tokens)
+    if split_kv:
+        workspace = policy.decode_workspace(state, max_tokens, split_kv=True)
+    else:
+        workspace = policy.decode_workspace(state, max_tokens)
     try:
         for position in range(max_tokens):
             local_rows = tuple(range(len(active)))
@@ -170,7 +220,7 @@ def _execute_response(tokenizer, tokenizer_lock, environment, benchmark, respons
     return action, syntax_valid, result, observation
 
 
-def _advance_cohort(policy, root, cohort, parked, advances, *, history_length):
+def _advance_cohort(policy, root, cohort, parked, advances, *, history_length, independent_roots=False):
     """Consume old cohort ownership before extending exact surviving prefixes."""
     groups = {}
     for index, slot in enumerate(cohort.slots):
@@ -228,7 +278,8 @@ def _advance_cohort(policy, root, cohort, parked, advances, *, history_length):
                 state = _append_owned(policy, state, [advances[slot].block.token_ids for slot in slots],
                                       role="rollout.history2_extend")
             else:
-                state = policy.fork_cache(root, copies=len(slots))
+                state = (policy.select_cache(root, slots, preserve_capacity=False) if independent_roots
+                         else policy.fork_cache(root, copies=len(slots)))
                 state = _append_owned(policy, state, [advances[slot].delta_ids for slot in slots],
                                       role="rollout.segment_replay")
             state = policy.compact_cache(state)
@@ -259,14 +310,64 @@ def _advance_cohort(policy, root, cohort, parked, advances, *, history_length):
         raise
 
 
-def _merge_cohorts(policy, cohorts, *, history_length):
+def _advance_paired_cohort(policy, roots, cohort, parked, advances, row_groups, ledger):
+    """Return each group's append rows and replay candidates to its own root."""
+    slots_by_group = {}
+    for slot in cohort.slots:
+        slots_by_group.setdefault(row_groups[slot], []).append(slot)
+    if len(slots_by_group) == 1:
+        group = next(iter(slots_by_group))
+        with ledger.context(group_id=group):
+            return _advance_cohort(policy, roots[group], cohort, parked, advances, history_length=None)
+    pieces = {group: [] for group in slots_by_group}
+    local_by_group = {slot: local for slots in slots_by_group.values() for local, slot in enumerate(slots)}
+    next_cohorts = []
+    try:
+        while parked:
+            indices, state = parked.pop(0)
+            keep = {}
+            for local, index in enumerate(indices):
+                slot = cohort.slots[index]
+                if advances[slot].cache_mode == "append":
+                    keep.setdefault(row_groups[slot], []).append((local, local_by_group[slot]))
+            if not keep:
+                policy.release_cache(state)
+                continue
+            try:
+                parts = policy.split_cache(state, [[local for local, _ in rows] for rows in keep.values()],
+                                           drop_unselected=True)
+            except BaseException:
+                policy.release_cache(state)
+                raise
+            for (group, rows), owned in zip(keep.items(), parts, strict=True):
+                pieces[group].append((tuple(destination for _, destination in rows), owned))
+        for group, slots in slots_by_group.items():
+            with ledger.context(group_id=group):
+                next_cohorts.extend(_advance_cohort(policy, roots[group], _Cohort(tuple(slots), None),
+                    pieces.pop(group), advances, history_length=None))
+        return next_cohorts
+    except BaseException:
+        for pending in pieces.values():
+            for _, owned in pending:
+                policy.release_cache(owned)
+        for ready in next_cohorts:
+            _release_cohort(policy, ready)
+        raise
+
+
+def _merge_cohorts(policy, cohorts, *, history_length, ordered=False):
     if len(cohorts) <= 1:
         return cohorts
     slots = tuple(slot for cohort in cohorts for slot in cohort.slots)
+    row_groups = None
+    if ordered and slots != tuple(sorted(slots)):
+        slots = tuple(sorted(slots))
+        destinations = {slot: row for row, slot in enumerate(slots)}
+        row_groups = [tuple(destinations[slot] for slot in cohort.slots) for cohort in cohorts]
     state = suffix = None
     try:
         with policy.phase("rollout.merge_cohorts"):
-            state = policy.merge_cache([cohort.state for cohort in cohorts])
+            state = policy.merge_cache([cohort.state for cohort in cohorts], row_groups=row_groups)
             if history_length == 2:
                 suffix = policy.merge_cache([cohort.suffix for cohort in cohorts])
         return [_Cohort(slots, state, suffix)]
@@ -281,44 +382,114 @@ def _merge_cohorts(policy, cohorts, *, history_length):
 
 
 def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot_seeds,
-                  group_id, history_length=None, ledger=None, on_complete=None):
+                  group_id, history_length=None, ledger=None, on_complete=None, split_kv=False):
+    spec = RolloutGroupSpec(group_id, task_id, initial_seed, tuple(slot_seeds))
+    ledger = policy.ledger if ledger is None else ledger
+    trajectories = _collect_slots(policy, env_factory, (spec,), benchmark=benchmark,
+                                  history_length=history_length, ledger=ledger, split_kv=split_kv)
+    group = GroupRecord(str(group_id), str(task_id), benchmark, int(initial_seed), trajectories, tuple(ledger.records))
+    if on_complete is not None:
+        on_complete(group)
+    return group
+
+
+def collect_groups(policy, env_factory, specs, *, benchmark, split_kv=False):
+    specs = tuple(specs)
+    if benchmark != "appworld" or len(specs) != 2 or any(len(spec.slot_seeds) != 8 for spec in specs):
+        raise ValueError("Paired collection requires two eight-slot AppWorld groups")
+    group_ids = tuple(spec.group_id for spec in specs)
+    if len(set(group_ids)) != 2:
+        raise ValueError("Paired collection requires two distinct original group identities")
+    ledger = policy.ledger
+    with ledger.context(group_id=None, group_ids=group_ids):
+        with policy.phase("rollout.collection_batch", details={"group_ids": group_ids,
+                "group_count": 2, "trajectory_count": 16}):
+            trajectories = _collect_slots(policy, env_factory, specs, benchmark=benchmark,
+                                          history_length=None, ledger=ledger, split_kv=split_kv)
+        for spec in specs:
+            ledger.record("controller", "rollout.group_complete",
+                          details={"group_id": spec.group_id, "trajectory_count": len(spec.slot_seeds)})
+    shared_events = tuple(row.event_id for row in ledger.records if "group_id" not in row.details)
+    return tuple(GroupRecord(spec.group_id, str(spec.task_id), benchmark, int(spec.initial_seed),
+        tuple(trajectory for trajectory in trajectories if trajectory.group_id == spec.group_id),
+        tuple(row for row in ledger.records if row.details.get("group_id") == spec.group_id), shared_events)
+        for spec in specs)
+
+
+def collect_appworld_evaluation(policy, env_factory, specs, *, on_episode_complete):
+    return collect_evaluation(policy, env_factory, specs, benchmark="appworld",
+                              on_episode_complete=on_episode_complete)
+
+
+def collect_evaluation(policy, env_factory, specs, *, benchmark, on_episode_complete):
+    return _collect_slots(policy, env_factory, specs, benchmark=benchmark, history_length=None,
+                          ledger=policy.ledger, on_episode_complete=on_episode_complete)
+
+
+def _collect_slots(policy, env_factory, specs, *, benchmark, history_length, ledger, on_episode_complete=None,
+                   split_kv=False):
+    scope = nullcontext()
+    if getattr(policy, "paged_graph_enabled", False):
+        row_count = sum(len(spec.slot_seeds) for spec in specs)
+        root_count = row_count if on_episode_complete is not None else len(specs)
+        scope = policy.paged_rollout(row_count, root_count)
+    with scope:
+        return _collect_slots_open(policy, env_factory, specs, benchmark=benchmark, history_length=history_length,
+                                   ledger=ledger, on_episode_complete=on_episode_complete, split_kv=split_kv)
+
+
+def _collect_slots_open(policy, env_factory, specs, *, benchmark, history_length, ledger,
+                        on_episode_complete=None, split_kv=False):
+    evaluation = on_episode_complete is not None
+    paired = not evaluation and len(specs) > 1
     if benchmark not in HORIZONS or history_length not in (None, 2):
         raise ValueError("Select the declared F-GPO benchmark and full/two-turn filtration.")
-    slot_seeds = tuple(int(seed) for seed in slot_seeds)
+    episodes = [(spec, slot, int(seed)) for spec in specs for slot, seed in enumerate(spec.slot_seeds)]
+    slot_seeds = tuple(seed for _, _, seed in episodes)
     if not slot_seeds or len(set(slot_seeds)) != len(slot_seeds):
         raise ValueError("Each rollout slot requires its own sampling seed.")
-    ledger = policy.ledger if ledger is None else ledger
     if ledger is not policy.ledger:
         raise ValueError("Actor and model forwards share the same actual cost ledger.")
-    ledger.begin_group(group_id)
+    ledger.begin_group(specs[0].group_id if len(specs) == 1 else None)
     count, horizon, output_limit = len(slot_seeds), HORIZONS[benchmark], policy.max_new_tokens
-    ids = tuple(f"{group_id}:slot-{slot}" for slot in range(count))
+    ids = tuple(f"{spec.group_id}:slot-{slot}" for spec, slot, _ in episodes)
+    row_groups = tuple(spec.group_id for spec, _, _ in episodes)
+
+    def details(row, **fields):
+        spec, slot, _ = episodes[row]
+        return {"group_id": spec.group_id, "slot": slot, "task_id": spec.task_id, **fields}
+
     environments = [None for _ in slot_seeds]
     contexts, initials, pins = [], [], []
     actor_views, reference_views, steps = [], [], [[] for _ in slot_seeds]
     official = [None for _ in slot_seeds]
+    input_tokens, output_tokens, step_counts = [0] * count, [0] * count, [0] * count
     generators = [policy.new_generator(seed) for seed in slot_seeds]
     pool = ThreadPoolExecutor(max_workers=count, thread_name_prefix="fgpo-environment")
     tokenizer_lock = Lock()
     primary_error = None
     submitted_steps = []
-    root, cohorts = None, []
+    root, roots, cohorts = None, {}, []
     sampled_cohorts, next_cohorts = deque(), []
     cohort = sampled_parked = None
 
+    def publish(slot, metrics, _):
+        on_episode_complete(episodes[slot][0], EvaluationEpisode(ids[slot], metrics,
+            step_counts[slot], input_tokens[slot], output_tokens[slot]))
+
     try:
         creation_results = _parallel_requests(pool, [
-            (slot, partial(env_factory, task_id, initial_seed, ids[slot]),
-             {"group_id": group_id, "slot": slot, "task_id": task_id, "initial_seed": initial_seed})
-            for slot in range(count)], ledger, "rollout.create")
+            (row, partial(env_factory, spec.task_id, spec.initial_seed, ids[row]),
+             details(row, initial_seed=spec.initial_seed))
+            for row, (spec, _, _) in enumerate(episodes)], ledger, "rollout.create")
         for slot, (request, _) in creation_results.items():
             if request.error is None:
                 environments[slot] = request.value
         _raise_request_error(creation_results)
         reset_results = _parallel_requests(pool, [
-            (slot, partial(_reset_environment, environments[slot], task_id, initial_seed),
-             {"group_id": group_id, "slot": slot, "task_id": task_id, "initial_seed": initial_seed})
-            for slot in range(count)], ledger, "rollout.reset")
+            (row, partial(_reset_environment, environments[row], spec.task_id, spec.initial_seed),
+             details(row, initial_seed=spec.initial_seed))
+            for row, (spec, _, _) in enumerate(episodes)], ledger, "rollout.reset")
         _raise_request_error(reset_results)
         for slot in range(count):
             context, schema = reset_results[slot][0].value
@@ -333,10 +504,22 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
             actor_views.append(actor)
             # r3 reference laws always condition on the actual actor view.
             reference_views.append(actor)
-        if any(pin != pins[0] for pin in pins[1:]):
-            raise ValueError("Same-root sampling requires the actual seeded public goal/bootstrap to agree.")
-        root = policy.prefill_root(pins[0], role="rollout.shared_root")
-        cohorts = [_Cohort(tuple(range(count)), policy.fork_cache(root, copies=count))]
+        if evaluation:
+            root = policy.prefill_batch(pins, role="rollout.evaluation_roots")
+            input_tokens = [len(pin) for pin in pins]
+            cohorts = [_Cohort(tuple(range(count)), policy.fork_cache(root, copies=1))]
+        else:
+            start = 0
+            for spec in specs:
+                end = start + len(spec.slot_seeds)
+                if any(pin != pins[start] for pin in pins[start + 1:end]):
+                    raise ValueError("Same-root sampling requires the seeded public goal/bootstrap to agree within each group.")
+                with ledger.context(group_id=spec.group_id):
+                    roots[spec.group_id] = policy.prefill_root(pins[start], role="rollout.shared_root")
+                    cohorts.append(_Cohort(tuple(range(start, end)),
+                        policy.fork_cache(roots[spec.group_id], copies=end - start)))
+                start = end
+            cohorts = _merge_cohorts(policy, cohorts, history_length=history_length)
         for turn in range(horizon):
             sampled_cohorts = deque()
 
@@ -344,16 +527,17 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
                 step_id = f"{ids[slot]}:step-{turn}"
                 call = partial(_execute_response, policy.tokenizer, tokenizer_lock, environments[slot], benchmark,
                                response, str(contexts[slot]["instruction"]))
-                details = {"group_id": group_id, "slot": slot, "step_id": step_id,
-                           "task_id": task_id, "actual_step": True,
-                           "timing_scope": "parse_native_step_and_public_projection"}
-                submitted_steps.append((slot, details, pool.submit(_environment_request, call)))
+                receipt = details(slot, step_id=step_id, actual_step=True,
+                                  timing_scope="parse_native_step_and_public_projection")
+                submitted_steps.append((slot, receipt, pool.submit(_environment_request, call)))
 
             for cohort in cohorts:
                 model_cost_start = len(ledger.records)
-                with ledger.aggregate_model_calls():
+                groups = {row_groups[slot] for slot in cohort.slots} if paired else ()
+                group_id = next(iter(groups)) if len(groups) == 1 else ledger.active_group_id
+                with ledger.context(group_id=group_id), ledger.aggregate_model_calls():
                     sampled_parked, responses, probabilities = _sample_turn(
-                        policy, cohort, generators, output_limit, on_response=dispatch)
+                        policy, cohort, generators, output_limit, on_response=dispatch, split_kv=split_kv)
                 cohort.state = None
                 model_event_ids = tuple(row.event_id for row in ledger.records[model_cost_start:])
                 sampled_cohorts.append((cohort, sampled_parked, responses, probabilities, model_event_ids))
@@ -364,7 +548,7 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
             step_results = _drain_requests(submitted_steps, ledger, "rollout.step_native", env_steps=1)
             submitted_steps.clear()
             _raise_request_error(step_results)
-            next_cohorts, evaluation_jobs = [], []
+            next_cohorts, finished = [], []
             while sampled_cohorts:
                 cohort, sampled_parked, responses, probabilities, model_event_ids = sampled_cohorts.popleft()
                 advances = {}
@@ -375,28 +559,49 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
                     action, syntax_valid, result, observation = request.value
                     terminal = bool(result.done or turn + 1 == horizon)
                     advance = actor_views[slot].append(step_id, response, observation, terminal=terminal)
-                    canonical = (advance if reference_views[slot] is actor_views[slot] else
-                        reference_views[slot].append(step_id, response, observation, terminal=terminal))
                     advances[slot] = advance
-                    steps[slot].append(StepRecord(step_id, ids[slot], turn, advance.response_span.segment_id,
-                        advance.prompt_length, advance.response_span, advance.observation_span, response,
-                        tuple(probabilities[local_index]), observation.pure_ids, observation.representation_ids,
-                        observation.pure_text, observation.raw_observation, dict(action), float(result.reward),
-                        bool(result.done), syntax_valid, advance.block, canonical.response_span.segment_id,
-                        canonical.prompt_length, canonical.response_span, canonical.observation_span,
-                        (environment_cost,), dict(result.info), model_event_ids))
+                    if evaluation:
+                        # Only continuing sampled tokens enter KV. The final token
+                        # enters through the actual append or replay on a live turn.
+                        output_tokens[slot] += len(response)
+                        input_tokens[slot] += len(response) - 1 + len(advance.delta_ids)
+                        step_counts[slot] = turn + 1
+                    else:
+                        canonical = (advance if reference_views[slot] is actor_views[slot] else
+                            reference_views[slot].append(step_id, response, observation, terminal=terminal))
+                        steps[slot].append(StepRecord(step_id, ids[slot], turn, advance.response_span.segment_id,
+                            advance.prompt_length, advance.response_span, advance.observation_span, response,
+                            tuple(probabilities[local_index]), observation.pure_ids, observation.representation_ids,
+                            observation.pure_text, observation.raw_observation, dict(action), float(result.reward),
+                            bool(result.done), syntax_valid, advance.block, canonical.response_span.segment_id,
+                            canonical.prompt_length, canonical.response_span, canonical.observation_span,
+                            (environment_cost,), dict(result.info), model_event_ids))
                     if terminal:
-                        evaluation_jobs.append((slot, environments[slot].finalize_evaluation,
-                            {"group_id": group_id, "slot": slot, "task_id": task_id}))
-                next_cohorts.extend(_advance_cohort(policy, root, cohort, sampled_parked, advances,
-                                                   history_length=history_length))
+                        finished.append(slot)
+                if evaluation:
+                    _finish_appworld_episodes(pool, environments, sorted(finished), details, ledger,
+                        score_role="rollout.official_evaluation", close_role="rollout.close", on_complete=publish)
+                    finished.clear()
+                if paired:
+                    next_cohorts.extend(_advance_paired_cohort(policy, roots, cohort, sampled_parked,
+                                                               advances, row_groups, ledger))
+                else:
+                    original_root = root if evaluation else roots[specs[0].group_id]
+                    next_cohorts.extend(_advance_cohort(policy, original_root, cohort, sampled_parked, advances,
+                                                       history_length=history_length, independent_roots=evaluation))
                 cohort = sampled_parked = None
-            evaluation_results = _parallel_requests(pool, sorted(evaluation_jobs, key=lambda job: job[0]),
-                                                     ledger, "rollout.official_evaluation")
-            _raise_request_error(evaluation_results)
-            for slot, (request, _) in evaluation_results.items():
-                official[slot] = dict(request.value)
-            cohorts = _merge_cohorts(policy, next_cohorts, history_length=history_length)
+            if not evaluation:
+                evaluation_results = _parallel_requests(pool, [
+                    (slot, environments[slot].finalize_evaluation, details(slot)) for slot in sorted(finished)],
+                    ledger, "rollout.official_evaluation")
+                _raise_request_error(evaluation_results)
+                for slot, (request, _) in evaluation_results.items():
+                    official[slot] = dict(request.value)
+            if paired:
+                continuing = {row_groups[slot] for pending in next_cohorts for slot in pending.slots}
+                for group_id in roots.keys() - continuing:
+                    policy.release_cache(roots.pop(group_id))
+            cohorts = _merge_cohorts(policy, next_cohorts, history_length=history_length, ordered=paired)
             next_cohorts = []
             if not cohorts:
                 break
@@ -413,7 +618,7 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
                 if primary_error is None:
                     _raise_request_error(pending)
             close_results = _parallel_requests(pool, [
-                (slot, environment.close, {"group_id": group_id, "slot": slot})
+                (slot, environment.close, details(slot))
                 for slot, environment in enumerate(environments) if environment is not None],
                 ledger, "rollout.close")
             if primary_error is None:
@@ -440,31 +645,25 @@ def collect_group(policy, env_factory, *, task_id, benchmark, initial_seed, slot
                         policy.release_cache(owned)
                 if root is not None:
                     policy.release_cache(root)
+                for owned in roots.values():
+                    policy.release_cache(owned)
+    if evaluation:
+        return
     built = []
-    for slot in range(count):
-        actor_segments = actor_views[slot].segments()
-        reference_segments = (actor_segments if reference_views[slot] is actor_views[slot]
-                              else reference_views[slot].segments())
-        built.append(TrajectoryRecord(ids[slot], group_id, slot, str(task_id), benchmark,
-            int(initial_seed), slot_seeds[slot], str(contexts[slot]["instruction"]),
-            encode_text(policy.tokenizer, str(contexts[slot]["instruction"])), initials[slot].pure_ids,
-            pins[slot], tuple(steps[slot]), actor_segments, reference_segments,
-            bool(official[slot]["success"]), official[slot],
-            tuple(ledger.records) if count == 1 else tuple(row for row in ledger.records
-                if row.kind == "environment" and row.details.get("slot") == slot),
+    for row, (spec, slot, sampling_seed) in enumerate(episodes):
+        actor_segments = actor_views[row].segments()
+        reference_segments = (actor_segments if reference_views[row] is actor_views[row]
+                              else reference_views[row].segments())
+        built.append(TrajectoryRecord(ids[row], spec.group_id, slot, str(spec.task_id), benchmark,
+            int(spec.initial_seed), sampling_seed, str(contexts[row]["instruction"]),
+            encode_text(policy.tokenizer, str(contexts[row]["instruction"])), initials[row].pure_ids,
+            pins[row], tuple(steps[row]), actor_segments, reference_segments,
+            bool(official[row]["success"]), official[row],
+            tuple(ledger.records) if count == 1 else tuple(cost for cost in ledger.records
+                if cost.kind == "environment" and cost.details.get("group_id") == spec.group_id
+                and cost.details.get("slot") == slot),
             history_length))
-    trajectories = tuple(built)
-    actor_views.clear()
-    reference_views.clear()
-    steps.clear()
-    contexts.clear()
-    initials.clear()
-    pins.clear()
-    del built
-    group = GroupRecord(str(group_id), str(task_id), benchmark, int(initial_seed), trajectories, tuple(ledger.records))
-    if on_complete is not None:
-        on_complete(group)
-    return group
+    return tuple(built)
 
 
 run_episodes_fgpo = collect_group

@@ -1,0 +1,159 @@
+--- a/fgpo/public.py
++++ b/fgpo/public.py
+@@ -15,6 +15,7 @@
+ OUTPUT_LIMITS = {"alfworld": 512, "appworld": 1024, "webshop": 512}
+ EMPTY_STDOUT = "[Empty stdout]"
+ _TEXT_THINK_RE = re.compile(r"<think>(?:(?!</?think\b).)*?</think>", re.DOTALL | re.IGNORECASE)
++_TEXT_THINK_TAG_RE = re.compile(r"</?think\b", re.IGNORECASE)
+ _TEXT_ACTION_RE = re.compile(r"<action>((?:(?!</?action\b).)*?)</action>", re.DOTALL | re.IGNORECASE)
+ 
+ 
+@@ -41,8 +42,13 @@
+     if benchmark == "webshop":
+         text = raw_observation
+         step_num = min(int(action_schema["step"]) + 1, HORIZONS[benchmark])
+-        commands = tuple(action_schema["available_actions"])
+-        suffix = "\nAdmissible actions:\n" + ("\n".join(commands) if commands else "(none)")
++        commands = tuple(command for command in action_schema["available_actions"]
++                         if command.casefold() != "click[search]")
++        suffix = (
++            "\nAdmissible actions:\n" + ("\n".join(commands) if commands else "(none)")
++            + "\nCheck the requested attributes and options in a concise <think>...</think>, "
++            "then emit exactly one <action>command</action>."
++        )
+     elif benchmark == "alfworld":
+         envelope = json.loads(raw_observation)
+         text = str(envelope["native_observation"])
+@@ -63,8 +69,15 @@
+                              prefix_ids + pure + suffix_ids, len(prefix_ids), commands, suffix_ids)
+ 
+ 
+-def pinned_prompt(tokenizer, system_prompt: str, initial: PublicObservation) -> tuple[int, ...]:
++def pinned_prompt(tokenizer, system_prompt: str, initial: PublicObservation, *,
++                  benchmark: str) -> tuple[int, ...]:
+     """Use the actual Qwen ChatML template for structure, safe integer blocks for data."""
++    if benchmark == "appworld":
++        system_prompt += (
++            " You may first write concise reasoning in one closed <think>...</think> section. "
++            "Put the executable Python program in exactly one fenced Python code block, "
++            "with the reasoning outside the fence."
++        )
+     system_header = (IM_START,) + encode_text(tokenizer, "system\n")
+     user_header = (IM_START,) + encode_text(tokenizer, "user\n")
+     assistant_header = (IM_START,) + encode_text(tokenizer, "assistant\n")
+@@ -100,16 +113,39 @@
+         return {"kind": "native_text", "text": command}, True
+     if benchmark != "appworld":
+         raise ValueError(benchmark)
+-    fences = list(re.finditer(r"```", text))
+-    code, valid_fence = text.strip(), not fences
+-    if len(fences) == 2:
+-        opening = re.match(r"```([^\r\n`]*)\r?\n", text[fences[0].start():])
+-        if opening and opening.group(1).strip().lower() in ("", "python"):
+-            start, end = fences[0].start() + opening.end(), fences[1].start()
+-            code, valid_fence = text[start:end], start <= end
+-    syntax_valid = bool(code.strip()) and valid_fence
++    return _parse_appworld_response(text)
++
++
++def _parse_appworld_response(text):
++    def invalid(error):
++        return {"kind": "invalid", "error": error}, False
++
++    thoughts = list(_TEXT_THINK_RE.finditer(text))
++    if len(thoughts) > 1:
++        return invalid("Use at most one closed <think>...</think> section.")
++    if thoughts:
++        thought = thoughts[0]
++        before, after = text[:thought.start()], text[thought.end():]
++        if "```" in before and "```" in after:
++            return invalid("Keep the <think>...</think> section outside the Python fence.")
++        text = before + "\n" + after
++    if _TEXT_THINK_TAG_RE.search(text):
++        return invalid("Close the optional <think>...</think> section and keep it outside the program.")
++
++    fences = list(re.finditer(r"`{3,}", text))
++    if len(fences) != 2 or any(len(fence.group()) != 3 for fence in fences):
++        return invalid("Use exactly one code block delimited by two triple-backtick fences.")
++    opening, closing = fences
++    header = re.match(r"([^\r\n`]*)\r?\n", text[opening.end():closing.start()])
++    if header is None or header.group(1).strip().casefold() not in ("", "python"):
++        return invalid("Start the code block with an empty or 'python' fence label followed by a newline.")
++    start = opening.end() + header.end()
++    code = text[start:closing.start()]
+     try:
+-        ast.parse(code)
+-    except (SyntaxError, ValueError):
+-        syntax_valid = False
+-    return {"kind": "code", "code": code}, syntax_valid
++        program = ast.parse(code)
++    except (SyntaxError, ValueError) as error:
++        detail = error.msg if isinstance(error, SyntaxError) else str(error)
++        return invalid(f"Invalid Python syntax: {detail}.")
++    if not program.body:
++        return invalid("Place executable Python statements between the opening and closing fences.")
++    return {"kind": "code", "code": code}, True
+--- a/fgpo/rollout.py
++++ b/fgpo/rollout.py
+@@ -403,7 +403,8 @@
+             context, schema = reset_results[slot][0].value
+             initial = project_public_observation(policy.tokenizer, benchmark, str(context["observation"]),
+                 action_schema=schema, goal=str(context["instruction"]), initial=True)
+-            pin = pinned_prompt(policy.tokenizer, str(schema["native_system_prompt"]), initial)
++            pin = pinned_prompt(policy.tokenizer, str(schema["native_system_prompt"]), initial,
++                                benchmark=benchmark)
+             contexts.append(context)
+             initials.append(initial)
+             pins.append(pin)
+--- a/pilot_collect_v5.py
++++ b/pilot_collect_v5.py
+@@ -62,6 +62,9 @@
+     hint_ids: tuple[int, ...]
+     input_tokens: int
+     output_tokens: int
++    prompt_ids: tuple[int, ...]
++    continuation_prefix_ids: tuple[int, ...]
++    response_ids: tuple[int, ...]
+ 
+ 
+ def keep_ends(ids, count, omitted):
+@@ -140,7 +143,8 @@
+         "\n\nA review of an earlier attempt suggested the following for this turn. "
+         "Consider it using your current observation.\n" + suggestion
+     )
+-    return Review(turn, hint, len(input_ids) + len(delimiter), 1 + len(responses[0]))
++    return Review(turn, hint, len(input_ids) + len(delimiter), 1 + len(responses[0]),
++                  tuple(input_ids), (choices[picked],) + delimiter, tuple(responses[0]))
+ 
+ 
+ def score_responses(policy, prompts, responses, role):
+@@ -182,7 +186,8 @@
+             initial = project_public_observation(
+                 policy.tokenizer, BENCHMARK, str(context["observation"]),
+                 action_schema=schema, goal=goal, initial=True)
+-            pin = pinned_prompt(policy.tokenizer, str(schema["native_system_prompt"]), initial)
++            pin = pinned_prompt(policy.tokenizer, str(schema["native_system_prompt"]), initial,
++                                benchmark=BENCHMARK)
+             view = TokenFiltration(policy.tokenizer, pin, trajectory_id,
+                                    max_new_tokens=policy.max_new_tokens,
+                                    max_context_tokens=policy.max_context_tokens)
+@@ -290,13 +295,17 @@
+                         scoring_tokens += tokens
+                         p_scores, q_scores = ((other_scores, sampled_scores) if guided
+                                               else (sampled_scores, other_scores))
+-                        for index, response, p, q in zip(
+-                            cohort.slots, responses, p_scores, q_scores, strict=True
++                        for index, response, p, q, p_prompt, q_prompt in zip(
++                            cohort.slots, responses, p_scores, q_scores, p_prompts, q_prompts,
++                            strict=True,
+                         ):
+                             marked.append({
+                                 "slot": index, "generated_tokens": len(response),
+                                 "logp": math.fsum(p), "logq": math.fsum(q),
+                                 "sampled_terminator": response[-1] in TERMINATORS,
++                                "p_prompt_ids": p_prompt, "q_prompt_ids": q_prompt,
++                                "response_ids": tuple(response),
++                                "p_token_logprobs": tuple(p), "q_token_logprobs": tuple(q),
+                             })
+                     advances = {}
+                     for index, response, old in zip(

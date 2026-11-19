@@ -174,6 +174,7 @@ class CostLedger:
         self._usage_complete = not self._cumulative_abandoned_tail_bytes
         self.recovery = None
         self.active_group_id = None
+        self.active_group_ids = ()
         self.active_round = None
         self._model_scope_depth = 0
         self._model_calls = {}
@@ -197,13 +198,16 @@ class CostLedger:
                     seconds=pre_seconds, details={} if startup_details is None else dict(startup_details))
 
     @contextmanager
-    def context(self, *, group_id=_UNSET, round_index=_UNSET):
+    def context(self, *, group_id=_UNSET, group_ids=_UNSET, round_index=_UNSET):
         """Set round/group attribution cleanly, flushing any prior model calls."""
         self._flush_model_calls()
         previous_group = self.active_group_id
+        previous_groups = self.active_group_ids
         previous_round = self.active_round
         if group_id is not _UNSET:
             self.active_group_id = None if group_id is None else str(group_id)
+        if group_ids is not _UNSET:
+            self.active_group_ids = tuple(group_ids)
         if round_index is not _UNSET:
             self.active_round = None if round_index is None else int(round_index)
         try:
@@ -211,6 +215,7 @@ class CostLedger:
         finally:
             self._flush_model_calls()
             self.active_group_id = previous_group
+            self.active_group_ids = previous_groups
             self.active_round = previous_round
 
     @contextmanager
@@ -247,8 +252,8 @@ class CostLedger:
             detail = {} if details is None else dict(details)
             key = (role, devices, detail.get("time_basis"), detail.get("status"),
                    detail.get("use_cache"), detail.get("executed_decoder_layers"),
-                   detail.get("attention_mask_omitted"),
-                   self.active_group_id, self.active_round)
+                   detail.get("attention_mask_omitted"), detail.get("graph_shape"),
+                   self.active_group_id, self.active_group_ids, self.active_round)
             values = dict(input_tokens=input_tokens, output_tokens=output_tokens,
                           forward_tokens=forward_tokens, seconds=seconds, env_steps=env_steps)
             if key not in self._model_calls:
@@ -259,7 +264,8 @@ class CostLedger:
                 for name, value in values.items():
                     item[name] = None if item[name] is None or value is None else item[name] + value
                 item["details"]["calls"] += 1
-                for name in ("padded_compute_tokens", "positions", "cached_query_key_positions"):
+                for name in ("padded_compute_tokens", "positions", "cached_query_key_positions",
+                             "kv_copied_bytes", "kv_zero_bytes", "kv_layout_rows", "kv_direct_write_bytes"):
                     if name in detail:
                         item["details"][name] = item["details"].get(name, 0) + detail[name]
             return None
@@ -272,6 +278,8 @@ class CostLedger:
         event_details = {} if details is None else dict(details)
         if self.active_group_id is not None:
             event_details.setdefault("group_id", self.active_group_id)
+        if self.active_group_ids and "group_id" not in event_details:
+            event_details.setdefault("group_ids", self.active_group_ids)
         if self.active_round is not None:
             event_details.setdefault("round", self.active_round)
         row = CostRecord(uuid.uuid4().hex, str(kind), str(role), input_tokens, output_tokens,
@@ -377,6 +385,7 @@ class CostLedger:
                         group = row["details"].get("group_id")
                         if group is not None:
                             groups.add(str(group))
+                        groups.update(str(group_id) for group_id in row["details"].get("group_ids", ()))
                 offset = handle.tell()
         previous_wall, previous_device = 0., 0.
         for session, (elapsed, device) in sessions.items():
@@ -536,3 +545,4 @@ class GroupRecord:
     initial_seed: int
     trajectories: tuple[TrajectoryRecord, ...]
     costs: tuple[CostRecord, ...]
+    shared_cost_event_ids: tuple[str, ...] = ()

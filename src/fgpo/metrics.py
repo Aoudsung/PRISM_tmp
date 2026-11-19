@@ -1,10 +1,32 @@
-"""Official full-split SR/TGC/SGC, with no resource-dependent success replacement."""
+"""Official benchmark endpoint metrics from native episode receipts."""
 from __future__ import annotations
 
 from collections import defaultdict
 from statistics import fmean
 
 from .envs import ALFWORLD_TABLE_COLUMNS, alfworld_task_type
+from .textcraft import TEXTCRAFT_COUNTS
+from .webshop import VALIDATION_SESSIONS, VALIDATION_WORKERS
+
+
+def webshop_score(metrics):
+    score, purchased, success = metrics.get('score'), metrics.get('purchased'), metrics.get('success')
+    if (type(score) not in (float, int) or not 0. <= score <= 1.
+            or type(purchased) is not bool or (not purchased and score != 0.)
+            or success is not (purchased and score == 1.)):
+        raise ValueError('WebShop receipt has an inconsistent native score or full-success outcome.')
+    return score
+
+
+def textcraft_success(metrics, task):
+    won = metrics.get('won')
+    if (type(won) is not bool or metrics.get('success') is not won
+            or metrics.get('task_score') != float(won)
+            or metrics.get('goal_item') != task['goal_item']
+            or type(metrics.get('depth')) is not int or metrics['depth'] != task['depth']
+            or metrics.get('step_count') != metrics.get('steps')):
+        raise ValueError('TextCraft receipt differs from the official worker outcome or goal depth.')
+    return won
 
 
 def official_summary(benchmark, records, expected_tasks):
@@ -64,6 +86,35 @@ def official_summary(benchmark, records, expected_tasks):
         result['SGC'] = (100 * sum(all(scored[task] for task in tasks) for tasks in scenarios.values())
                          / len(scenarios)) if complete and scenarios else None
         result['scenario_count'] = len(scenarios)
+    elif benchmark == 'webshop':
+        if len(expected) != VALIDATION_WORKERS:
+            raise ValueError('WebShop requires the released 128-episode validation draw.')
+        scores = [webshop_score(row['official_evaluation']) for row in records]
+        result.update(SR=100 * rate if complete else None,
+                      Score=100 * fmean(scores) if complete else None,
+                      validation_workers=VALIDATION_WORKERS,
+                      validation_session_population=VALIDATION_SESSIONS)
+    elif benchmark == 'textcraft':
+        if len(expected) != TEXTCRAFT_COUNTS['val'] or any(row['split'] != 'val' for row in expected.values()):
+            raise ValueError('TextCraft evaluation requires every task in the original val split.')
+        by_depth = defaultdict(list)
+        for task, row in expected.items():
+            by_depth[int(row['depth'])].append(task)
+            if task in observed:
+                textcraft_success(observed[task]['official_evaluation'], row)
+        result['SR'] = 100 * rate if complete and rate is not None else None
+        result['recipe_depths'] = {}
+        for depth, tasks in sorted(by_depth.items()):
+            values = [scored[task] for task in tasks if task in scored]
+            absent = sorted(task for task in tasks if task not in scored)
+            unexpected = sorted(task for task in extra if observed[task]['official_evaluation'].get('depth') == depth)
+            depth_complete = not absent and not unexpected
+            result['recipe_depths'][str(depth)] = {
+                'SR': 100 * fmean(values) if depth_complete else None,
+                'official_task_count': len(tasks), 'evaluated_count': len(values),
+                'success_count': sum(values), 'missing_tasks': absent, 'unexpected_tasks': unexpected,
+                'dataset_complete': depth_complete,
+            }
     else:
         raise ValueError(f'Unknown official benchmark: {benchmark}')
     result['score_unit'] = 'percent'
