@@ -52,7 +52,7 @@
   "checkpoint_gcs_chunk_mib": 8,
   "checkpoint_gcs_release_base_weights": false,
   "checkpoint_interval_groups": 16,
-  "checkpoint_interval_rounds": 5,
+  "checkpoint_interval_rounds": 3,
   "checkpoint_shard_mib": 1024,
   "retain_training_artifacts": false
 }

@@ -8,6 +8,7 @@ PY="${FGPO_R6_PYTHON:-/content/venvs/fgpo-main/bin/python}"
 export JAVA_HOME="${JAVA_HOME:-/content/tools/jre21}"
 export PATH="$JAVA_HOME/bin:$PATH"
 export PYTHONPATH="$ROOT/src"
+export FGPO_GCS_ACCESS_TOKEN_FILE="${FGPO_GCS_ACCESS_TOKEN_FILE:-/run/fgpo-gcs/access-token}"
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONHASHSEED=0
 export HF_HUB_OFFLINE=1
@@ -36,7 +37,7 @@ write_exit() {
 trap write_exit EXIT
 
 JOBS=(
-    "alfworld:0:$ROOT/configs/fgpo-r6-1p5b-alfworld-colab.json"
+    "alfworld:0:$ROOT/configs/fgpo-r6-1p5b-alfworld-colab-gcs.json"
 )
 
 worker=
@@ -51,13 +52,35 @@ handle_signal() {
 for spec in "${JOBS[@]}"; do
     IFS=: read -r benchmark seed config <<< "$spec"
     cell="$OUT/comparison/$benchmark/fgpo/seed-$seed"
-    if [[ -s "$cell/.finalization_complete.json" ]]; then
-        printf '%s skip completed %s seed %s\n' "$(date -u +%FT%TZ)" "$benchmark" "$seed"
-        continue
-    fi
     resume=()
-    if [[ -s "$cell/checkpoint/CURRENT" || -s "$cell/cell_summary.json" ]]; then
-        resume=(--resume)
+    backend=$("$PY" -c 'import json, sys; print(json.load(open(sys.argv[1])).get("checkpoint_backend", "local"))' "$config")
+    if [[ "$backend" == "gcs" ]]; then
+        gcs_dto=$("$PY" "$ROOT/scripts/fgpo_gcs_checkpoint.py" status \
+            --config "$config" --cell-dir "$cell" \
+            --suite comparison --method fgpo --benchmark "$benchmark" --seed "$seed")
+        gcs_state=$("$PY" -c 'import json, sys
+d = json.loads(sys.argv[1])
+st = d.get("status", "absent")
+if st == "complete" and d.get("terminal_export_completed"):
+    print("complete")
+elif st != "absent":
+    print("resume")
+else:
+    print("fresh")' "$gcs_dto")
+        if [[ "$gcs_state" == "complete" ]]; then
+            printf '%s skip gcs-completed %s seed %s\n' "$(date -u +%FT%TZ)" "$benchmark" "$seed"
+            continue
+        elif [[ "$gcs_state" == "resume" ]]; then
+            resume=(--resume)
+        fi
+    else
+        if [[ -s "$cell/.finalization_complete.json" ]]; then
+            printf '%s skip completed %s seed %s\n' "$(date -u +%FT%TZ)" "$benchmark" "$seed"
+            continue
+        fi
+        if [[ -s "$cell/checkpoint/CURRENT" || -s "$cell/cell_summary.json" ]]; then
+            resume=(--resume)
+        fi
     fi
     printf '%s start r6 %s seed %s (%s)\n' "$(date -u +%FT%TZ)" "$benchmark" "$seed" "${resume[*]:-fresh}"
     "$PY" -u -m fgpo.runner \
