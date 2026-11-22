@@ -37,8 +37,6 @@ trap write_exit EXIT
 
 JOBS=(
     "alfworld:0:$ROOT/configs/fgpo-r5-1p5b-alfworld-colab.json"
-    "textcraft:1:$ROOT/configs/fgpo-r5-1p5b-textcraft-colab.json"
-    "webshop:1:$ROOT/configs/fgpo-r5-1p5b-webshop-colab.json"
 )
 
 worker=
