@@ -1,6 +1,6 @@
-# F-GPO r5 数学与实现契约
+# F-GPO r6 数学与实现契约
 
-本文件与 [研究方案及推导](fgpo_design_and_derivation.md) 定义 `fgpo-r5-symmetric-v1` 的实际实现，版本日期为 2026-11-22。第 1—6 节规定 F-GPO 及其自身消融的数学对象；第 9 节单列已发表基线的来源、配方和比较范围。核心实现是 `src/fgpo/credit.py` 的 `CrossTrajectoryCredit`，对外算法名为 `r5_symmetric_peer_value_sharing`。旧 `r3/v4` 协议与旧基准可通过提交 `d1d0f2b` 与 `977bb86ac31a4b1f95ea26b7b53334be5cadf57e` 追溯；本协议使用新 study，不接续旧协议（含 `fgpo-r3-published-v4` 与 `fgpo-r3-published-v3`）的奖励、优势或待完成更新。
+本文件与 [研究方案及推导](fgpo_design_and_derivation.md) 定义 `fgpo-r6-canonical-v1` 的实际实现，版本日期为 2026-11-22。第 1—6 节规定 F-GPO 及其自身消融的数学对象；第 9 节单列已发表基线的来源、配方和比较范围。核心实现位于 `src/fgpo/{public,filtration,reference,credit,optimization,textcraft}.py`。旧 `r5`、`r3/v4` 与旧 TF-BEFP/DAG 可通过 git 提交追溯；本协议使用新 study 目录，不接续旧协议奖励或未完成更新。
 
 本文规定数据、公式、默认值、更新和测量口径。当前仅完成静态编写与源代码审阅，所有项目执行及正式评测均在指定服务器与 Colab 实例进行。
 
@@ -13,9 +13,9 @@ r_{k,t}=q_k\mathbf1[t=T_k-1],\qquad
 G^{\mathrm{MC}}_{k,t}=\sum_{u=t}^{T_k-1}r_{k,u}=q_k.
 $$
 
-`credit.py` 从 `official_success` 重建回报，不使用记录中的任意环境中间 reward、参考 reward 或语法标签替代官方终局目标。`ReferenceStep.reward` 同样只保存该终局奖励，便于记录。主方法没有 TF-BEFP、目标似然奖励、手工语法惩罚及随机 RMS。
+`credit.py` 从 `official_success` 重建回报，不使用记录中的任意环境中间 reward、参考 reward 或语法标签替代官方终局目标。主方法没有 TF-BEFP、目标似然奖励、手工语法惩罚及随机 RMS。
 
-每组轨迹的 `group_id/task_id/benchmark/initial_seed/goal` 相同，`trajectory_id` 唯一。步骤 `row.index` 连续为 $0,\ldots,T_k-1$，`row.trajectory_id` 与所属轨迹一致，`step_id` 在整个收集轮中唯一。合法终末标志由
+每组轨迹的 `group_id/task_id/benchmark/initial_seed/goal` 相同，`trajectory_id` 唯一。步骤 `row.index` 连续为 $0,\ldots,T_k-1$，合法终末标志由
 
 $$
 \operatorname{terminal}_{k,t}
@@ -23,23 +23,17 @@ $$
 =\mathbf1[\texttt{row.done}\ \lor\ t+1=H]
 $$
 
-确定。`row.done` 保存环境原始结束标志，因时域截断而结束的末步可以为 false。中途停止的残缺轨迹不能作为完整训练轨迹进入该估计器。上述条件属于普通输入契约。
+确定。默认训练时域 $H_{\mathrm{ALF}}=50$、$H_{\mathrm{WebShop}}=15$、$H_{\mathrm{TextCraft}}=60$（对齐公开 1.5B GiGPO/BiPACE 预算），TextCraft 正式评测采用 `EVAL_HORIZONS["textcraft"] = 70` 并从单次 79 题评测轨迹同步统计 30 步、60 步、70 步成功率与第 31–70 步新解决题目。全组结果同质（$\sum_k Y_k\in\{0,K\}$）时返回零优势并跳过参考前向、特征计算与优化器更新。
 
-默认 $H_{\mathrm{ALF}}=50$、$H_{\mathrm{App}}=100$。只存在真实动作前状态 $t<T_k$；终态没有可供后续深度匹配的状态。空轨迹没有步骤优势；若整个合法组没有步骤，或全组结果同质（$\sum_k Y_k\in\{0,K\}$），返回零优势与有限的组级诊断信息，跳过参考前向与特征计算。PPO 更新要求存在真实采样响应。
+## 2. 规范充分 POMDP 滤子与词元所有权
 
-## 2. 实际行为条件与词元所有权
+数学公开历史记为 $h_t=(g,o_0,u_0,\ldots,u_{t-1},o_t)$，actor 与冻结参考在动作前严格共享同一规范充分投影 $\Pi(h_t)$：
 
-数学公开历史记为 $h_t$，actor 真实输入是 $p_t=C(h_t)$。$C$ 固定保留初始任务与公开 bootstrap，随后保留有限容量内的最近完整动作—反馈轮次。每步生成上限默认为 ALFWorld 512、AppWorld 1024，模型上下文默认 32768。提示容量为 $C_{\mathrm{prompt}}=C_{\max}-M_{\mathrm{gen}}$。
+1. **共享根前缀 `canonical_root_prefix`**：包含 ChatML system 指令、任务目标 `Task` / ALFWorld 初始场景概览 / TextCraft 完整去 JSON 转义的 `Crafting commands + Goal`，在整个 episode 期间只 prefill 一次并在 KV 根缓存复用。
+2. **紧凑规范历史 `canonical_history_entry_ids`**：对已执行步骤 $\tau\in\{1,\ldots,t\}$ 仅保留单一简洁行 `[Step \tau] Action: u_{\tau-1} -> Observation: o_\tau`，彻底剥离所有过期 `Admissible commands` 菜单、历史 `<think>` 推理独白及无效输出碎文本（合法语法解析失败记为 `(invalid format)`，切断 1.5B 上下文坏格式传染与注意力稀释）。
+3. **当前决策尾缀 `canonical_step_tail`**：在历史上限 $C_{\mathrm{prompt}}=C_{\max}-M_{\mathrm{gen}}$ 内保留最新完整历史条目后，拼接当前步计数 `Current step: t+1/H`、当前观测 `pure_ids`（TextCraft 为非 JSON `Latest feedback + Inventory`）、当前合法指令列表及字面 `<think>`/`<action>` 标签说明。TextCraft 系统提示明确陈述两条公开模拟器公理（`get` 仅适用于不作为任何 `craft` 产物的叶原料；`craft` 必须与所列配方名称与精确整数量逐字一致，需多份时重复执行）。
 
-ALFWorld 的用户消息由静态任务/步数头部 `user_prefix_ids`、纯净环境观测 `pure_ids` 与无引号可行动作提示及不含动作示例的字面 XML 标签说明尾部 `user_suffix_ids`（滤除 `"help"`）三块整数切片拼接，`observation_body_offset = len(user_prefix_ids)` 使所有分块与窗口偏移继续精确指向 `pure_ids`。TextCraft 的默认每步生成上限为 `512` tokens（与 ALFWorld/WebShop 对齐；已发表基线维持 `128`），在 `pure_ids` 后以独立整数元组拼接字面 XML 标签尾缀（不改变 `observation_body_offset = 0`），并将 `representation_ids`（及 `TrajectoryRecord.initial_representation_ids`）限定为持久 `"inventory"` 文本词元以剥离瞬态 `"feedback"`。ALFWorld、WebShop 与 F-GPO TextCraft 响应解码均先移除完整闭合 `<think>...</think>`（对残留未闭合或残缺 `<think`/`</think` 直接判无效），再检验并提取唯一闭合 `<action>...</action>` 中的小写单行指令，未闭合标签、多重动作标签或空动作直接标记为 `invalid`。
-
-通常滚动水位为 $0.75C_{\mathrm{prompt}}$；实际水位取该值与“初始锚定块长度 + 最新完整轮次长度”的较大值，并满足提示上限。历史窗口由完整块构成，初始块与最新完整轮次无法容纳时显式报错。三个正式自身消融均保留这一 actor 历史条件。
-
-环境文本采用 `split_special_tokens=True` 编码，帧结构由静态 ChatML 整数 token 构建。实际采样的 `im_end/endoftext` 属于响应；人工补入的闭合 token 不属于响应损失。一个实际响应只有一个 `response_span`，滚动复制的历史响应不重新拥有损失。
-
-若响应起点为 $a$、长度为 $m$，在输入 `S[:-1]` 的因果段前向中使用隐藏态 `[a-1:a-1+m]` 预测其实际目标 token。历史特征读取 `prompt_length-1`。参考与 PPO 都读取该响应的实际段和实际前缀；PPO 可将段的末端截到当前 minibatch 最后一个响应目标之后，完整前缀和位置编号保持相同。
-
-只有 actor 下一步实际消费的反馈进入段。终末反馈仍保存于步骤及 `TurnBlock`，其 `observation_span=None`，没有独立的 feedback-only 评分段。参考阶段读取至 `behavior_closed_length`；段中未来位置由因果 attention mask 屏蔽。
+每步仅在当前步新建独立 `SegmentRecord` 承载 `Prompt_t + y_t`，实际采样词元 $y_t$ 拥有唯一一次损失归属；参考与 PPO 阶段均采用长度排序的 2D `attention_mask` 微批前向提取 `z_hist` 与隐藏态。
 
 ## 3. 表示、同伴权重与支持质量
 
@@ -132,41 +126,15 @@ $$
 
 八轨迹组中目标失败、七个同伴成功，且当前和下一状态均未完赛且完全匹配时，默认参数（$\lambda_{\max}=0.5,\kappa=1$）给出 $\tilde b=R,\mu_{t+1}=R,\lambda^{\mathrm{post}}=0.5\times 7/8=7/16,\omega=1,\tilde A=-9/16$。同质组任务优势严格为零。
 
-## 6. F-GPO 原子混合组 PPO 及轨迹归一化
+## 6. F-GPO 混合组逐阶归一化微批 PPO
 
-固定行为 log-prob、参考 log-prob 和步骤优势；每个实际响应 token $i$ 的优势为所属步骤 $A_i$。F-GPO 及三个自身消融仅筛选混合结果组 $\mathcal G_{\mathrm{mix}}=\{g:1\le\sum_{k\in g}Y_k\le K-1\}$（$M=|\mathcal G_{\mathrm{mix}}|$）构成原子整组批次：当 $M=0$ 时整轮旁路参考前向、PPO 与 AdamW（`0` 次优化器更新）；当 $M\ge 1$ 时按每个完整 $K=8$ 轨迹混合组执行一次独立参数更新，固定轨迹分母为 $Z_m=K=8.0$。设 $\rho_i=\exp(\ell_i^\theta-\ell_i^{\mathrm{old}})$，clip $\eta=.2$，dual clip $c=3$：
-
-$$
-u_i=\max\{-A_i\rho_i,-A_i\operatorname{clip}(\rho_i,1-\eta,1+\eta)\},
-\quad
-\ell_i^{\mathrm{PPO}}=
-\begin{cases}\min(u_i,-cA_i),&A_i<0,\\u_i,&A_i\geq0.\end{cases}
-$$
-
-对当前完整词表 logits $z_i$，实现计算
+固定行为 log-prob、参考 log-prob 和步骤优势；每个实际响应 token $i$ 的优势为所属步骤 $A_{k,t}$。F-GPO 及三个自身消融仅筛选混合结果组 $\mathcal G_{\mathrm{mix}}=\{g:1\le\sum_{k\in g}Y_k\le K-1\}$（$M=|\mathcal G_{\mathrm{mix}}|$）构成动作步样本池：当 $M=0$ 时整轮旁路参考前向、PPO 与 AdamW（`0` 次优化器更新）；当 $M\ge 1$ 时按 `ppo_epochs=2` 将全部混合组决策步打乱切分为 `ppo_minibatch_rows=64` 的步级微批 $\mathcal B_m$（`loss_normalization="step_token"`, `mixed_step_token_mean`, `shuffle=true`）。设 $\bar B$ 为每 epoch 平均微批行数，$\rho_i=\exp(\ell_i^\theta-\ell_i^{\mathrm{old}})$，clip $\eta=.2$，dual clip $c=3$：
 
 $$
-\ell_i^\theta=z_{i,y_i}-\operatorname{LSE}(z_i),\qquad
-H_i=\operatorname{LSE}(z_i)-\sum_v\operatorname{softmax}(z_i)_v z_{i,v},
+\mathcal L_m^{\mathrm{r6}}=\frac{1}{\bar B}\sum_{(k,t)\in\mathcal B_m}\frac{1}{|y_{k,t}|}\sum_{i\in y_{k,t}}\bigl(\ell_i^{\mathrm{PPO}}+.01k_i\bigr) - \frac{.001}{N_{\mathrm{tok},m}}\sum_{i\in\mathcal B_m}H_i.
 $$
 
-$$
-d_i=\ell_i^{\mathrm{ref}}-\ell_i^\theta,\qquad
-k_i=\operatorname{clip}(\exp(d_i)-d_i-1,0,10).
-$$
-
-为防止无意义的指数溢出，概率比的指数输入上限为 $\log(\max(c,1+\eta))+1$，该范围外双裁剪损失已是常数；$d_i$ 在计算指数前截到 $[-11,\log22]$，原 $k_i$ 在这个范围外已饱和到 10。这些数值处理保持所定义的截断目标。
-
-F-GPO 及三个自身消融的每个原子混合组批次 $m\in\mathcal G_{\mathrm{mix}}$ 使用固定轨迹分母 $Z_m=K=8.0$ 与批次响应词元数 $N_{\mathrm{tok},m}=|\mathcal B_m|$（`entropy_normalization="token"`）：
-
-$$
-\mathcal L_m=\frac{1}{Z_m}\sum_{i\in\mathcal B_m}
-(\ell_i^{\mathrm{PPO}}+.01k_i) - \frac{.001}{N_{\mathrm{tok},m}}\sum_{i\in\mathcal B_m}H_i.
-$$
-
-策略与 KL 项在组内对响应 token 损失求和以保留第 4 节恒等式与未闭合步惩罚，条件熵项按批次响应词元数均值化以消除长度正反馈；完整轮在恢复后保持相同的混合组序列、`minibatch_count`、分母 $Z_m=8$、`entropy_normalization="token"` 与 `atomic_mixed_group_trajectory` 权重身份。`metrics.loss` 累加实际混合组批次损失，并在 `cursor.metrics` 记录逐批裁剪前梯度范数 `batch_gradient_norms`、裁剪缩放因子 `batch_clip_scales`、PPO 裁剪词元占比 `ppo_clip_fraction` 以及首批次更新前同权重对数概率一致性误差 `first_batch_mean_abs_logprob_diff` / `first_batch_max_abs_logprob_diff`，比较时同时核对有效混合组数与 optimizer step 数。
-
-每个 minibatch 完成后执行一次 AdamW，默认学习率 `1e-6`、weight decay `.01`、全局梯度裁剪 `1`。参考权重固定；行为权重随训练轮更新。PPO 裁剪、k3 采样正则、条件熵及有偏续值估计构成实际正则化 surrogate，其性质不能直接等同于每次更新都计算精确成功率梯度。本节的轨迹分母只用于 F-GPO 系列。已发表基线保留发布源码的 batch 复制与顺序、virtual rank/microbatch 内部 token-mean 及其外层平均权重；GiGPO 在优势估计之前复制，HGPO/GraphGPO 在优势估计之后复制。分组与每个响应的损失系数均须遵循这一执行顺序，具体配方和批处理规则由 `baseline_specs.py / published_batching.py` 定义。
+对每个决策步 $(k,t)$ 按其响应长度 $|y_{k,t}|$ 归一化可消除冗长失败 `<think>` 链对简洁成功轨迹的梯度淹没，将梯度范数从 $O(10^3)$ 压回 $O(1)$；同时通过 64 行信赖域微批使稀疏混合组在 `[0.8, 1.2]` 信赖域内获得充分的参数更新。每个微批完成后执行一次 AdamW，默认学习率 `2e-6`、`.01` weight decay、`1.0` 全局梯度范数裁剪、`credit_prior_weight=0.5`。同一微批内的多个单步段按长度排序后打入 2D padding 微批（`ppo_microbatch_segments=8`, `ppo_segment_token_budget=8192`）完成一次主干前向与一次主干反向；词表头分块与 `_LogProbabilityEntropy` 一阶伴随公式保持不变。
 
 对已发表方法，令来源 virtual rank 数为 $W$、每 rank 的 actor microbatch 行数为 $b$、全局 PPO minibatch 行数为 $B$，固定梯度累积数为 $A=B/(Wb)$。第 $m$ 个 virtual microbatch 的真实响应 token 数为 $N_m$，则该批每个 token 的损失系数为
 

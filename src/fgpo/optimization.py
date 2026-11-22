@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 import math
+import random
 from typing import Any
 
 import torch
@@ -379,35 +380,32 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                checkpoint_callback=None, constant_denominator=True, loss_normalization="token",
                entropy_normalization="trajectory", clip_ratio=.2, dual_clip=3.,
                entropy_coef=.001, kl_coef=.01, max_grad_norm=1., published_plan=None,
-               trajectory_groups=None, round_index=None):
-    """PPO with one live vocabulary chunk and one backbone backward per segment.
+               trajectory_groups=None, round_index=None,
+               ppo_epochs: int = 1, shuffle_seed: int | None = None,
+               microbatch_segments: int = 8, segment_token_budget: int = 8192):
+    """PPO with one live vocabulary chunk and batched backbone backward per microbatch.
 
-    ``trajectory`` sums all response-token scores along each trajectory and
-    divides by a fixed trajectory count; it does not divide by trajectory
-    length.  ``token`` preserves the previous token-normalized recipe.  When
-    ``trajectory_groups`` is provided, each mixed-outcome group is updated as
-    one atomic K-trajectory minibatch with fixed trajectory denominator K.
-    Only the selected responses' causal prefix is forwarded. The gathered
-    response states retain the one trunk graph; their detached chunks carry
-    vocabulary gradients until a single gather/backbone backward.
-
-    A published plan preserves the released virtual-rank/microbatch weighting
-    and optimizer boundaries. Its per-token coefficient already includes the
-    fixed gradient accumulation and rank average; repeated copies of one row
-    within one update are summed before a forward, never across updates.
+    ``step_token`` normalizes each MDP decision step's PPO + KL surrogate by its
+    response token count |y_{k,t}| and divides across the minibatch, removing length
+    bias between terse winning responses and verbose failed monologues.
+    ``trajectory`` / ``token`` / ``published_plan`` preserve their prior semantics.
     """
     if chunk_tokens < 1:
         raise ValueError("PPO vocabulary chunk size must be positive")
+    if int(ppo_epochs) < 1 or int(microbatch_segments) < 1 or int(segment_token_budget) < 1:
+        raise ValueError("ppo_epochs, microbatch_segments, and segment_token_budget must be positive")
     if published_plan is not None and trajectory_groups is not None:
         raise ValueError("published_plan and trajectory_groups are mutually exclusive")
     if trajectory_groups is None and published_plan is None and (minibatch_rows is None or minibatch_rows < 1):
         raise ValueError("Row-sliced PPO requires a positive minibatch_rows")
-    if loss_normalization not in ("token", "trajectory"):
-        raise ValueError("loss_normalization must be token or trajectory")
+    if loss_normalization not in ("token", "trajectory", "step_token"):
+        raise ValueError("loss_normalization must be token, trajectory, or step_token")
     if entropy_normalization not in ("token", "trajectory"):
         raise ValueError("entropy_normalization must be token or trajectory")
     if loss_normalization == "trajectory" and not constant_denominator:
         raise ValueError("Trajectory normalization requires the fixed round denominator")
+    if loss_normalization == "step_token" and constant_denominator:
+        raise ValueError("Step-token normalization cannot use a fixed trajectory denominator")
     if not 0 < clip_ratio < 1 or dual_clip <= 1 or entropy_coef < 0 or kl_coef < 0:
         raise ValueError("Invalid PPO clipping or regularization coefficients")
     cursor = cursor or UpdateCursor()
@@ -439,6 +437,22 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
         if not minibatches or any(not batch for batch in minibatches):
             raise ValueError("A published optimizer step requires actual response rows")
         expected_denominator, weighting = 1., "published_virtual_microbatch_mean"
+    elif loss_normalization == "step_token":
+        base_rows = [step for trajectory in trajectories for step in trajectory.steps]
+        if not base_rows:
+            raise ValueError("PPO requires real sampled response rows")
+        batches_per_epoch = math.ceil(len(base_rows) / int(minibatch_rows))
+        mean_batch_rows = len(base_rows) / batches_per_epoch
+        minibatches, coefficients = [], []
+        for epoch in range(int(ppo_epochs)):
+            epoch_rows = list(base_rows)
+            if shuffle_seed is not None:
+                random.Random(int(shuffle_seed) * 1000003 + epoch * 97).shuffle(epoch_rows)
+            for i in range(0, len(epoch_rows), int(minibatch_rows)):
+                batch = epoch_rows[i:i + int(minibatch_rows)]
+                minibatches.append(batch)
+                coefficients.append({row.step_id: 1.0 / (mean_batch_rows * len(row.response_ids)) for row in batch})
+        expected_denominator, weighting = float(mean_batch_rows), "mixed_step_token_mean"
     else:
         rows = [step for trajectory in trajectories for step in trajectory.steps]
         if not rows:
@@ -481,54 +495,88 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
             for row in batch:
                 grouped.setdefault(row.segment_id,[]).append(row)
             items = list(grouped.items())
+            if int(microbatch_segments) <= 1 or len(items) <= 1:
+                segment_batches = [[item] for item in items]
+            else:
+                ordered_items = sorted(items, key=lambda item: max(row.response_span.stop for row in item[1]))
+                segment_batches, current_sb, current_max = [], [], 0
+                for item in ordered_items:
+                    seq_len = max(row.response_span.stop for row in item[1]) - 1
+                    next_max = max(current_max, seq_len)
+                    if current_sb and (len(current_sb) >= int(microbatch_segments)
+                                       or next_max * (len(current_sb) + 1) > int(segment_token_budget)):
+                        segment_batches.append(current_sb)
+                        current_sb, current_max = [item], seq_len
+                    else:
+                        current_sb.append(item)
+                        current_max = next_max
+                if current_sb:
+                    segment_batches.append(current_sb)
             batch_group_ids = {segment_groups[row.segment_id] for row in batch}
             batch_group_id = next(iter(batch_group_ids)) if len(batch_group_ids) == 1 else None
             denominator = (1. if coefficients is not None else cursor.denominator if constant_denominator
                            else sum(len(row.response_ids) for row in batch))
             batch_response_tokens = sum(len(row.response_ids) for row in batch)
             entropy_denominator = (float(batch_response_tokens)
-                                   if coefficients is None and entropy_normalization == "token"
+                                   if (coefficients is None or published_plan is None) and entropy_normalization == "token"
                                    else denominator)
             with (ledger.context(group_id=batch_group_id, round_index=round_index)
                   if ledger is not None else nullcontext()):
                 if cursor.segment == 0 and not cursor.optimizer_ready:
                     optimizer.zero_grad()
-                while cursor.segment < len(items):
-                    segment_id,selected = items[cursor.segment]
-                    segment = segments[segment_id]
-                    segment_group_id = segment_groups[segment_id]
-                    closed = segment.behavior_closed_length or len(segment.token_ids)
+                while cursor.segment < len(segment_batches):
+                    sb = segment_batches[cursor.segment]
+                    stops = [max(row.response_span.stop for row in selected) for _, selected in sb]
+                    sb_group_ids = {segment_groups[seg_id] for seg_id, _ in sb}
+                    segment_group_id = next(iter(sb_group_ids)) if len(sb_group_ids) == 1 else None
+                    seqs = [tuple(segments[seg_id].token_ids[:stop - 1]) for (seg_id, _), stop in zip(sb, stops, strict=True)]
+                    lengths = [len(seq) for seq in seqs]
+                    width = max(lengths)
                     positions, targets, old, ref, advantage, weights = [], [], [], [], [], []
-                    for row in selected:
-                        span = row.response_span
-                        row_ref = reference_data.steps[row.step_id].token_logprobs
-                        if (span.segment_id != segment_id or span.start < 1 or span.length < 1
-                            or span.stop > closed or span.length != len(row.response_ids)
-                            or span.length != len(row.old_token_logprobs) or span.length != len(row_ref)):
-                            raise ValueError("PPO response IDs and saved behavior/reference scores must align")
-                        positions.extend(range(span.start-1, span.start-1+span.length))
-                        targets.extend(row.response_ids)
-                        old.extend(row.old_token_logprobs)
-                        ref.extend(row_ref)
-                        advantage.extend([float(advantages[row.step_id])] * span.length)
-                        if coefficients is not None:
-                            weights.extend([coefficients[cursor.minibatch][row.step_id]] * span.length)
-                    # Future tokens in this packed segment cannot affect a
-                    # selected response under the causal mask. Retain every
-                    # preceding token and its original position, stopping only
-                    # after the last target owned by this minibatch.
-                    stop = max(row.response_span.stop for row in selected)
+                    for batch_idx, ((segment_id, selected), stop) in enumerate(zip(sb, stops, strict=True)):
+                        segment = segments[segment_id]
+                        closed = segment.behavior_closed_length or len(segment.token_ids)
+                        base_offset = batch_idx * width if len(sb) > 1 else 0
+                        for row in selected:
+                            span = row.response_span
+                            row_ref = reference_data.steps[row.step_id].token_logprobs
+                            if (span.segment_id != segment_id or span.start < 1 or span.length < 1
+                                or span.stop > closed or span.length != len(row.response_ids)
+                                or span.length != len(row.old_token_logprobs) or span.length != len(row_ref)):
+                                raise ValueError("PPO response IDs and saved behavior/reference scores must align")
+                            positions.extend(range(base_offset + span.start - 1, base_offset + span.start - 1 + span.length))
+                            targets.extend(row.response_ids)
+                            old.extend(row.old_token_logprobs)
+                            ref.extend(row_ref)
+                            advantage.extend([float(advantages[row.step_id])] * span.length)
+                            if coefficients is not None:
+                                weights.extend([coefficients[cursor.minibatch][row.step_id]] * span.length)
                     track_first_batch = cursor.minibatch == 0
                     with (ledger.context(group_id=segment_group_id, round_index=round_index)
                           if ledger is not None else nullcontext()), \
                          (ledger.aggregate_model_calls() if ledger is not None else nullcontext()):
                         with policy.phase("ppo.forward"):
-                            hidden,_ = policy.packed_segment_hidden(segment.token_ids[:stop],hidden_layer=None,role="ppo.current_segment")
-                            position_ids = torch.tensor(positions, dtype=torch.long, device=hidden.device)
-                            response_hidden = hidden[0].index_select(0,position_ids)
-                            # IndexSelectBackward retains the scatter indices and
-                            # input shape, not this full prompt/observation output.
-                            del hidden,position_ids
+                            if len(sb) == 1:
+                                hidden, _ = policy.packed_segment_hidden(
+                                    segments[sb[0][0]].token_ids[:stops[0]], hidden_layer=None, role="ppo.current_segment")
+                                position_ids = torch.tensor(positions, dtype=torch.long, device=hidden.device)
+                                response_hidden = hidden[0].index_select(0, position_ids)
+                                # IndexSelectBackward retains the scatter indices and
+                                # input shape, not this full prompt/observation output.
+                                del hidden, position_ids
+                            else:
+                                pad_id = policy.tokenizer.pad_token_id
+                                ids = torch.tensor([seq + (pad_id,) * (width - len(seq)) for seq in seqs],
+                                                   dtype=torch.long, device=policy.device)
+                                valid = (torch.arange(width, device=policy.device)[None, :] <
+                                         torch.tensor(lengths, device=policy.device)[:, None])
+                                hidden, _, _ = policy.body(
+                                    ids, attention_mask=valid, hidden_layer=None,
+                                    actual_tokens=sum(lengths), logical_length=width, role="ppo.current_segment")
+                                del ids, valid
+                                position_ids = torch.tensor(positions, dtype=torch.long, device=hidden.device)
+                                response_hidden = hidden.reshape(len(sb) * width, -1).index_select(0, position_ids)
+                                del hidden, position_ids
                         output_device = policy.model.get_output_embeddings().weight.device
                         target_ids = torch.tensor(targets, dtype=torch.long, device=output_device)
                         old_scores = torch.tensor(old, dtype=torch.float32, device=output_device)
@@ -572,7 +620,7 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                                 ppo_kl = dual+kl_coef*kl
                                 # This small scalar graph supplies the exact clipped
                                 # PPO/k3 coefficient g_logp and entropy's coefficient
-                                # (trajectory denominator, token-mean entropy, or published row weight)
+                                # (trajectory denominator, token-mean entropy, step-token, or published row weight)
                                 # to the combined vocabulary adjoint above.
                                 if loss_weights is None:
                                     loss = ppo_kl.sum()/denominator
@@ -580,6 +628,13 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                                         loss = loss-(entropy_coef/entropy_denominator)*entropy.sum()
                                     entropy_metric = entropy.detach().sum()/entropy_denominator
                                     kl_metric = kl.detach().sum()/denominator
+                                elif published_plan is None:
+                                    weight = loss_weights[start:end]
+                                    loss = (ppo_kl*weight).sum()
+                                    if entropy_coef:
+                                        loss = loss-(entropy_coef/entropy_denominator)*entropy.sum()
+                                    entropy_metric = entropy.detach().sum()/entropy_denominator
+                                    kl_metric = (kl.detach()*weight).sum()
                                 else:
                                     weight = loss_weights[start:end]
                                     loss = ((ppo_kl-entropy_coef*entropy if entropy_coef else ppo_kl)*weight).sum()
@@ -605,7 +660,8 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                         cursor.metrics["first_batch_abs_logprob_diff_sum"] += diff_sum
                         previous_max = cursor.metrics["first_batch_max_abs_logprob_diff"]
                         cursor.metrics["first_batch_max_abs_logprob_diff"] = (
-                            diff_max if math.isnan(diff_max) else max(previous_max, diff_max)
+                            diff_max if (math.isnan(diff_max) or previous_max is None)
+                            else max(previous_max, diff_max)
                         )
                         del first_batch_diff_sum, first_batch_diff_max
                     else:

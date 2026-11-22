@@ -10,7 +10,8 @@ import sys
 
 TEXTCRAFT_SOURCE_COMMIT = "f19f6fe1d140dd342d81b8e797f09c37c620b42f"
 TEXTCRAFT_COUNTS = {"train": 318, "val": 79}
-TEXTCRAFT_HORIZON = 30
+TEXTCRAFT_HORIZON = 60
+TEXTCRAFT_EVAL_HORIZON = 70
 TEXTCRAFT_OUTPUT_TOKENS = 512
 TEXTCRAFT_PUBLISHED_OUTPUT_TOKENS = 128
 TEXTCRAFT_CONTEXT_TOKENS = 8192
@@ -21,14 +22,15 @@ TEXTCRAFT_FORMAT_EXAMPLE = (
     "Example response format: <think>I will check the inventory.</think><action>inventory</action>"
 )
 TEXTCRAFT_SYSTEM_PROMPT = (
-    "You are an expert agent in TextCraft. Craft the goal item using the listed recipes. "
-    "Use one command each step: get <count> <raw item>, "
-    "craft <out count> <out item> using <count> <ingredient>, ..., or inventory. "
-    "Spell item names in lowercase with spaces and match the listed recipe and quantities exactly. "
-    "Use a specific variant for a generic ingredient, such as oak planks for planks. "
-    "Fetch raw ingredients and craft intermediates as needed. "
-    "Read the latest simulator feedback and inventory. "
-    "Enclose concise reasoning in literal <think> and </think> tags, then enclose one exact command in literal <action> and </action> tags."
+    "You are an expert agent in TextCraft. Craft the goal item using the listed recipes.\n"
+    "Valid commands (output exactly one command per step):\n"
+    "- get <count> <raw item>: ONLY for base raw ingredients that do NOT appear as the output of any listed 'craft' recipe. "
+    "Never use 'get' on a craftable item (for example, if a recipe crafts oak planks from oak log, 'get' oak planks will fail; you must 'get 1 oak log' and then craft oak planks).\n"
+    "- craft <out count> <out item> using <in count> <ingredient>, ...: MUST match a single listed recipe's item names and exact integer counts verbatim. "
+    "You cannot multiply or divide recipe quantities; if you need more than one batch, repeat that exact craft command on subsequent steps.\n"
+    "- inventory: check currently carried items.\n"
+    "When a recipe lists a generic ingredient category (such as planks or logs) that has no craft line of its own, substitute a concrete matching variant (such as oak planks or oak log).\n"
+    "Enclose concise reasoning in literal <think> and </think> tags, then enclose one exact lowercase command in literal <action> and </action> tags."
 )
 _ACTION_TAG = re.compile(r"</?action\b")
 _THINK_BLOCK = re.compile(r"<think>(?:(?!</?think\b).)*?</think>", re.DOTALL | re.IGNORECASE)
@@ -67,6 +69,11 @@ def textcraft_action(text: str, *, strict_r5: bool = False) -> tuple[str, bool]:
         return "", False
     valid = "<think>" in text and "</think>" in text and _CJK.search(text) is None
     return command, valid
+
+
+def unpack_textcraft_observation(raw: str) -> tuple[str, str]:
+    fields = json.loads(raw)
+    return str(fields["feedback"]).strip(), str(fields["inventory"]).strip()
 
 
 def _observation(feedback: str, inventory: str) -> str:
@@ -113,7 +120,7 @@ class TextCraftEnv:
         selected = self.tasks[task_id]
         random.seed(initial_seed)
         if self.world is None:
-            self.world = self.worker(initial_seed, {"max_steps": TEXTCRAFT_HORIZON, "reward_scale": 10.})
+            self.world = self.worker(initial_seed, {"max_steps": TEXTCRAFT_EVAL_HORIZON, "reward_scale": 10.})
         # The worker uses both Python's global RNG and its private recipe RNG.
         # Every lease restarts those streams for the original group seed.
         self.world._rng.seed(initial_seed)

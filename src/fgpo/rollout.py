@@ -22,7 +22,8 @@ from threading import Lock
 
 from .appworld_batch import EvaluationEpisode, RolloutGroupSpec
 from .filtration import TokenFiltration
-from .public import HORIZONS, TERMINATORS, encode_text, pinned_prompt, parse_native_response, project_public_observation
+from .public import (EVAL_HORIZONS, HORIZONS, TERMINATORS, canonical_root_prefix, encode_text,
+                     parse_native_response, project_public_observation)
 from .records import GroupRecord, StepRecord, TrajectoryRecord, monotonic_seconds
 
 
@@ -451,7 +452,8 @@ def _collect_slots_open(policy, env_factory, specs, *, benchmark, history_length
     if ledger is not policy.ledger:
         raise ValueError("Actor and model forwards share the same actual cost ledger.")
     ledger.begin_group(specs[0].group_id if len(specs) == 1 else None)
-    count, horizon, output_limit = len(slot_seeds), HORIZONS[benchmark], policy.max_new_tokens
+    count, output_limit = len(slot_seeds), policy.max_new_tokens
+    horizon = (EVAL_HORIZONS if evaluation else HORIZONS)[benchmark]
     ids = tuple(f"{spec.group_id}:slot-{slot}" for spec, slot, _ in episodes)
     row_groups = tuple(spec.group_id for spec, _, _ in episodes)
 
@@ -460,7 +462,7 @@ def _collect_slots_open(policy, env_factory, specs, *, benchmark, history_length
         return {"group_id": spec.group_id, "slot": slot, "task_id": spec.task_id, **fields}
 
     environments = [None for _ in slot_seeds]
-    contexts, initials, pins = [], [], []
+    contexts, initials, root_prefixes, turn0_tails, pins = [], [], [], [], []
     actor_views, reference_views, steps = [], [], [[] for _ in slot_seeds]
     official = [None for _ in slot_seeds]
     input_tokens, output_tokens, step_counts = [0] * count, [0] * count, [0] * count
@@ -471,7 +473,7 @@ def _collect_slots_open(policy, env_factory, specs, *, benchmark, history_length
     submitted_steps = []
     root, roots, cohorts = None, {}, []
     sampled_cohorts, next_cohorts = deque(), []
-    cohort = sampled_parked = None
+    cohort = sampled_parked = turn0_single = turn0_state = None
 
     def publish(slot, metrics, _):
         on_episode_complete(episodes[slot][0], EvaluationEpisode(ids[slot], metrics,
@@ -495,29 +497,51 @@ def _collect_slots_open(policy, env_factory, specs, *, benchmark, history_length
             context, schema = reset_results[slot][0].value
             initial = project_public_observation(policy.tokenizer, benchmark, str(context["observation"]),
                 action_schema=schema, goal=str(context["instruction"]), initial=True)
-            pin = pinned_prompt(policy.tokenizer, str(schema["native_system_prompt"]), initial)
+            root_prefix = canonical_root_prefix(
+                policy.tokenizer, benchmark, str(schema["native_system_prompt"]),
+                str(context["instruction"]), initial,
+            )
+            actor = TokenFiltration(
+                policy.tokenizer, root_prefix, ids[slot], benchmark=benchmark, horizon=horizon,
+                initial_observation=initial, max_new_tokens=output_limit,
+                history_length=history_length, max_context_tokens=policy.max_context_tokens,
+            )
             contexts.append(context)
             initials.append(initial)
-            pins.append(pin)
-            actor = TokenFiltration(policy.tokenizer, pin, ids[slot], max_new_tokens=output_limit,
-                                    history_length=history_length, max_context_tokens=policy.max_context_tokens)
+            root_prefixes.append(root_prefix)
+            turn0_tails.append(actor.turn0_tail_ids)
+            pins.append(actor.prompt_ids)
             actor_views.append(actor)
-            # r3 reference laws always condition on the actual actor view.
+            # r6 reference laws always condition on the exact canonical actor view.
             reference_views.append(actor)
         if evaluation:
-            root = policy.prefill_batch(pins, role="rollout.evaluation_roots")
+            root = policy.prefill_batch(root_prefixes, role="rollout.evaluation_roots")
+            turn0_state = _append_owned(
+                policy, policy.fork_cache(root, copies=1), turn0_tails,
+                role="rollout.evaluation_turn0_tail",
+            )
+            turn0_state = policy.compact_cache(turn0_state)
             input_tokens = [len(pin) for pin in pins]
-            cohorts = [_Cohort(tuple(range(count)), policy.fork_cache(root, copies=1))]
+            cohorts = [_Cohort(tuple(range(count)), turn0_state)]
+            turn0_state = None
         else:
             start = 0
             for spec in specs:
                 end = start + len(spec.slot_seeds)
-                if any(pin != pins[start] for pin in pins[start + 1:end]):
+                if (any(p != root_prefixes[start] for p in root_prefixes[start + 1:end]) or
+                        any(t != turn0_tails[start] for t in turn0_tails[start + 1:end])):
                     raise ValueError("Same-root sampling requires the seeded public goal/bootstrap to agree within each group.")
                 with ledger.context(group_id=spec.group_id):
-                    roots[spec.group_id] = policy.prefill_root(pins[start], role="rollout.shared_root")
+                    roots[spec.group_id] = policy.prefill_root(root_prefixes[start], role="rollout.shared_root")
+                    turn0_single = _append_owned(
+                        policy, policy.fork_cache(roots[spec.group_id], copies=1),
+                        [turn0_tails[start]], role="rollout.turn0_tail",
+                    )
+                    turn0_single = policy.compact_cache(turn0_single)
                     cohorts.append(_Cohort(tuple(range(start, end)),
-                        policy.fork_cache(roots[spec.group_id], copies=end - start)))
+                        policy.fork_cache(turn0_single, copies=end - start)))
+                    policy.release_cache(turn0_single)
+                    turn0_single = None
                 start = end
             cohorts = _merge_cohorts(policy, cohorts, history_length=history_length)
         for turn in range(horizon):
@@ -558,7 +582,10 @@ def _collect_slots_open(policy, env_factory, specs, *, benchmark, history_length
                     request, environment_cost = step_results[slot]
                     action, syntax_valid, result, observation = request.value
                     terminal = bool(result.done or turn + 1 == horizon)
-                    advance = actor_views[slot].append(step_id, response, observation, terminal=terminal)
+                    advance = actor_views[slot].append(
+                        step_id, response, observation, action=action,
+                        syntax_valid=syntax_valid, terminal=terminal,
+                    )
                     advances[slot] = advance
                     if evaluation:
                         # Only continuing sampled tokens enter KV. The final token
@@ -568,7 +595,10 @@ def _collect_slots_open(policy, env_factory, specs, *, benchmark, history_length
                         step_counts[slot] = turn + 1
                     else:
                         canonical = (advance if reference_views[slot] is actor_views[slot] else
-                            reference_views[slot].append(step_id, response, observation, terminal=terminal))
+                            reference_views[slot].append(
+                                step_id, response, observation, action=action,
+                                syntax_valid=syntax_valid, terminal=terminal,
+                            ))
                         steps[slot].append(StepRecord(step_id, ids[slot], turn, advance.response_span.segment_id,
                             advance.prompt_length, advance.response_span, advance.observation_span, response,
                             tuple(probabilities[local_index]), observation.pure_ids, observation.representation_ids,
@@ -642,6 +672,9 @@ def _collect_slots_open(policy, env_factory, specs, *, benchmark, history_length
                 _release_cohort(policy, cohort)
                 if sampled_parked is not None:
                     for _, owned in sampled_parked:
+                        policy.release_cache(owned)
+                for owned in (turn0_single, turn0_state):
+                    if owned is not None:
                         policy.release_cache(owned)
                 if root is not None:
                     policy.release_cache(root)

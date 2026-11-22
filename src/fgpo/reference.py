@@ -98,8 +98,9 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None, round_ind
     scale = float(config.get("reward_scale", 10.))
     chunk = int(config.get("head_chunk_tokens", 64))
     ledger = getattr(policy, "ledger", None)
-    result = ReferenceRound()
+    result = ReferenceRound(conditioning="canonical-pomdp-filtration-r6" if own else "actual-bounded-actor-prefix-r3")
     observation_users = {}
+    segment_items = []
     for trajectory in trajectories:
         by_segment = {}
         previous = tuple(trajectory.initial_representation_ids or trajectory.initial_observation_ids)
@@ -110,37 +111,105 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None, round_ind
                 observation_users.setdefault(key, []).append(row.step_id)
                 previous = tuple(row.observation_repr_ids)
         for segment in trajectory.segments:
-            rows = by_segment.get(segment.segment_id, ())
+            rows = tuple(by_segment.get(segment.segment_id, ()))
             if not rows:
                 continue
-            with (ledger.context(group_id=trajectory.group_id, round_index=round_index)
-                  if ledger is not None else nullcontext()), \
-                 (ledger.aggregate_model_calls() if ledger is not None else nullcontext()):
+            if any(row.response_span.length != len(row.response_ids) for row in rows):
+                raise ValueError("Reference head slices must match each actual response's tokens.")
+            closed = segment.behavior_closed_length or len(segment.token_ids)
+            if closed < 2:
+                raise ValueError("Reference segment requires at least two tokens.")
+            segment_items.append((trajectory, segment, rows, closed))
+
+    batch_limit = max(1, int(getattr(policy, "representation_batch_size", 8)))
+    token_budget = max(1, int(getattr(policy, "representation_token_budget", 8192)))
+    segment_items.sort(key=lambda item: item[3])
+    microbatches, current_mb, current_max = [], [], 0
+    for item in segment_items:
+        seq_len = item[3] - 1
+        next_max = max(current_max, seq_len)
+        if current_mb and (len(current_mb) >= batch_limit or next_max * (len(current_mb) + 1) > token_budget):
+            microbatches.append(current_mb)
+            current_mb, current_max = [item], seq_len
+        else:
+            current_mb.append(item)
+            current_max = next_max
+    if current_mb:
+        microbatches.append(current_mb)
+
+    for mb in microbatches:
+        mb_group_ids = {traj.group_id for traj, _, _, _ in mb}
+        ctx_group = next(iter(mb_group_ids)) if len(mb_group_ids) == 1 else None
+        with (ledger.context(group_id=ctx_group, round_index=round_index)
+              if ledger is not None else nullcontext()), \
+             (ledger.aggregate_model_calls() if ledger is not None else nullcontext()):
+            if len(mb) == 1:
+                _, segment, rows, closed = mb[0]
                 hidden, layer = policy.packed_segment_hidden(
-                    segment.token_ids[:segment.behavior_closed_length],
+                    segment.token_ids[:closed],
                     hidden_layer=-8 if needs_history else None,
                     hidden_positions=[row.prompt_length - 1 for row in rows] if needs_history else None,
-                    role="reference.packed_segment")
-                histories = None
-                if needs_history:
-                    histories = F.normalize(layer[0].float(), dim=-1).cpu()
+                    role="reference.packed_segment",
+                )
+                histories = F.normalize(layer[0].float(), dim=-1).cpu() if needs_history else None
                 del layer
-                if any(row.response_span.length != len(row.response_ids) for row in rows):
-                    raise ValueError("Reference head slices must match each actual response's tokens.")
                 targets = tuple(token for row in rows for token in row.response_ids)
                 positions = [position for row in rows
                              for position in range(row.response_span.start - 1, row.response_span.stop - 1)]
                 scores = sampled_logprobs(policy, hidden[0], targets, positions=positions,
                                           role="reference.response_head", chunk_tokens=chunk)
                 del hidden
-            offset = 0
-            for index, row in enumerate(rows):
-                stop = offset + len(row.response_ids)
-                reward = scale * float(trajectory.official_success) if row.index == len(trajectory.steps) - 1 else 0.
-                result.steps[row.step_id] = ReferenceStep(
-                    scores[offset:stop], z_hist=histories[index] if needs_history else None, reward=reward)
-                offset = stop
-            del histories, scores, targets, positions
+                offset = 0
+                for index, row in enumerate(rows):
+                    stop = offset + len(row.response_ids)
+                    reward = scale * float(mb[0][0].official_success) if row.index == len(mb[0][0].steps) - 1 else 0.
+                    result.steps[row.step_id] = ReferenceStep(
+                        scores[offset:stop], z_hist=histories[index] if needs_history else None, reward=reward)
+                    offset = stop
+                del histories, scores, targets, positions
+            else:
+                seqs = [tuple(segment.token_ids[:closed - 1]) for _, segment, _, closed in mb]
+                lengths = [len(seq) for seq in seqs]
+                width = max(lengths)
+                pad_id = policy.tokenizer.pad_token_id
+                ids = torch.tensor([seq + (pad_id,) * (width - len(seq)) for seq in seqs],
+                                   dtype=torch.long, device=policy.device)
+                valid = torch.arange(width, device=policy.device)[None, :] < torch.tensor(lengths, device=policy.device)[:, None]
+                hidden, layer, _ = policy.body(
+                    ids, attention_mask=valid, hidden_layer=-8 if needs_history else None,
+                    actual_tokens=sum(lengths), logical_length=width, role="reference.packed_segment",
+                )
+                del ids, valid
+                histories = None
+                if needs_history:
+                    hist_positions = [b * width + (row.prompt_length - 1)
+                                      for b, (_, _, rows, _) in enumerate(mb) for row in rows]
+                    hist_tensor = layer.reshape(len(mb) * width, -1).index_select(
+                        0, torch.tensor(hist_positions, dtype=torch.long, device=layer.device))
+                    histories = F.normalize(hist_tensor.float(), dim=-1).cpu()
+                    del hist_tensor, hist_positions
+                del layer
+                targets = tuple(token for _, _, rows, _ in mb for row in rows for token in row.response_ids)
+                positions = [b * width + position
+                             for b, (_, _, rows, _) in enumerate(mb)
+                             for row in rows
+                             for position in range(row.response_span.start - 1, row.response_span.stop - 1)]
+                scores = sampled_logprobs(policy, hidden.reshape(len(mb) * width, -1), targets,
+                                          positions=positions, role="reference.response_head", chunk_tokens=chunk)
+                del hidden
+                hist_offset, score_offset = 0, 0
+                for traj, _, rows, _ in mb:
+                    for row in rows:
+                        stop = score_offset + len(row.response_ids)
+                        reward = scale * float(traj.official_success) if row.index == len(traj.steps) - 1 else 0.
+                        result.steps[row.step_id] = ReferenceStep(
+                            scores[score_offset:stop],
+                            z_hist=histories[hist_offset] if needs_history else None,
+                            reward=reward,
+                        )
+                        score_offset = stop
+                        hist_offset += 1
+                del histories, scores, targets, positions
     unique_observations = len(observation_users)
     if needs_obs and observation_users:
         # The policy implements length-aware, token-budgeted microbatches. A

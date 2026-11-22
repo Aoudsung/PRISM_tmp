@@ -4,16 +4,17 @@ from __future__ import annotations
 import ast
 import json
 import re
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from .records import PublicObservation
-from .textcraft import (TEXTCRAFT_HORIZON, TEXTCRAFT_OUTPUT_TOKENS, textcraft_action,
-                        textcraft_observation)
+from .textcraft import (TEXTCRAFT_EVAL_HORIZON, TEXTCRAFT_HORIZON, TEXTCRAFT_OUTPUT_TOKENS,
+                        textcraft_action, textcraft_observation, unpack_textcraft_observation)
 
 
 IM_START, IM_END, END_OF_TEXT, NEWLINE = 151644, 151645, 151643, 198
 TERMINATORS = frozenset((IM_END, END_OF_TEXT))
 HORIZONS = {"alfworld": 50, "appworld": 100, "webshop": 15, "textcraft": TEXTCRAFT_HORIZON}
+EVAL_HORIZONS = {**HORIZONS, "textcraft": TEXTCRAFT_EVAL_HORIZON}
 OUTPUT_LIMITS = {"alfworld": 512, "appworld": 1024, "webshop": 512, "textcraft": TEXTCRAFT_OUTPUT_TOKENS}
 EXACT_OBSERVATION_BENCHMARKS = frozenset(("alfworld", "textcraft"))
 EMPTY_STDOUT = "[Empty stdout]"
@@ -30,12 +31,14 @@ def project_public_observation(tokenizer, benchmark: str, raw_observation: str, 
                                action_schema: Mapping, goal: str, initial=False,
                                published_baseline=False) -> PublicObservation:
     if benchmark == "textcraft":
-        text = textcraft_observation(raw_observation)
-        pure = encode_text(tokenizer, text)
         if published_baseline:
+            text = textcraft_observation(raw_observation)
+            pure = encode_text(tokenizer, text)
             return PublicObservation(raw_observation, text, pure, pure, (), pure, 0)
-        fields = json.loads(raw_observation)
-        inv_ids = encode_text(tokenizer, str(fields["inventory"]))
+        feedback, inventory = unpack_textcraft_observation(raw_observation)
+        text = f"Status: Ready to craft.\n{inventory}" if initial else f"Latest feedback: {feedback}\n{inventory}"
+        pure = encode_text(tokenizer, text)
+        inv_ids = encode_text(tokenizer, inventory)
         representation = inv_ids if inv_ids else encode_text(tokenizer, EMPTY_STDOUT)
         suffix = ("\nEnclose concise reasoning in literal <think> and </think> tags, "
                   "then enclose one exact command in literal <action> and </action> tags.")
@@ -95,6 +98,114 @@ def pinned_prompt(tokenizer, system_prompt: str, initial: PublicObservation) -> 
         raise ValueError("The F-GPO integer protocol requires the designated Qwen2.5 ChatML template.")
     return (system_header + encode_text(tokenizer, system_prompt) + (IM_END, NEWLINE) +
             user_header + initial.user_body_ids + (IM_END, NEWLINE) + assistant_header)
+
+
+def _validate_chat_template(tokenizer) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    system_header = (IM_START,) + encode_text(tokenizer, "system\n")
+    user_header = (IM_START,) + encode_text(tokenizer, "user\n")
+    assistant_header = (IM_START,) + encode_text(tokenizer, "assistant\n")
+    skeleton = tuple(int(token) for token in tokenizer.apply_chat_template(
+        [{"role": "system", "content": ""}, {"role": "user", "content": ""}],
+        tokenize=True, add_generation_prompt=True))
+    expected = system_header + (IM_END, NEWLINE) + user_header + (IM_END, NEWLINE) + assistant_header
+    if skeleton != expected:
+        raise ValueError("The F-GPO integer protocol requires the designated Qwen2.5 ChatML template.")
+    return system_header, user_header, assistant_header
+
+
+def canonical_root_prefix(tokenizer, benchmark: str, system_prompt: str, goal: str,
+                          initial: PublicObservation) -> tuple[int, ...]:
+    """Episode-invariant ChatML prefix (system instructions + pinned task/recipes) for r6 shared KV."""
+    system_header, user_header, _ = _validate_chat_template(tokenizer)
+    if benchmark == "alfworld":
+        task_header_text = f"Task: {goal}\nInitial observation: {' '.join(initial.pure_text.split())}\n"
+    elif benchmark == "textcraft":
+        task_header_text = f"{unpack_textcraft_observation(initial.raw_observation)[0]}\n"
+    elif benchmark == "webshop":
+        task_header_text = f"Task: {goal}\n"
+    elif benchmark == "appworld":
+        task_header_text = json.dumps({"task": goal, "observation": initial.raw_observation}, ensure_ascii=False) + "\n"
+    else:
+        raise ValueError(f"Unsupported official F-GPO benchmark: {benchmark}")
+    return (system_header + encode_text(tokenizer, system_prompt) + (IM_END, NEWLINE) +
+            user_header + encode_text(tokenizer, task_header_text))
+
+
+def canonical_history_entry_ids(tokenizer, benchmark: str, step_num: int, action: Mapping,
+                                syntax_valid: bool, observation: PublicObservation) -> tuple[int, ...]:
+    """Compact canonical executed (Action -> Observation) record, stripped of expired menus and <think>."""
+    cmd = str(action.get("text") or action.get("code") or "").strip() if syntax_valid else ""
+    action_label = " ".join(cmd.split()) if cmd else "(invalid format)"
+    if benchmark == "alfworld":
+        obs_clean = " ".join(observation.pure_text.split())
+        line = f"[Step {step_num}] Action: {action_label} -> Observation: {obs_clean}\n"
+    elif benchmark == "textcraft":
+        fb, inv = unpack_textcraft_observation(observation.raw_observation)
+        line = f"[Step {step_num}] Action: {action_label} -> {' '.join(fb.split())} ({' '.join(inv.split())})\n"
+    elif benchmark in ("webshop", "appworld"):
+        obs_clean = " ".join(observation.pure_text.split())
+        if len(obs_clean) > 320:
+            obs_clean = obs_clean[:320] + " ..."
+        line = f"[Step {step_num}] Action: {action_label} -> Observation: {obs_clean}\n"
+    else:
+        raise ValueError(f"Unsupported official F-GPO benchmark: {benchmark}")
+    return encode_text(tokenizer, line)
+
+
+def canonical_step_tail(tokenizer, benchmark: str, *, step_index: int, horizon: int,
+                        history_entry_ids: Sequence[tuple[int, ...]], current: PublicObservation,
+                        max_tail_tokens: int) -> tuple[tuple[int, ...], int]:
+    """Build the canonical tail (prior executed steps + current observation + action menu + assistant header)."""
+    step_num = min(int(step_index) + 1, int(horizon))
+    assistant_footer_ids = (IM_END, NEWLINE, IM_START) + encode_text(tokenizer, "assistant\n")
+    if benchmark == "alfworld":
+        current_prefix_ids = encode_text(tokenizer, f"\nCurrent step: {step_num}/{horizon}\nCurrent observation:\n")
+        cmd_lines = "\n".join(current.available_actions) if current.available_actions else "(none)"
+        current_suffix_ids = encode_text(
+            tokenizer,
+            f"\n\nAdmissible commands (choose one exact command without quotes):\n{cmd_lines}\n"
+            "Enclose concise reasoning in literal <think> and </think> tags, "
+            "then enclose one exact command in literal <action> and </action> tags.",
+        )
+    elif benchmark == "textcraft":
+        current_prefix_ids = encode_text(tokenizer, f"\nCurrent step: {step_num}/{horizon}\n")
+        current_suffix_ids = current.user_suffix_ids
+    elif benchmark == "webshop":
+        current_prefix_ids = encode_text(tokenizer, f"\nCurrent step: {step_num}/{horizon}\nCurrent observation:\n")
+        cmd_lines = "\n".join(current.available_actions) if current.available_actions else "(none)"
+        current_suffix_ids = encode_text(
+            tokenizer,
+            f"\nAdmissible actions:\n{cmd_lines}\n"
+            "Enclose concise reasoning in literal <think> and </think> tags, "
+            "then enclose one exact command in literal <action> and </action> tags.",
+        )
+    elif benchmark == "appworld":
+        current_prefix_ids = encode_text(tokenizer, f"\nCurrent step: {step_num}/{horizon}\nCurrent observation:\n")
+        current_suffix_ids = ()
+    else:
+        raise ValueError(f"Unsupported official F-GPO benchmark: {benchmark}")
+
+    current_block_ids = current_prefix_ids + current.pure_ids + current_suffix_ids + assistant_footer_ids
+    if len(current_block_ids) > max_tail_tokens:
+        raise ValueError("Pinned root and newest canonical step exceed prompt capacity.")
+
+    history_section_ids: tuple[int, ...] = ()
+    if history_entry_ids:
+        header = encode_text(tokenizer, f"\nCompleted steps ({len(history_entry_ids)}/{horizon}):\n")
+        budget = max_tail_tokens - len(current_block_ids) - len(header)
+        selected = []
+        used = 0
+        for entry in reversed(history_entry_ids):
+            if used + len(entry) > budget:
+                break
+            selected.append(entry)
+            used += len(entry)
+        if selected:
+            history_section_ids = header + tuple(token for entry in reversed(selected) for token in entry)
+
+    tail_ids = history_section_ids + current_block_ids
+    obs_offset_in_tail = len(history_section_ids) + len(current_prefix_ids)
+    return tail_ids, obs_offset_in_tail
 
 
 def parse_native_response(benchmark: str, text: str, *, published_baseline: bool = False):

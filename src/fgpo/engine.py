@@ -19,7 +19,7 @@ from .baselines import collect_native_group,collect_native_trajectory,collect_pu
 from .baseline_specs import PUBLISHED_SOURCES, published_recipe
 from .published_batching import plan_published_batch
 from .metrics import textcraft_success, webshop_score
-from .public import HORIZONS,TERMINATORS
+from .public import EVAL_HORIZONS, HORIZONS, TERMINATORS
 from .webshop import VALIDATION_WORKERS
 from .textcraft import TEXTCRAFT_COUNTS
 from . import checkpoint
@@ -176,12 +176,14 @@ class Engine:
             "model_placement_explicit":self.config.get("model_placement_explicit",False),
             "output_tokens":policy.max_new_tokens,"protocol":PROTOCOL,
             "effective_training_identity":effective_training_identity(self.config),
-            "recipe":({"lr":float(self.config.get("learning_rate",1e-6)),
+            "recipe":({"lr":float(self.config.get("learning_rate",2e-6)),
                 "weight_decay":float(self.config.get("weight_decay",.01)),
                 "groups":int(self.config.get("groups",16)),"trajectories":int(self.config.get("trajectories",8)),
-                "rounds":int(self.config.get("rounds",60)),"row_order":"atomic_mixed_group",
+                "rounds":int(self.config.get("rounds",60)),"row_order":"shuffled_mixed_step_minibatch",
+                "ppo_minibatch_rows":int(self.config.get("ppo_minibatch_rows",64)),
+                "ppo_epochs":int(self.config.get("ppo_epochs",2)),
                 "rollout_computational_groups":self.fgpo_rollout_width,
-                "loss_normalization":self.config.get("loss_normalization","trajectory"),
+                "loss_normalization":self.config.get("loss_normalization","step_token"),
                 "chunk_tokens":int(self.config.get("head_chunk_tokens",64)),
                 "gamma":1.,"intrinsic_reward":False}
                 if self.method in OWN_METHODS else published_recipe(self.method,self.benchmark,self.config["model_path"]))})
@@ -408,8 +410,7 @@ class Engine:
                     if self.state.phase=="update":
                         if self.method in OWN_METHODS:
                             if not mixed_groups:
-                                denom = float(self.config["trajectories"])
-                                self.state.update_cursor = UpdateCursor(finished=True,denominator=denom,
+                                self.state.update_cursor = UpdateCursor(finished=True,denominator=0.,
                                     metrics={"loss":0.,"entropy":0.,"reference_kl":0.,"steps":0,"gradient_norm":None,
                                              "batch_gradient_norms":[],"batch_clip_scales":[],
                                              "evaluated_response_tokens":0,"ppo_clipped_tokens":0,"ppo_clip_fraction":0.,
@@ -418,19 +419,23 @@ class Engine:
                                              "first_batch_max_abs_logprob_diff":None,
                                              "loss_normalization":self.config["loss_normalization"],
                                              "entropy_normalization":self.config.get("entropy_normalization","token"),
-                                             "loss_weighting":"atomic_mixed_group_trajectory","minibatch_count":0,
-                                             "mixed_groups":0,"group_trajectory_denominator":denom,
-                                             "homogeneous_round_bypass":True})
+                                             "loss_weighting":"mixed_step_token_mean","minibatch_count":0,
+                                             "mixed_groups":0,"homogeneous_round_bypass":True})
                                 self.ledger.record("controller","ppo.homogeneous_round_bypass",seconds=0.,
                                                    details={"groups":len(self.state.groups),"mixed_groups":0,"optimizer_steps_executed":0})
                             else:
                                 mixed_trajectories = [t for g in mixed_groups for t in g.trajectories]
                                 try:
                                     self.state.update_cursor = ppo_update(self.policy,mixed_trajectories,self.state.reference_data,
-                                        self.state.advantages,self.optimizer,minibatch_rows=None,
+                                        self.state.advantages,self.optimizer,
+                                        minibatch_rows=int(self.config["ppo_minibatch_rows"]),
+                                        ppo_epochs=int(self.config.get("ppo_epochs",2)),
+                                        shuffle_seed=(self.seed*1000003+current_round if self.config.get("shuffle",True) else None),
                                         cursor=self.state.update_cursor,checkpoint_callback=self._boundary,
-                                        constant_denominator=True,
+                                        constant_denominator=False,
                                         chunk_tokens=int(self.config.get("head_chunk_tokens",64)),
+                                        microbatch_segments=int(self.config.get("ppo_microbatch_segments",8)),
+                                        segment_token_budget=int(self.config.get("ppo_segment_token_budget",8192)),
                                         loss_normalization=self.config["loss_normalization"],
                                         entropy_normalization=self.config.get("entropy_normalization","token"),
                                         clip_ratio=float(self.config.get("ppo_clip_ratio",.2)),
@@ -438,7 +443,7 @@ class Engine:
                                         entropy_coef=float(self.config.get("entropy_coef",.001)),
                                         kl_coef=float(self.config.get("kl_coef",.01)),
                                         max_grad_norm=float(self.config.get("max_grad_norm",1.)),
-                                        trajectory_groups=mixed_groups,round_index=current_round)
+                                        trajectory_groups=None,round_index=current_round)
                                 finally:
                                     del mixed_trajectories
                         else:
@@ -646,7 +651,7 @@ class Engine:
         if (not isinstance(trajectory_id,str) or not trajectory_id or
                 (self.method in OWN_METHODS and trajectory_id!=f"evaluation:{split}:{ordinal}:slot-0")):
             raise ValueError(f"Official {self.benchmark} evaluation row has an inconsistent trajectory identity")
-        if (type(steps) is not int or not 1<=steps<=HORIZONS[self.benchmark] or
+        if (type(steps) is not int or not 1<=steps<=EVAL_HORIZONS[self.benchmark] or
                 any(type(row.get(key)) is not int or row[key]<0 for key in ("input_tokens","output_tokens"))):
             raise ValueError(f"Official {self.benchmark} evaluation row has inconsistent step or token counts")
         if self.benchmark == "webshop":

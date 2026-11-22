@@ -103,9 +103,27 @@ def official_summary(benchmark, records, expected_tasks):
             if task in observed:
                 textcraft_success(observed[task]['official_evaluation'], row)
         result['SR'] = 100 * rate if complete and rate is not None else None
+        result['SR_at_70'] = result['SR']
+        result['success_count_at_70'] = result['success_count']
+        scored_at_30 = {task: bool(scored[task] and observed[task]['steps'] <= 30) for task in scored}
+        scored_at_60 = {task: bool(scored[task] and observed[task]['steps'] <= 60) for task in scored}
+        result['success_count_at_30'] = sum(scored_at_30.values())
+        result['SR_at_30'] = (100 * sum(scored_at_30.values()) / count if complete and count else None)
+        result['success_count_at_60'] = sum(scored_at_60.values())
+        result['SR_at_60'] = (100 * sum(scored_at_60.values()) / count if complete and count else None)
+        newly_31_70 = sorted(
+            ({'task_id': task, 'depth': int(expected[task]['depth']),
+              'first_success_step': int(observed[task]['steps'])}
+             for task in scored if scored[task] and observed[task]['steps'] > 30),
+            key=lambda item: (item['depth'], item['first_success_step'], item['task_id']),
+        )
+        result['newly_solved_31_to_70'] = newly_31_70
+        result['newly_solved_31_to_70_count'] = len(newly_31_70)
         result['recipe_depths'] = {}
+        result['recipe_depths_at_30'] = {}
         for depth, tasks in sorted(by_depth.items()):
             values = [scored[task] for task in tasks if task in scored]
+            values_30 = [scored_at_30[task] for task in tasks if task in scored_at_30]
             absent = sorted(task for task in tasks if task not in scored)
             unexpected = sorted(task for task in extra if observed[task]['official_evaluation'].get('depth') == depth)
             depth_complete = not absent and not unexpected
@@ -113,6 +131,12 @@ def official_summary(benchmark, records, expected_tasks):
                 'SR': 100 * fmean(values) if depth_complete else None,
                 'official_task_count': len(tasks), 'evaluated_count': len(values),
                 'success_count': sum(values), 'missing_tasks': absent, 'unexpected_tasks': unexpected,
+                'dataset_complete': depth_complete,
+            }
+            result['recipe_depths_at_30'][str(depth)] = {
+                'SR': 100 * fmean(values_30) if depth_complete else None,
+                'official_task_count': len(tasks), 'evaluated_count': len(values_30),
+                'success_count': sum(values_30), 'missing_tasks': absent, 'unexpected_tasks': unexpected,
                 'dataset_complete': depth_complete,
             }
     else:

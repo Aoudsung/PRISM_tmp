@@ -1,9 +1,10 @@
-"""Immutable ChatML turn blocks, whole-turn windows and unique response ownership."""
+"""Canonical sufficient POMDP filtration and unique response ownership."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Mapping
 
-from .public import IM_START, IM_END, NEWLINE, encode_text
+from .public import (IM_END, NEWLINE, canonical_history_entry_ids, canonical_step_tail)
 from .records import PublicObservation, SegmentRecord, TokenSpan, TurnBlock
 
 
@@ -40,30 +41,46 @@ class _Segment:
 
 
 class TokenFiltration:
-    """The actor's bounded history with unique ownership of sampled responses.
+    """Canonical sufficient POMDP filtration (Task + compact executed history + current step).
 
-    Replayed whole turns in a new prompt own no PPO response. Feedback appears
-    in a packed segment only when the actor consumes it at the next decision;
-    terminal feedback remains in the step/turn record without a scoring pass.
+    Strips expired action menus, raw <think> monologues, and invalid formatting clutter
+    from retained history so every step prompt stays concise and uncontaminated while
+    remaining an exact Markov-sufficient function of public observations and actions.
     """
-    def __init__(self, tokenizer, pinned_ids, trajectory_id, *, max_new_tokens,
+
+    def __init__(self, tokenizer, root_prefix_ids, trajectory_id, *, benchmark, horizon,
+                 initial_observation: PublicObservation, max_new_tokens,
                  history_length=None, max_context_tokens=32768, kind="actor"):
         if history_length not in (None, 2):
-            raise ValueError("r3 uses bounded retained history or its two-turn ablation.")
-        self.tokenizer, self.pinned_ids = tokenizer, tuple(pinned_ids)
-        self.user_header_ids = (IM_START,) + encode_text(tokenizer, "user\n")
-        self.assistant_footer_ids = (IM_END, NEWLINE, IM_START) + encode_text(tokenizer, "assistant\n")
-        self.trajectory_id, self.history_length, self.kind = trajectory_id, history_length, kind
+            raise ValueError("r6 uses complete bounded canonical history or its two-turn ablation.")
+        self.tokenizer = tokenizer
+        self.root_prefix_ids = tuple(root_prefix_ids)
+        self.pinned_ids = self.root_prefix_ids
+        self.trajectory_id = trajectory_id
+        self.benchmark = str(benchmark)
+        self.horizon = int(horizon)
+        self.history_length = history_length
+        self.kind = kind
         self.max_context_tokens = int(max_context_tokens)
         self.prompt_limit = self.max_context_tokens - int(max_new_tokens)
-        self.rollover_limit = int(.75 * self.prompt_limit)
-        if not self.pinned_ids or len(self.pinned_ids) > self.prompt_limit:
+        self.max_tail_tokens = self.prompt_limit - len(self.root_prefix_ids)
+        if not self.root_prefix_ids or self.max_tail_tokens <= 0:
             raise ValueError("The complete pinned goal/bootstrap exceeds the designated native prompt capacity.")
         self.blocks: list[TurnBlock] = []
+        self.history_entry_ids: list[tuple[int, ...]] = []
         self._segments: list[_Segment] = []
         self._frozen_segments: tuple[SegmentRecord, ...] | None = None
-        self.current = self._new_segment(self.pinned_ids, kind)
-        self.prompt_ids = self.pinned_ids
+        turn0_tail_ids, obs0_offset = canonical_step_tail(
+            tokenizer, self.benchmark, step_index=0, horizon=self.horizon,
+            history_entry_ids=(), current=initial_observation, max_tail_tokens=self.max_tail_tokens,
+        )
+        self.turn0_tail_ids = turn0_tail_ids
+        self.prompt_ids = self.root_prefix_ids + self.turn0_tail_ids
+        self.current = self._new_segment(self.prompt_ids, kind)
+        self.current.observation_spans.append(TokenSpan(
+            self.current.segment_id, len(self.root_prefix_ids) + obs0_offset,
+            len(initial_observation.pure_ids), f"{trajectory_id}:step-0",
+        ))
 
     def _new_segment(self, token_ids, kind):
         self._frozen_segments = None
@@ -71,27 +88,17 @@ class TokenFiltration:
         self._segments.append(segment)
         return segment
 
-    def _suffix(self, blocks, limit):
-        length, selected = len(self.pinned_ids), []
-        for block in reversed(blocks):
-            if length + len(block.token_ids) > limit:
-                break
-            selected.append(block)
-            length += len(block.token_ids)
-        if blocks and not selected:
-            raise ValueError("Pinned bootstrap and the complete newest atomic turn exceed the bounded context.")
-        return self.pinned_ids + tuple(token for block in reversed(selected) for token in block.token_ids)
-
     def _block(self, step_id, response_ids, observation):
         closure = (NEWLINE,) if response_ids[-1] == IM_END else (IM_END, NEWLINE)
-        header = self.user_header_ids
-        footer = self.assistant_footer_ids
-        user = header + observation.user_body_ids + footer
-        offset = len(response_ids) + len(closure) + len(header) + observation.observation_body_offset
-        return TurnBlock(step_id, tuple(response_ids), closure, user,
-                         tuple(response_ids) + closure + user, offset, observation.pure_ids)
+        return TurnBlock(
+            step_id, tuple(response_ids), closure, observation.user_body_ids,
+            tuple(response_ids) + closure + observation.user_body_ids,
+            len(response_ids) + len(closure) + observation.observation_body_offset,
+            observation.pure_ids,
+        )
 
-    def append(self, step_id: str, response_ids, observation: PublicObservation, *, terminal=False) -> Advance:
+    def append(self, step_id: str, response_ids, observation: PublicObservation, *,
+               action: Mapping | None = None, syntax_valid: bool = True, terminal: bool = False) -> Advance:
         response_ids = tuple(int(token) for token in response_ids)
         if not response_ids:
             raise ValueError("An actual sampled action contains at least one token, including any actual terminator.")
@@ -105,39 +112,26 @@ class TokenFiltration:
         self.current.scoring_tail_start = None
         block = self._block(step_id, response_ids, observation)
         self.blocks.append(block)
+        step_num = len(self.blocks)
+        self.history_entry_ids.append(canonical_history_entry_ids(
+            self.tokenizer, self.benchmark, step_num, action or {}, syntax_valid, observation,
+        ))
         if terminal:
             return Advance(prompt_length, response, None, block, (), "terminal", ())
-        tail = block.closure_ids + block.user_ids
-        newest_length = len(self.pinned_ids) + len(block.token_ids)
-        if newest_length > self.prompt_limit:
-            raise ValueError("Pinned bootstrap and the complete newest atomic turn exceed the bounded context.")
-        # Reserve headroom after ordinary rollovers while retaining a legal
-        # newest turn even when the pin itself exceeds the headroom target.
-        window_limit = max(self.rollover_limit, newest_length)
-        ordinary_next = self.prompt_ids + block.token_ids
-        if self.history_length is None:
-            next_prompt = ordinary_next if len(ordinary_next) <= self.prompt_limit else self._suffix(
-                self.blocks, window_limit)
-        else:
-            recent = self.blocks[-2:]
-            next_prompt = self.pinned_ids + tuple(token for item in recent for token in item.token_ids)
-            if len(next_prompt) > self.prompt_limit:
-                next_prompt = self._suffix(recent, window_limit)
-        if next_prompt == ordinary_next:
-            mode = "append"
-            delta = (response_ids[-1],) + tail
-            self.current.tokens.extend(tail)
-        else:
-            suffix_next = self.pinned_ids + tuple(token for item in self.blocks[-2:] for token in item.token_ids)
-            mode = "suffix" if self.history_length == 2 and len(self.blocks) >= 3 and next_prompt == suffix_next else "rebuild"
-            delta = block.token_ids if mode == "suffix" else next_prompt[len(self.pinned_ids):]
-            self.current = self._new_segment(next_prompt, self.kind)
-        observation_span = TokenSpan(self.current.segment_id,
-            len(next_prompt) - len(block.token_ids) + block.observation_offset,
-            len(observation.pure_ids), step_id)
+        entries = self.history_entry_ids if self.history_length is None else self.history_entry_ids[-2:]
+        tail_ids, obs_offset_in_tail = canonical_step_tail(
+            self.tokenizer, self.benchmark, step_index=step_num, horizon=self.horizon,
+            history_entry_ids=entries, current=observation, max_tail_tokens=self.max_tail_tokens,
+        )
+        next_prompt = self.root_prefix_ids + tail_ids
+        self.current = self._new_segment(next_prompt, self.kind)
+        observation_span = TokenSpan(
+            self.current.segment_id, len(self.root_prefix_ids) + obs_offset_in_tail,
+            len(observation.pure_ids), step_id,
+        )
         self.current.observation_spans.append(observation_span)
         self.prompt_ids = next_prompt
-        return Advance(prompt_length, response, observation_span, block, next_prompt, mode, delta)
+        return Advance(prompt_length, response, observation_span, block, next_prompt, "rebuild", tail_ids)
 
     def segments(self) -> tuple[SegmentRecord, ...]:
         if self._frozen_segments is None:
