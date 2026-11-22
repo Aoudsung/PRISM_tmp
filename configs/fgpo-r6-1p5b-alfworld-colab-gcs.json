@@ -49,10 +49,10 @@
   "head_chunk_tokens": 256,
   "checkpoint_backend": "gcs",
   "checkpoint_gcs_uri": "gs://r032-pact-rebuild-f1be230a/fgpo-r6/checkpoints/fgpo-r6-1p5b-colab-20261122",
-  "checkpoint_gcs_chunk_mib": 8,
+  "checkpoint_gcs_chunk_mib": 128,
   "checkpoint_gcs_release_base_weights": false,
   "checkpoint_interval_groups": 16,
-  "checkpoint_interval_rounds": 3,
+  "checkpoint_interval_rounds": 6,
   "checkpoint_shard_mib": 1024,
   "retain_training_artifacts": false
 }
