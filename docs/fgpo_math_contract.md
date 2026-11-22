@@ -1,8 +1,8 @@
-# F-GPO r3 数学与实现契约
+# F-GPO r5 数学与实现契约
 
-本文件与 [研究方案及推导](fgpo_design_and_derivation.md) 定义 `fgpo-r3-published-v4` 的实际实现，版本日期为 2026-11-17。第 1—6 节规定 F-GPO 及其自身消融的数学对象；第 9 节单列已发表基线的来源、配方和比较范围。核心实现是 `src/fgpo/credit.py` 的 `CrossTrajectoryCredit`，对外算法名为 `r3_history_conditioned_peer_value_sharing`。旧方案通过基准提交 `977bb86ac31a4b1f95ea26b7b53334be5cadf57e` 追溯；本协议使用新 study，不接续旧协议（含 `fgpo-r3-published-v3`）的奖励、优势或待完成更新。
+本文件与 [研究方案及推导](fgpo_design_and_derivation.md) 定义 `fgpo-r5-symmetric-v1` 的实际实现，版本日期为 2026-11-22。第 1—6 节规定 F-GPO 及其自身消融的数学对象；第 9 节单列已发表基线的来源、配方和比较范围。核心实现是 `src/fgpo/credit.py` 的 `CrossTrajectoryCredit`，对外算法名为 `r5_symmetric_peer_value_sharing`。旧 `r3/v4` 协议与旧基准可通过提交 `d1d0f2b` 与 `977bb86ac31a4b1f95ea26b7b53334be5cadf57e` 追溯；本协议使用新 study，不接续旧协议（含 `fgpo-r3-published-v4` 与 `fgpo-r3-published-v3`）的奖励、优势或待完成更新。
 
-本文规定数据、公式、默认值、更新和测量口径。当前仅完成静态编写与源代码审阅，所有项目执行及正式评测均在指定服务器进行，尚无 v4 的实测成功率或加速倍数。
+本文规定数据、公式、默认值、更新和测量口径。当前仅完成静态编写与源代码审阅，所有项目执行及正式评测均在指定服务器与 Colab 实例进行。
 
 ## 1. 目标与输入对象
 
@@ -31,7 +31,7 @@ $$
 
 数学公开历史记为 $h_t$，actor 真实输入是 $p_t=C(h_t)$。$C$ 固定保留初始任务与公开 bootstrap，随后保留有限容量内的最近完整动作—反馈轮次。每步生成上限默认为 ALFWorld 512、AppWorld 1024，模型上下文默认 32768。提示容量为 $C_{\mathrm{prompt}}=C_{\max}-M_{\mathrm{gen}}$。
 
-ALFWorld 的用户消息由静态任务/步数头部 `user_prefix_ids`、纯净环境观测 `pure_ids` 与无引号可行动作提示尾部 `user_suffix_ids`（滤除 `"help"`）三块整数切片拼接，`observation_body_offset = len(user_prefix_ids)` 使所有分块与窗口偏移继续精确指向 `pure_ids`。响应解码先移除完整闭合 `<think>...</think>`，再检验并提取唯一闭合 `<action>...</action>` 中的小写单行指令，未闭合标签、多重动作标签或空动作直接标记为 `invalid`。
+ALFWorld 的用户消息由静态任务/步数头部 `user_prefix_ids`、纯净环境观测 `pure_ids` 与无引号可行动作提示及不含动作示例的字面 XML 标签说明尾部 `user_suffix_ids`（滤除 `"help"`）三块整数切片拼接，`observation_body_offset = len(user_prefix_ids)` 使所有分块与窗口偏移继续精确指向 `pure_ids`。TextCraft 的默认每步生成上限为 `512` tokens（与 ALFWorld/WebShop 对齐；已发表基线维持 `128`），在 `pure_ids` 后以独立整数元组拼接字面 XML 标签尾缀（不改变 `observation_body_offset = 0`），并将 `representation_ids`（及 `TrajectoryRecord.initial_representation_ids`）限定为持久 `"inventory"` 文本词元以剥离瞬态 `"feedback"`。ALFWorld、WebShop 与 F-GPO TextCraft 响应解码均先移除完整闭合 `<think>...</think>`（对残留未闭合或残缺 `<think`/`</think` 直接判无效），再检验并提取唯一闭合 `<action>...</action>` 中的小写单行指令，未闭合标签、多重动作标签或空动作直接标记为 `invalid`。
 
 通常滚动水位为 $0.75C_{\mathrm{prompt}}$；实际水位取该值与“初始锚定块长度 + 最新完整轮次长度”的较大值，并满足提示上限。历史窗口由完整块构成，初始块与最新完整轮次无法容纳时显式报错。三个正式自身消融均保留这一 actor 历史条件。
 
@@ -74,36 +74,31 @@ $$
 
 每个被共享的值来源都是真实 Monte Carlo 结果 $q_j$；算法没有递归值传播。$S$ 是有限同伴的核质量，不是校准置信概率。实现以 CPU float32 批量矩阵乘法计算距离，以 CPU float64 计算权重归约、回报、基线和优势。
 
-## 4. 动作前基线、共享目标与优势
+## 4. 对称动作前基线、共享目标与未决同伴权重
 
-先验与动作前基线为
+先验、对称收缩权重、对称动作前基线与共享目标为（默认 $\kappa=1.0, \lambda_{\max}=0.5$）：
 
 $$
 \bar q_{-k}=\frac{\sum_{j\ne k}q_j}{K-1},\qquad
-b_{k,t}=\frac{U_{k,t}+\kappa\bar q_{-k}}{S_{k,t}+\kappa}.
-$$
-
-基线使用目标动作前特征及同伴数据。没有当前动作、动作后的观测或目标自身终局结果进入 $b$。所有同伴的完整终局结果都可用于任务级先验；已经结束的同伴仍然不会获得当前深度的状态权重。$S=0$ 时 $b=\bar q_{-k}$。
-
-记下一深度存活同伴中的成功轨迹计数为 $N^+_{-k,t+1}=\sum_{j\in\mathcal P_{-k,t+1}}Y_j$。默认 $\lambda_{\max}=0.5$，共享强度和目标为
-
-$$
-\lambda_{k,t}=
-\begin{cases}
-\mathbf 1[N^+_{-k,t+1}\ge 1]\,\lambda_{\max}S_{k,t+1}/(S_{k,t+1}+\kappa),&t<T_k-1,\\
-0,&t=T_k-1,
-\end{cases}
+\lambda^{\mathrm{pre}}_{k,t}=\lambda_{\max}\frac{S_{k,t}}{S_{k,t}+\kappa},\qquad
+\lambda^{\mathrm{post}}_{k,t}=\mathbf 1[t<T_k-1]\,\lambda_{\max}\frac{S_{k,t+1}}{S_{k,t+1}+\kappa},
 $$
 
 $$
-Z_{k,t}=(1-\lambda_{k,t})q_k+
-\lambda_{k,t}(r_{k,t}+\mu_{k,t+1}),\qquad
-A_{k,t}=(Z_{k,t}-b_{k,t})/R.
+\tilde b_{k,t}=(1-\lambda^{\mathrm{pre}}_{k,t})\bar q_{-k}+\lambda^{\mathrm{pre}}_{k,t}\mu_{k,t},\qquad
+Z_{k,t}=(1-\lambda^{\mathrm{post}}_{k,t})q_k+\lambda^{\mathrm{post}}_{k,t}(r_{k,t}+\mu_{k,t+1}).
 $$
 
-下一状态的特征、支持与存活正同伴指示都在当前真实转移后确定，$\lambda$ 不读取目标在这之后的成败。当唯一胜者或领先轨迹进入后续深度且所有剩余同伴均失败（$N^+_{-k,t+1}=0$）时，$\lambda_{k,t}=0$，从而完整保留自身终局 Monte Carlo 回报 $q_k$。终末位置同样强制 $\lambda=0$。没有支持时 $\mu=0$ 是上述定义的一部分，目标仍因 $\lambda=0$ 使用自身真实回报。
+记深度 $t$ 前已提前获胜完赛的留一同伴计数 $C^+_{-k,t}=\sum_{j\ne k}(1-v_{j,t})Y_j$，定义同先验平滑的未决同伴权重与最终优势：
 
-在合法输入上，$0\leq b,\mu,Z\leq R$ 且 $A\in[-1,1]$。全失败组满足 $b=\mu=Z=A=0$。默认公式下，失败非终末动作获得正优势的充要条件是 $\lambda\mu_{t+1}>b_t$；“有成功同伴”本身只决定其中一部分量。
+$$
+\omega_{-k,t}=\frac{(K-1-C^+_{-k,t})+\kappa}{(K-1)+\kappa},\qquad
+\tilde A_{k,t}=\frac{\omega_{-k,t}}{R}(Z_{k,t}-\tilde b_{k,t}).
+$$
+
+`r5` 同深度路径移除旧 `has_positive_peer` 门控（WebShop `fgpo_exact_first_hit` 仅保留作为历史配对对照）。基线 $\tilde b_{k,t}$ 与 $\omega_{-k,t}$ 仅依赖目标动作前公开信息与同伴数据，满足 $\mathbb E[\omega_{-k,t}\tilde b_{k,t}\psi_{k,t}\mid h_{k,t},D_{-k}]=0$ 且对任意 $\lambda_{\max}\in[0,1]$ 保持整轨同伴势能伸缩守恒；全失败组及全成功同质组满足 $Z_{k,t}-\tilde b_{k,t}=0$，组内 $M$ 条胜轨全部完赛后（$C^+_{-\ell,t}=M,S_{\ell,t}=0,\kappa=1$）仍在漫游的败轨步严格保持样本方差负惩罚 $\tilde A_{\ell,t}=-\frac{K}{K-1}\hat{p}(1-\hat{p})\in[-0.286,-0.125]$。
+
+在合法输入上，$0\leq \tilde b,\mu,Z\leq R$、$\omega\in[\frac{\kappa}{K-1+\kappa},1]$ 且 $\tilde A\in[-1,1]$。全失败组满足 $\tilde b=\mu=Z=\tilde A=0$。
 
 ### 配置及方法 ID
 
@@ -117,31 +112,25 @@ $$
 
 | 方法 | 与 `fgpo` 的唯一区别 |
 |---|---|
-| `fgpo_no_transfer` | 所有共享权重 $\lambda=0$，原核与基线保留 |
-| `fgpo_obs_only` | ALFWorld 仅用精确纯观测匹配 $m^{\mathrm{obs}}$、AppWorld 仅保留观测余弦距离，actor 的历史窗口不变 |
-| `fgpo_no_support_weight` | 非终末且下一状态满足 $N^+_{-k,t+1}\ge 1 \land S>0$ 时 $\lambda=1$，否则为零；该消融不使用 `credit_transfer_max` |
+| `fgpo_no_transfer` | 所有后续共享权重 $\lambda^{\mathrm{post}}=0$，原核、对称动作前基线与 $\omega_{-k,t}$ 保留 |
+| `fgpo_obs_only` | ALFWorld/TextCraft 仅用精确观测/背包匹配 $m^{\mathrm{obs}}$、WebShop/AppWorld 仅保留观测余弦距离，actor 的历史窗口不变 |
+| `fgpo_no_support_weight` | 当 $S>0$ 时 $\lambda^{\mathrm{pre}}=1$、非终末且下一状态 $S_{t+1}>0$ 时 $\lambda^{\mathrm{post}}=1$，否则为零；该消融不使用 `credit_transfer_max` |
 
 正式消融只使用表中三个方法，全部在 ALFWorld 上执行；完整 F-GPO 复用主比较中的对应种子。短两轮历史变体 `fgpo_no_full_filtration` 不进入正式矩阵。旧 BEFP、DAG-LOO 与自定义 shared 变体不映射为已发表基线；主比较使用第 9 节的 GiGPO、HGPO 和 GraphGPO。
 
 ## 5. 理论声明的适用范围
 
-设行为策略固定为 $\pi_{\mathrm{old}}$，同任务初态条件下同伴采样与目标轨迹独立，$\psi_t=\nabla_\theta\log\pi_\theta(y_t\mid p_t)|_{\theta_{\mathrm{old}}}$。动作前基线满足
+在固定初态、冻结策略 $\pi_{\mathrm{old}}$ 与独立同伴条件下，因 $\omega_{k,t}$ 与 $\tilde b_{k,t}$ 均先于 $y_{k,t}$ 确定，动作前基线满足 $\mathbb E[\omega_t\tilde b_t\psi_t\mid h_t,D_{-k}]=0$。若 $\lambda^{\mathrm{post}}_t$ 仅依赖当前转移及同伴数据，且目标后续的条件回报均值为 $V^{\pi_{\mathrm{old}}}(h_{t+1})$，则
 
 $$
-\mathbb E[b_t\psi_t\mid h_t,D_{-k}]=0.
-$$
-
-该恒等式只处理基线项，既不要求样本平均优势为零，也不把共享目标变为精确无偏回报。若 $\lambda_t$ 仅依赖当前转移及同伴数据，且目标后续的条件回报均值为 $V^{\pi_{\mathrm{old}}}(h_{t+1})$，则
-
-$$
-\mathbb E[(Z_t-b_t)\psi_t]-\mathbb E[G_t^{\mathrm{MC}}\psi_t]
-=\mathbb E\!\left[\lambda_t
+\mathbb E[\omega_t(Z_t-\tilde b_t)\psi_t]-\mathbb E[\omega_t G_t^{\mathrm{MC}}\psi_t]
+=\mathbb E\!\left[\omega_t\lambda^{\mathrm{post}}_t
   \bigl(\mu_{t+1}-V^{\pi_{\mathrm{old}}}(h_{t+1})\bigr)\psi_t\right].
 $$
 
-在 $|\mu-V|\leq\delta$、$\lambda\leq\lambda_{\max}$、$\mathbb E\|\psi_t\|\leq L_t$ 条件下，归一化偏差上界为 $\lambda_{\max}\delta L_t/R$，全时域上界为 $\lambda_{\max}\delta\sum_tL_t/R$。这个 $\delta$ 是分析条件，源码中的余弦半径和 Brier 日志均不提供其认证值。`no_support_weight` 的对应权重上界为 1。
+在 $|\mu-V|\leq\delta$、$\lambda^{\mathrm{post}}\leq\lambda_{\max}$、$\omega_t\le 1$、$\mathbb E\|\psi_t\|\leq L_t$ 条件下，归一化偏差上界仍保持 $\lambda_{\max}\delta L_t/R$，全时域上界为 $\lambda_{\max}\delta\sum_tL_t/R$。`no_support_weight` 的对应权重上界为 1。
 
-良好前缀可以获得负优势。八轨迹组中目标失败、七个同伴成功，且当前和下一状态都完全匹配时，默认参数（$\lambda_{\max}=0.5$）给出 $b=R,\mu_{t+1}=R,N^+_{-k,t+1}=7\ge 1,\lambda=0.5\times 7/8=7/16,A=-9/16$。同质组（全失败或全成功）的任务优势全部严格为零。熵正则仅提供有限探索辅助，r3 没有冷启动成功保证。
+八轨迹组中目标失败、七个同伴成功，且当前和下一状态均未完赛且完全匹配时，默认参数（$\lambda_{\max}=0.5,\kappa=1$）给出 $\tilde b=R,\mu_{t+1}=R,\lambda^{\mathrm{post}}=0.5\times 7/8=7/16,\omega=1,\tilde A=-9/16$。同质组任务优势严格为零。
 
 ## 6. F-GPO 原子混合组 PPO 及轨迹归一化
 
@@ -168,14 +157,14 @@ $$
 
 为防止无意义的指数溢出，概率比的指数输入上限为 $\log(\max(c,1+\eta))+1$，该范围外双裁剪损失已是常数；$d_i$ 在计算指数前截到 $[-11,\log22]$，原 $k_i$ 在这个范围外已饱和到 10。这些数值处理保持所定义的截断目标。
 
-F-GPO 及三个自身消融的每个原子混合组批次 $m\in\mathcal G_{\mathrm{mix}}$ 使用固定分母 $Z_m=K=8.0$：
+F-GPO 及三个自身消融的每个原子混合组批次 $m\in\mathcal G_{\mathrm{mix}}$ 使用固定轨迹分母 $Z_m=K=8.0$ 与批次响应词元数 $N_{\mathrm{tok},m}=|\mathcal B_m|$（`entropy_normalization="token"`）：
 
 $$
 \mathcal L_m=\frac{1}{Z_m}\sum_{i\in\mathcal B_m}
-(\ell_i^{\mathrm{PPO}}-.001H_i+.01k_i).
+(\ell_i^{\mathrm{PPO}}+.01k_i) - \frac{.001}{N_{\mathrm{tok},m}}\sum_{i\in\mathcal B_m}H_i.
 $$
 
-这是组内所有响应 token 损失的求和，轨迹内部不按长度平均；完整轮在恢复后保持相同的混合组序列、`minibatch_count`、分母 $Z_m=8$ 与 `atomic_mixed_group_trajectory` 权重身份。`metrics.loss` 累加实际混合组批次损失，并在 `cursor.metrics` 记录逐批裁剪前梯度范数 `batch_gradient_norms`、裁剪缩放因子 `batch_clip_scales`、PPO 裁剪词元占比 `ppo_clip_fraction` 以及首批次更新前同权重对数概率一致性误差 `first_batch_mean_abs_logprob_diff` / `first_batch_max_abs_logprob_diff`，比较时同时核对有效混合组数与 optimizer step 数。
+策略与 KL 项在组内对响应 token 损失求和以保留第 4 节恒等式与未闭合步惩罚，条件熵项按批次响应词元数均值化以消除长度正反馈；完整轮在恢复后保持相同的混合组序列、`minibatch_count`、分母 $Z_m=8$、`entropy_normalization="token"` 与 `atomic_mixed_group_trajectory` 权重身份。`metrics.loss` 累加实际混合组批次损失，并在 `cursor.metrics` 记录逐批裁剪前梯度范数 `batch_gradient_norms`、裁剪缩放因子 `batch_clip_scales`、PPO 裁剪词元占比 `ppo_clip_fraction` 以及首批次更新前同权重对数概率一致性误差 `first_batch_mean_abs_logprob_diff` / `first_batch_max_abs_logprob_diff`，比较时同时核对有效混合组数与 optimizer step 数。
 
 每个 minibatch 完成后执行一次 AdamW，默认学习率 `1e-6`、weight decay `.01`、全局梯度裁剪 `1`。参考权重固定；行为权重随训练轮更新。PPO 裁剪、k3 采样正则、条件熵及有偏续值估计构成实际正则化 surrogate，其性质不能直接等同于每次更新都计算精确成功率梯度。本节的轨迹分母只用于 F-GPO 系列。已发表基线保留发布源码的 batch 复制与顺序、virtual rank/microbatch 内部 token-mean 及其外层平均权重；GiGPO 在优势估计之前复制，HGPO/GraphGPO 在优势估计之后复制。分组与每个响应的损失系数均须遵循这一执行顺序，具体配方和批处理规则由 `baseline_specs.py / published_batching.py` 定义。
 
@@ -205,7 +194,7 @@ $$
 =g_\ell\bigl(\operatorname{onehot}(y)-p\bigr)-g_Hp(\log p+\mathcal H).
 $$
 
-其中 $g_H=\partial L/\partial\mathcal H$；F-GPO 使用 $g_H=-\mathrm{entropy\_coef}/Z_{\mathrm{mb}}$，已发表基线使用其 virtual rank/microbatch 规则对应的逐响应系数。$g_\ell$ 由 PPO、dual clip、k3 截断及相同损失系数的小图求得。反向重建概率，原位复用仅涉及新建临时张量，保存的 logits 保持不变。`once_differentiable` 将接口限定为一阶训练。bf16 主干、FP32 词表统计与运算顺序共同决定实际数值，正式记录中的数值容差与实测结果不声明逐位一致。
+其中 $g_H=\partial L/\partial\mathcal H$；F-GPO 在 `entropy_normalization="token"` 下使用 $g_H=-\mathrm{entropy\_coef}/N_{\mathrm{tok},m}$，已发表基线使用其 virtual rank/microbatch 规则对应的逐响应系数。$g_\ell$ 由 PPO、dual clip、k3 截断及相同损失系数的小图求得。反向重建概率，原位复用仅涉及新建临时张量，保存的 logits 保持不变。`once_differentiable` 将接口限定为一阶训练。bf16 主干、FP32 词表统计与运算顺序共同决定实际数值，正式记录中的数值容差与实测结果不声明逐位一致。
 
 参考阶段仅在当轮存在混合结果组（$M_{\mathrm{mix}}\ge 1$）时集中安装冻结权重，完成混合组轨迹的响应概率与所需特征计算后恢复 actor；当 $M_{\mathrm{mix}}=0$ 时整轮旁路参考前向与特征提取。同段实际响应合并为一次目标上传和一次分数回传，词表投影仍按 chunk 执行，每块立即释放 logits。历史层 hook 只保留动作前所需位置；`fgpo_obs_only` 跳过历史表示。ALFWorld 直接在 `credit.py` 比较离散纯观测词元元组从而免除 `z_obs` 模型前向；AppWorld 的公开观测按 token 序列去重、按长度和 token 预算微批编码，纯表示前向可在指定中间层结束。信用及组诊断完成后调用 `ReferenceRound.release_features()` 释放 `z_hist/z_obs`，保留 PPO 所需的冻结 log-prob、已计算优势和诊断。尚待信用计算的断点保留其所需表示。
 
@@ -234,12 +223,13 @@ CPU AdamW 保存 FP32 master/m/v，先完成全局范数的设备归约与有限
 | `positive_peer_gated_steps` | 下一深度存在局部支持（$S_{t+1}>0$）但因存活成功同伴为零（$N^+_{-k,t+1}=0$）而拦截共享的非终末步骤数 |
 | `mean_support_mass` | 所有真实状态的 $S_t$ 均值 |
 | `mean_effective_peers` | $(\sum_jw_j)^2/\sum_jw_j^2$ 的真实状态均值；无支持时为零 |
-| `mean_transfer_weight` | 所有真实转移的 $\lambda_t$ 均值，包括末步的零 |
-| `loo_outcome_brier` | 所有真实步骤上的 $(b_t/R-Y_k)^2$ 均值 |
+| `mean_transfer_weight` | 所有真实转移的 $\lambda^{\mathrm{post}}_t$ 均值，包括末步的零 |
+| `mean_pending_weight` | 所有真实步骤上的未决同伴权重 $\omega_{-k,t}$ 均值 |
+| `loo_outcome_brier` | 所有真实步骤上的 $(\tilde b_t/R-Y_k)^2$ 均值 |
 | `loo_task_prior_brier` | 所有真实步骤上的 $(\bar q_{-k}/R-Y_k)^2$ 均值 |
 | `matched_loo_outcome_brier` | 仅 $S_t>0$ 位置上的 $(\mu_t/R-Y_k)^2$ 均值；没有匹配时为 null |
 | `mean_abs_return_shift` | 所有真实步骤上的 $\lvert Z_t/R-Y_k\rvert$ 均值 |
-| `positive_failed_steps` | $Y_k=0$ 且 $A_{k,t}>0$ 的真实步骤数 |
+| `positive_failed_steps` | $Y_k=0$ 且 $\tilde A_{k,t}>0$ 的真实步骤数 |
 | `mean_advantage / advantage_min / advantage_max` | 所有真实步骤优势的均值、最小值和最大值 |
 
 轮级 `training.jsonl` 另行在 `diagnostics` 写入 `total_groups`、`mixed_groups`、`homogeneous_groups`、`all_one_groups`、`homogeneous_round_bypass`、`optimizer_steps_in_round`、`reference_scored_trajectories`、`total_steps`、`syntax_valid_steps`、`syntax_valid_fraction`、`admissible_valid_steps`、`admissible_valid_fraction` 与 `unterminated_response_steps`，并在 `metrics` 写入逐批裁剪前范数 `batch_gradient_norms`、裁剪缩放比 `batch_clip_scales`、PPO 裁剪占比 `ppo_clip_fraction` 与首批次一致性指标 `first_batch_mean_abs_logprob_diff` / `first_batch_max_abs_logprob_diff`。组诊断还记录算法、方法、时域及实际信用参数。Brier 使用整条目标轨迹之外的数据进行预测，再用目标终局结果计算损失；它包含 Bernoulli outcome 噪声，衡量留出结果预测，不能作为真实 Q 误差、置信界或校准分数。这些诊断不参与共享权重或奖励。跨组聚合采用相应真实样本数加权。
@@ -248,7 +238,7 @@ CPU AdamW 保存 FP32 master/m/v，先完成全局范数的设备归约与有限
 
 ## 9. 研究身份、基线与源码映射
 
-运行身份由协议 fgpo-r3-published-v4 与其实际配置共同决定。主比较与自身消融分开保存，当前执行范围见[实验排程](fgpo_experiment_schedule_current.md)。
+运行身份由协议 fgpo-r5-symmetric-v1 与其实际配置共同决定。主比较与自身消融分开保存，当前执行范围见[实验排程](fgpo_experiment_schedule_current.md)。
 
 | 正式方法 ID | 来源与本研究采用的配方 | 原 ALFWorld 配方的主要设置 |
 |---|---|---|

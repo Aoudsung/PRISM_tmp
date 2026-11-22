@@ -27,11 +27,21 @@ def encode_text(tokenizer, text: str) -> tuple[int, ...]:
 
 
 def project_public_observation(tokenizer, benchmark: str, raw_observation: str, *,
-                               action_schema: Mapping, goal: str, initial=False) -> PublicObservation:
+                               action_schema: Mapping, goal: str, initial=False,
+                               published_baseline=False) -> PublicObservation:
     if benchmark == "textcraft":
         text = textcraft_observation(raw_observation)
         pure = encode_text(tokenizer, text)
-        return PublicObservation(raw_observation, text, pure, pure, (), pure, 0)
+        if published_baseline:
+            return PublicObservation(raw_observation, text, pure, pure, (), pure, 0)
+        fields = json.loads(raw_observation)
+        inv_ids = encode_text(tokenizer, str(fields["inventory"]))
+        representation = inv_ids if inv_ids else encode_text(tokenizer, EMPTY_STDOUT)
+        suffix = ("\nEnclose concise reasoning in literal <think> and </think> tags, "
+                  "then enclose one exact command in literal <action> and </action> tags.")
+        suffix_ids = encode_text(tokenizer, suffix)
+        return PublicObservation(raw_observation, text, pure, representation, (),
+                                 pure + suffix_ids, 0, (), suffix_ids)
     if benchmark == "appworld":
         pure = encode_text(tokenizer, raw_observation)
         if not initial and len(pure) > 1024:
@@ -59,7 +69,9 @@ def project_public_observation(tokenizer, benchmark: str, raw_observation: str, 
         commands = tuple(str(c) for c in action_schema["available_actions"] if str(c) != "help")
         command_lines = "\n".join(commands) if commands else "(none)"
         suffix = ("\n\nAdmissible commands (choose one exact command without quotes):\n"
-                  f"{command_lines}\nEmit concise <think>...</think> then <action>exact command</action>.")
+                  f"{command_lines}\n"
+                  "Enclose concise reasoning in literal <think> and </think> tags, "
+                  "then enclose one exact command in literal <action> and </action> tags.")
     else:
         raise ValueError(f"Unsupported official F-GPO benchmark: {benchmark}")
     prefix = f"Task: {goal}\nStep: {step_num}/{HORIZONS[benchmark]}\nCurrent observation:\n"
@@ -85,10 +97,10 @@ def pinned_prompt(tokenizer, system_prompt: str, initial: PublicObservation) -> 
             user_header + initial.user_body_ids + (IM_END, NEWLINE) + assistant_header)
 
 
-def parse_native_response(benchmark: str, text: str):
+def parse_native_response(benchmark: str, text: str, *, published_baseline: bool = False):
     """Return the actual native action and syntax/format validity, without action gating."""
     if benchmark == "textcraft":
-        command, valid = textcraft_action(text)
+        command, valid = textcraft_action(text, strict_r5=not published_baseline)
         return {"kind": "native_text" if command else "invalid", "text": command}, valid
     if benchmark in ("alfworld", "webshop"):
         remainder = _TEXT_THINK_RE.sub("", text)

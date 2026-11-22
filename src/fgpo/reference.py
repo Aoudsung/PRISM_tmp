@@ -102,7 +102,7 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None, round_ind
     observation_users = {}
     for trajectory in trajectories:
         by_segment = {}
-        previous = tuple(trajectory.initial_observation_ids)
+        previous = tuple(trajectory.initial_representation_ids or trajectory.initial_observation_ids)
         for row in trajectory.steps:
             by_segment.setdefault(row.response_span.segment_id, []).append(row)
             if needs_obs:

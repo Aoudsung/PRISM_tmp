@@ -531,6 +531,7 @@ class TrajectoryRecord:
     official_metrics: Mapping[str, Any]
     costs: tuple[CostRecord, ...]
     history_length: int | None
+    initial_representation_ids: tuple[int, ...] = ()
 
     @property
     def success(self):

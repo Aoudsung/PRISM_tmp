@@ -84,8 +84,8 @@ class ALFWorldEnv:
             'benchmark': self.benchmark,
             'native_system_prompt': (
                 'You act in the official ALFWorld text environment. '
-                'First reason concisely inside <think>...</think>, then output exactly one '
-                'admissible command verbatim without quotes inside <action>...</action>. '
+                'First reason concisely enclosed within literal <think> and </think> tags, then output '
+                'exactly one admissible command verbatim without quotes enclosed within literal <action> and </action> tags. '
                 'The episode ends when the goal is satisfied or the 50-step horizon is reached.'
             ),
         }

@@ -342,7 +342,7 @@ def collect_native_trajectory(policy,env_factory,*,task_id,initial_seed,sampling
                 if method in PUBLISHED_RECIPES and policy.benchmark=="alfworld":
                     action,valid = published_alfworld_action(text)
                 elif policy.benchmark=="textcraft":
-                    action,valid = parse_native_response(policy.benchmark,text)
+                    action,valid = parse_native_response(policy.benchmark,text,published_baseline=True)
                 elif supervisor is not None:
                     action,valid = g2po_appworld_action(text)
                 else:
@@ -507,7 +507,7 @@ def _collect_published_groups(policy,env_factory,specs,method,config,on_episode_
                 if policy.benchmark=="alfworld":
                     actions[slot],valids[slot] = published_alfworld_action(text)
                 elif policy.benchmark=="textcraft":
-                    actions[slot],valids[slot] = parse_native_response(policy.benchmark,text)
+                    actions[slot],valids[slot] = parse_native_response(policy.benchmark,text,published_baseline=True)
                 elif method=="g2po":
                     actions[slot],valids[slot] = g2po_appworld_action(text)
                 else:

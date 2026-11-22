@@ -19,7 +19,7 @@ from .public import EXACT_OBSERVATION_BENCHMARKS, HORIZONS
 from .protocol import EXACT_FIRST_HIT_METHOD, OWN_METHODS as METHODS, RETIRED_METHODS
 
 
-ALGORITHM = "r3_history_conditioned_peer_value_sharing"
+ALGORITHM = "r5_symmetric_peer_value_sharing"
 
 
 class CrossTrajectoryCredit:
@@ -28,15 +28,14 @@ class CrossTrajectoryCredit:
     For peer j at the same depth as x, w_j(x) = [1 - d(x,j)/radius]_+.
     The prior is the mean terminal outcome of all other trajectories, including
     completed peers as task-level evidence, never as synthetic current states.
-    b(x) = (sum_j w_j(x) * Y_j + kappa * prior) / (sum_j w_j(x) + kappa).
-    For a nonterminal transition, share the next-state peer mean with weight
-    lambda_max * support / (support + kappa); use the target's own MC return
-    for the remaining weight. Terminal transitions have no continuation term.
+    The r5 estimator pairs symmetric pre/post peer potential contraction with
+    smoothed pending-peer scaling omega = (K - 1 - C^+_{-k,t} + kappa) / (K - 1 + kappa),
+    preserving leave-one-out action independence and potential telescoping for any
+    lambda_max in [0, 1] without positive-peer continuation gating.
     Y denotes reward_scale times official success. Advantages divide by this
     fixed scale, with no random group RMS or hand-written syntax reward.
 
-    The WebShop first-hit variant uses the strongest eligible state per peer
-    and shares from the first strictly later state with support.
+    The WebShop first-hit variant retains its original strongest-peer definition.
     """
 
     def __init__(self, trajectories, reference_data, *, method="fgpo", config=None):
@@ -145,7 +144,8 @@ class CrossTrajectoryCredit:
         for owner, trajectory in enumerate(self.trajectories):
             if not trajectory.steps:
                 continue
-            previous = tuple(trajectory.initial_observation_ids)
+            initial_repr = trajectory.initial_representation_ids or trajectory.initial_observation_ids
+            previous = tuple(trajectory.initial_observation_ids if pure else initial_repr)
             for depth_idx, row in enumerate(trajectory.steps):
                 codes[depth_idx, owner] = vocab.setdefault(previous, len(vocab) + 1)
                 previous = tuple(row.observation_ids if pure else row.observation_repr_ids)
@@ -212,6 +212,7 @@ class CrossTrajectoryCredit:
                 "local_observation_matching": matching_mode,
                 "horizon": self.horizon,
                 "positive_peer_gated_steps": 0,
+                "mean_pending_weight": None,
                 "loo_outcome_brier": None,
                 "loo_task_prior_brier": None,
                 **first_hit_stats,
@@ -220,6 +221,12 @@ class CrossTrajectoryCredit:
         if self.homogeneous:
             count = int(self.valid.sum())
             zero_transfer = self.all_zero or self.method == "fgpo_no_transfer" or self.exact_first_hit
+            won = (self.outcomes > 0).to(torch.float64)
+            completed_won = (~self.valid).to(torch.float64) * won[None, :]
+            completed_won_peers = completed_won.sum(dim=-1, keepdim=True) - completed_won
+            omega = ((self.count - 1.0 - completed_won_peers) + self.prior_weight) / (
+                (self.count - 1.0) + self.prior_weight
+            )
             self.diagnostics = {
                 "algorithm": ALGORITHM,
                 "method": self.method,
@@ -243,6 +250,7 @@ class CrossTrajectoryCredit:
                 "mean_support_mass": None,
                 "mean_effective_peers": None,
                 "mean_transfer_weight": 0.0 if zero_transfer else None,
+                "mean_pending_weight": float(omega[self.valid].mean()) if count else None,
                 "positive_peer_gated_steps": 0 if self.all_one else None,
                 "loo_outcome_brier": 0.0,
                 "loo_task_prior_brier": 0.0,
@@ -264,24 +272,23 @@ class CrossTrajectoryCredit:
         positive_support = support > 0
         denominator = torch.where(positive_support, support, torch.ones_like(support))
         peer_values = weighted_outcomes / denominator
-        baseline = (weighted_outcomes + self.prior_weight * self.prior[None, :]) / (
-            support + self.prior_weight
-        )
-        valid_won = self.valid.to(torch.long) * (self.outcomes > 0).to(torch.long)[None, :]
+        terminal = torch.zeros_like(self.valid)
+        terminal[self.times, self.owners] = self.terminals
+        continuation = self.valid & ~terminal
+        mc_return = self.outcomes[None, :].expand(self.depth, -1)
+        reward = mc_return * terminal
+
         if self.exact_first_hit:
+            baseline = (weighted_outcomes + self.prior_weight * self.prior[None, :]) / (
+                support + self.prior_weight
+            )
+            valid_won = self.valid.to(torch.long) * (self.outcomes > 0).to(torch.long)[None, :]
             # A peer alive at v+1 is already alive at v. Include v-1 once per peer.
             valid_won[1:] = torch.maximum(valid_won[1:], valid_won[:-1])
-        has_positive_peer = (valid_won.sum(dim=-1, keepdim=True) - valid_won) >= 1
-        if self.method == "fgpo_no_transfer":
-            state_share = torch.zeros_like(support)
-        elif self.method == "fgpo_no_support_weight":
-            state_share = (has_positive_peer & positive_support).to(torch.float64)
-        else:
+            has_positive_peer = (valid_won.sum(dim=-1, keepdim=True) - valid_won) >= 1
             state_share = has_positive_peer.to(torch.float64) * (
                 self.transfer_max * support / (support + self.prior_weight)
             )
-
-        if self.exact_first_hit:
             depths = torch.arange(self.depth, device="cpu")[:, None]
             terminal_depth = self.valid.sum(dim=0, keepdim=True)
             supported_depths = torch.where(positive_support, depths, terminal_depth)
@@ -295,29 +302,37 @@ class CrossTrajectoryCredit:
                 return padded.gather(0, next_hit)
 
             next_values = at_hit(peer_values)
-            next_share = at_hit(state_share)
+            next_share = at_hit(state_share) * continuation
             next_pos_sup = next_hit < terminal_depth
             next_pos_peer = at_hit(has_positive_peer)
+            gated = continuation & next_pos_sup & ~next_pos_peer
+            target = (1.0 - next_share) * mc_return + next_share * (reward + next_values)
+            omega = torch.ones_like(support)
+            advantage = (target - baseline) / self.reward_scale
         else:
+            if self.method == "fgpo_no_support_weight":
+                pre_share = positive_support.to(torch.float64)
+            else:
+                pre_share = self.transfer_max * support / (support + self.prior_weight)
+            baseline = (1.0 - pre_share) * self.prior[None, :] + pre_share * peer_values
+            post_share = torch.zeros_like(support) if self.method == "fgpo_no_transfer" else pre_share
             next_values = torch.cat((peer_values[1:], torch.zeros_like(peer_values[:1])), dim=0)
-            next_share = torch.cat((state_share[1:], torch.zeros_like(state_share[:1])), dim=0)
-            next_pos_sup = torch.cat((positive_support[1:], torch.zeros_like(positive_support[:1])), dim=0)
-            next_pos_peer = torch.cat((has_positive_peer[1:], torch.zeros_like(has_positive_peer[:1])), dim=0)
-        terminal = torch.zeros_like(self.valid)
-        terminal[self.times, self.owners] = self.terminals
-        continuation = self.valid & ~terminal
-        next_share = next_share * continuation
-        gated = continuation & next_pos_sup & ~next_pos_peer
-        mc_return = self.outcomes[None, :].expand(self.depth, -1)
-        reward = mc_return * terminal
-        target = (1.0 - next_share) * mc_return + next_share * (reward + next_values)
-        advantage = (target - baseline) / self.reward_scale
+            next_share = torch.cat((post_share[1:], torch.zeros_like(post_share[:1])), dim=0) * continuation
+            gated = torch.zeros_like(continuation)
+            target = (1.0 - next_share) * mc_return + next_share * (reward + next_values)
+            won = (self.outcomes > 0).to(torch.float64)
+            completed_won = (~self.valid).to(torch.float64) * won[None, :]
+            completed_won_peers = completed_won.sum(dim=-1, keepdim=True) - completed_won
+            omega = ((self.count - 1.0 - completed_won_peers) + self.prior_weight) / (
+                (self.count - 1.0) + self.prior_weight
+            )
+            advantage = omega * (target - baseline) / self.reward_scale
 
         # A fixed scale preserves task weighting. The syntax_valid field is a
         # diagnostic only; parsing outcomes do not replace the official reward.
         values = advantage[self.times, self.owners].tolist()
         self._record_diagnostics(
-            weights, support, peer_values, baseline, next_share, target, advantage,
+            weights, support, peer_values, baseline, next_share, target, advantage, omega,
             matching_mode=matching_mode, gated_steps=int(gated.sum()),
         )
         if self.exact_first_hit:
@@ -332,7 +347,7 @@ class CrossTrajectoryCredit:
             self.diagnostics.update(first_hit_stats)
         return {row.step_id: value for row, value in zip(self.rows, values)}
 
-    def _record_diagnostics(self, weights, support, peer_values, baseline, share, target, advantage,
+    def _record_diagnostics(self, weights, support, peer_values, baseline, share, target, advantage, omega,
                             *, matching_mode, gated_steps):
         valid = self.valid
         count = int(valid.sum())
@@ -375,6 +390,7 @@ class CrossTrajectoryCredit:
             "mean_support_mass": float(support[valid].mean()),
             "mean_effective_peers": float(effective_peers[valid].mean()),
             "mean_transfer_weight": float(share[valid].mean()),
+            "mean_pending_weight": float(omega[valid].mean()),
             "positive_peer_gated_steps": gated_steps,
             "loo_outcome_brier": float((predicted - success).square()[valid].mean()),
             "loo_task_prior_brier": float((prior - success).square()[valid].mean()),

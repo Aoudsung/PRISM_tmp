@@ -11,7 +11,8 @@ import sys
 TEXTCRAFT_SOURCE_COMMIT = "f19f6fe1d140dd342d81b8e797f09c37c620b42f"
 TEXTCRAFT_COUNTS = {"train": 318, "val": 79}
 TEXTCRAFT_HORIZON = 30
-TEXTCRAFT_OUTPUT_TOKENS = 128
+TEXTCRAFT_OUTPUT_TOKENS = 512
+TEXTCRAFT_PUBLISHED_OUTPUT_TOKENS = 128
 TEXTCRAFT_CONTEXT_TOKENS = 8192
 TEXTCRAFT_TRAIN_ROUNDS = 50
 TEXTCRAFT_TRAIN_GROUPS = 16
@@ -27,14 +28,33 @@ TEXTCRAFT_SYSTEM_PROMPT = (
     "Use a specific variant for a generic ingredient, such as oak planks for planks. "
     "Fetch raw ingredients and craft intermediates as needed. "
     "Read the latest simulator feedback and inventory. "
-    "Reason briefly in <think>...</think> and give one command in <action>...</action>."
+    "Enclose concise reasoning in literal <think> and </think> tags, then enclose one exact command in literal <action> and </action> tags."
 )
 _ACTION_TAG = re.compile(r"</?action\b")
+_THINK_BLOCK = re.compile(r"<think>(?:(?!</?think\b).)*?</think>", re.DOTALL | re.IGNORECASE)
+_STRICT_ACTION_BLOCK = re.compile(r"<action>((?:(?!</?action\b).)*?)</action>", re.DOTALL | re.IGNORECASE)
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 
 
-def textcraft_action(text: str) -> tuple[str, bool]:
-    """BiPACE command extraction and validity, with native rejection of ambiguous tags."""
+def textcraft_action(text: str, *, strict_r5: bool = False) -> tuple[str, bool]:
+    """BiPACE command extraction and validity, with strict r5 tag-closure option."""
+    if strict_r5:
+        if _CJK.search(text) is not None:
+            return "", False
+        remainder = _THINK_BLOCK.sub("", text)
+        lowered_rem = remainder.lower()
+        if "<think" in lowered_rem or "</think" in lowered_rem:
+            return "", False
+        matches = list(_STRICT_ACTION_BLOCK.finditer(remainder))
+        if len(matches) != 1:
+            return "", False
+        outside = (remainder[:matches[0].start()] + remainder[matches[0].end():]).lower()
+        if "<action" in outside or "</action" in outside:
+            return "", False
+        command = matches[0].group(1).strip().lower()
+        if not command or "\n" in command or "\r" in command:
+            return "", False
+        return command, True
     lower = text.lower()
     tags = tuple(_ACTION_TAG.finditer(lower))
     if len(tags) != 2:

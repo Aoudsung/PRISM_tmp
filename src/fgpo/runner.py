@@ -349,8 +349,8 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
             if benchmark == 'appworld' and method == 'g2po':
                 train_tasks = [task for difficulty in cell_config['appworld_train_difficulties']
                                for task in catalog.list_tasks('train', difficulty=difficulty)]
-            elif study and benchmark == 'webshop':
-                train_tasks = catalog.list_tasks('train', train_rounds=cell_config['rounds'])
+            elif benchmark == 'webshop':
+                train_tasks = catalog.list_tasks('train', train_rounds=int(cell_config['rounds']))
             else:
                 train_tasks = catalog.list_tasks('train')
             evaluation_tasks = {split: catalog.list_tasks(split)

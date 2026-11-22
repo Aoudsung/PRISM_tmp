@@ -662,7 +662,8 @@ def _collect_slots_open(policy, env_factory, specs, *, benchmark, history_length
             tuple(ledger.records) if count == 1 else tuple(cost for cost in ledger.records
                 if cost.kind == "environment" and cost.details.get("group_id") == spec.group_id
                 and cost.details.get("slot") == slot),
-            history_length))
+            history_length,
+            initial_representation_ids=initials[row].representation_ids))
     return tuple(built)
 
 

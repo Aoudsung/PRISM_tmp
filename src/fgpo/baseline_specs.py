@@ -5,7 +5,7 @@ recipe transfers to the study backbone and official benchmark settings.
 """
 from __future__ import annotations
 
-from .textcraft import (TEXTCRAFT_CONTEXT_TOKENS, TEXTCRAFT_OUTPUT_TOKENS,
+from .textcraft import (TEXTCRAFT_CONTEXT_TOKENS, TEXTCRAFT_PUBLISHED_OUTPUT_TOKENS,
                         TEXTCRAFT_SOURCE_COMMIT, TEXTCRAFT_TRAIN_ROUNDS)
 
 
@@ -297,8 +297,8 @@ def published_recipe(method, benchmark, model_name="Qwen/Qwen2.5-7B-Instruct"):
                       prompt_truncation="complete_messages",
                       benchmark_transfer="AppWorld native Python; pinned task/API bootstrap and recent memory")
     elif benchmark == "textcraft":
-        recipe.update(rounds=TEXTCRAFT_TRAIN_ROUNDS, max_new_tokens=TEXTCRAFT_OUTPUT_TOKENS,
-                      author_prompt_length=TEXTCRAFT_CONTEXT_TOKENS - TEXTCRAFT_OUTPUT_TOKENS,
+        recipe.update(rounds=TEXTCRAFT_TRAIN_ROUNDS, max_new_tokens=TEXTCRAFT_PUBLISHED_OUTPUT_TOKENS,
+                      author_prompt_length=TEXTCRAFT_CONTEXT_TOKENS - TEXTCRAFT_PUBLISHED_OUTPUT_TOKENS,
                       benchmark_transfer="TextCraft transfer to the BiPACE simulator and committed train/val splits",
                       benchmark_source_commit=TEXTCRAFT_SOURCE_COMMIT,
                       anchor_view="textcraft_exact_public_feedback_and_inventory",

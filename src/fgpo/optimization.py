@@ -377,8 +377,9 @@ class UpdateCursor:
 def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                minibatch_rows: int | None = None, chunk_tokens=64, cursor=None,
                checkpoint_callback=None, constant_denominator=True, loss_normalization="token",
-               clip_ratio=.2, dual_clip=3., entropy_coef=.001, kl_coef=.01,
-               max_grad_norm=1., published_plan=None, trajectory_groups=None, round_index=None):
+               entropy_normalization="trajectory", clip_ratio=.2, dual_clip=3.,
+               entropy_coef=.001, kl_coef=.01, max_grad_norm=1., published_plan=None,
+               trajectory_groups=None, round_index=None):
     """PPO with one live vocabulary chunk and one backbone backward per segment.
 
     ``trajectory`` sums all response-token scores along each trajectory and
@@ -403,6 +404,8 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
         raise ValueError("Row-sliced PPO requires a positive minibatch_rows")
     if loss_normalization not in ("token", "trajectory"):
         raise ValueError("loss_normalization must be token or trajectory")
+    if entropy_normalization not in ("token", "trajectory"):
+        raise ValueError("entropy_normalization must be token or trajectory")
     if loss_normalization == "trajectory" and not constant_denominator:
         raise ValueError("Trajectory normalization requires the fixed round denominator")
     if not 0 < clip_ratio < 1 or dual_clip <= 1 or entropy_coef < 0 or kl_coef < 0:
@@ -450,7 +453,9 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
         cursor.denominator = expected_denominator
     elif not math.isclose(cursor.denominator, expected_denominator, rel_tol=1e-12, abs_tol=1e-12):
         raise ValueError("PPO resume normalization differs from its saved round")
-    for key, value in (("loss_normalization", loss_normalization), ("loss_weighting", weighting),
+    for key, value in (("loss_normalization", loss_normalization),
+                       ("entropy_normalization", entropy_normalization),
+                       ("loss_weighting", weighting),
                        ("minibatch_count", len(minibatches))):
         if cursor.metrics.get(key, value) != value:
             raise ValueError(f"PPO resume {key} changed")
@@ -480,6 +485,10 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
             batch_group_id = next(iter(batch_group_ids)) if len(batch_group_ids) == 1 else None
             denominator = (1. if coefficients is not None else cursor.denominator if constant_denominator
                            else sum(len(row.response_ids) for row in batch))
+            batch_response_tokens = sum(len(row.response_ids) for row in batch)
+            entropy_denominator = (float(batch_response_tokens)
+                                   if coefficients is None and entropy_normalization == "token"
+                                   else denominator)
             with (ledger.context(group_id=batch_group_id, round_index=round_index)
                   if ledger is not None else nullcontext()):
                 if cursor.segment == 0 and not cursor.optimizer_ready:
@@ -560,19 +569,20 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                                 # this interval; compute only finite exponentials.
                                 bounded_d = d.clamp(min=-11., max=math.log(22.))
                                 kl = (bounded_d.expm1()-bounded_d).clamp(min=0., max=10.)
-                                objective = dual+kl_coef*kl
-                                if entropy_coef:
-                                    objective = objective-entropy_coef*entropy
+                                ppo_kl = dual+kl_coef*kl
                                 # This small scalar graph supplies the exact clipped
                                 # PPO/k3 coefficient g_logp and entropy's coefficient
-                                # (trajectory denominator or published row weight)
+                                # (trajectory denominator, token-mean entropy, or published row weight)
                                 # to the combined vocabulary adjoint above.
                                 if loss_weights is None:
-                                    loss = objective.sum()/denominator
-                                    entropy_metric,kl_metric = entropy.detach().sum()/denominator,kl.detach().sum()/denominator
+                                    loss = ppo_kl.sum()/denominator
+                                    if entropy_coef:
+                                        loss = loss-(entropy_coef/entropy_denominator)*entropy.sum()
+                                    entropy_metric = entropy.detach().sum()/entropy_denominator
+                                    kl_metric = kl.detach().sum()/denominator
                                 else:
                                     weight = loss_weights[start:end]
-                                    loss = (objective*weight).sum()
+                                    loss = ((ppo_kl-entropy_coef*entropy if entropy_coef else ppo_kl)*weight).sum()
                                     entropy_metric,kl_metric = (entropy.detach()*weight).sum(),(kl.detach()*weight).sum()
                                 metrics.add_(torch.stack((loss.detach(),entropy_metric,kl_metric)).double())
                                 # Head parameters (including a tied embedding) get
@@ -581,7 +591,7 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                                 loss.backward()
                                 if response_gradient is not None:
                                     response_gradient[start:end].copy_(states.grad)
-                                del states, logits, lp, ratio, dual, entropy, d, bounded_d, kl, objective, loss
+                                del states, logits, lp, ratio, dual, entropy, d, bounded_d, kl, ppo_kl, loss
                             if response_gradient is not None:
                                 response_hidden.backward(response_gradient)
                         del response_hidden,response_gradient

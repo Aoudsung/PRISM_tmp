@@ -70,7 +70,8 @@ def alfworld_prompt(observation, commands, memory, goal, history_length):
 def textcraft_prompt_ids(tokenizer, system_prompt, initial_raw, current_raw, memory, history_length, *, schema, goal):
     """Common public TextCraft input with the released two-pair actor memory."""
     observation = project_public_observation(tokenizer, "textcraft", current_raw,
-                                             action_schema=schema, goal=goal, initial=not memory)
+                                             action_schema=schema, goal=goal, initial=not memory,
+                                             published_baseline=True)
     if memory:
         task_context = json.loads(initial_raw)["feedback"]
         recent = memory[-history_length:] if history_length else []

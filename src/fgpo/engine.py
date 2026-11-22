@@ -417,6 +417,7 @@ class Engine:
                                              "first_batch_mean_abs_logprob_diff":None,
                                              "first_batch_max_abs_logprob_diff":None,
                                              "loss_normalization":self.config["loss_normalization"],
+                                             "entropy_normalization":self.config.get("entropy_normalization","token"),
                                              "loss_weighting":"atomic_mixed_group_trajectory","minibatch_count":0,
                                              "mixed_groups":0,"group_trajectory_denominator":denom,
                                              "homogeneous_round_bypass":True})
@@ -431,6 +432,7 @@ class Engine:
                                         constant_denominator=True,
                                         chunk_tokens=int(self.config.get("head_chunk_tokens",64)),
                                         loss_normalization=self.config["loss_normalization"],
+                                        entropy_normalization=self.config.get("entropy_normalization","token"),
                                         clip_ratio=float(self.config.get("ppo_clip_ratio",.2)),
                                         dual_clip=float(self.config.get("ppo_dual_clip",3.)),
                                         entropy_coef=float(self.config.get("entropy_coef",.001)),
@@ -446,6 +448,7 @@ class Engine:
                                 constant_denominator=False,
                                 chunk_tokens=int(self.config.get("head_chunk_tokens",64)),
                                 loss_normalization=self.config["loss_normalization"],
+                                entropy_normalization="token",
                                 clip_ratio=float(self.config.get("ppo_clip_ratio",.2)),
                                 dual_clip=float(self.config.get("ppo_dual_clip",3.)),
                                 entropy_coef=float(self.config.get("entropy_coef",.001)),

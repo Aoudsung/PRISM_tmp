@@ -1,10 +1,10 @@
-# F-GPO r3：有限时域、历史条件化的跨轨迹续值共享
+# F-GPO r5：有限时域、对称势能与未决同伴加权的跨轨迹续值共享
 
-版本日期：2026-11-17。执行协议：`fgpo-r3-published-v4`。核心算法标识：`r3_history_conditioned_peer_value_sharing`。
+版本日期：2026-11-22。执行协议：`fgpo-r5-symmetric-v1`。核心算法标识：`r5_symmetric_peer_value_sharing`。
 
-本方案研究一个具体问题：在只有公开交互记录和终局成功信号的长时程任务中，怎样利用同任务的独立同伴轨迹改善中间动作的价值估计，并控制近似状态匹配造成的误差。r3 将研究对象收敛为**有限时域下、按实际可见历史匹配的正同伴门控 Monte Carlo 续值共享**。终局成功定义训练目标，局部同态、历史距离与同伴支持度决定共享量，实际行为前缀贯穿采样、参考评分和原子混合组 PPO 更新。
+本方案在 `r3`（`fgpo-r3-published-v4`）的基础上研究：在只有公开交互记录和终局成功信号的长时程任务中，怎样利用同任务的独立同伴轨迹改善中间动作的价值估计，并消除不对称基线收缩、完赛后静态先验重复扣罚、正同伴死胡同门控及词元求和熵随步长正反馈引起的训练退化。r5 将核心估计器升级为**对称有界同伴势能与同先验平滑未决同伴权重加权的 Monte Carlo 续值共享**，配合仅按混合组响应词元数均值化的解耦熵正则与无动作词字面 XML 标签 / TextCraft 持久背包状态投影。
 
-本文与 [数学及实现契约](fgpo_math_contract.md) 共同定义现行方案，对应实现位于 `src/fgpo/`。旧 TF-BEFP、三遍图回传及随机 RMS 设计可以通过基准提交 `977bb86ac31a4b1f95ea26b7b53334be5cadf57e` 追溯。当前交付包含静态实现与源代码审阅；正式服务器训练、性能测量及完整 benchmark 结果待执行。本文以公式和源码说明估计器及优化路径，数值结果由规定的正式实验填写。
+本文与 [数学及实现契约](fgpo_math_contract.md) 共同定义现行方案，对应实现位于 `src/fgpo/`。旧 `r3/v4` 协议与旧 TF-BEFP/DAG 可分别通过提交 `d1d0f2b` 与 `977bb86ac31a4b1f95ea26b7b53334be5cadf57e` 追溯。当前交付包含 r5 静态实现、契约文档与 Colab 1.5B 验证配置；实际训练与官方评测在远程授权计算节点完成。
 
 ## 1. 2026 年研究进展与 2027 年研究定位
 
@@ -60,7 +60,7 @@ $$
 
 其中 $y_{k,t}$ 是包含实际采样终止符的响应词元序列，$C$ 是实现中的序列化与有限窗口算子。理论分析可以条件化于完整 $h_t$，模型实际决策条件始终是 $p_t$。上下文上限默认 32,768 词元；完整公开记录超出此容量后，actor 输入保留初始锚定块与最近能够容纳的完整交互轮次。
 
-`public.py` 只接受标准公开输入。ALFWorld 采用三段式整数帧拼接 `user_prefix_ids + pure_ids + user_suffix_ids`（包含步数计数与滤除 `"help"` 的无引号可执行命令清单），保持 `observation_body_offset = len(user_prefix_ids)` 使 `TurnBlock` 与 `SegmentRecord` 的 `observation_span` 精确覆盖纯观测词元切片；响应采用剥离闭合 `<think>` 后提取唯一闭合 `<action>` 小写单行指令的确定性解析。AppWorld 保留初始任务、系统说明及初始 API 引导信息，后续过长 stdout 在入史时进行固定的首尾截取。空 stdout 在表示和消息中使用明确占位文本。内部状态哈希、评估器中间成功标签和隐藏数据库状态不进入模型或匹配特征。
+`public.py` 只接受标准公开输入。ALFWorld 采用三段式整数帧拼接 `user_prefix_ids + pure_ids + user_suffix_ids`（包含步数计数、滤除 `"help"` 的无引号可执行命令清单以及不含具体动作词的字面标签说明 `Enclose concise reasoning in literal <think> and </think> tags, then enclose one exact command in literal <action> and </action> tags.`），保持 `observation_body_offset = len(user_prefix_ids)` 使 `TurnBlock` 与 `SegmentRecord` 的 `observation_span` 精确覆盖纯观测词元切片；TextCraft 在 `pure_ids` 后以独立整数元组拼接同款字面标签尾缀（避免 BPE 跨 JSON 边界合并），并将 `representation_ids`（含 `initial_representation_ids`）限定为持久可见背包文本 `"inventory"` 以剥离瞬态报错 `"feedback"`，单步上限对齐 `512` tokens；响应采用剥离完整闭合 `<think>...</think>` 后提取唯一闭合 `<action>...</action>` 小写单行指令并严格拒斥未闭合 `<think>` 的确定性解析；WebShop 保持原生简洁无 `<think>` 尾缀接口。AppWorld 保留初始任务、系统说明及初始 API 引导信息，后续过长 stdout 在入史时进行固定的首尾截取。空 stdout 在表示和消息中使用明确占位文本。内部状态哈希、评估器中间成功标签和隐藏数据库状态不进入模型或匹配特征。
 
 `filtration.py` 在整数词元空间构建不可变块。给定生成预算 $M_{\mathrm{gen}}$（默认 ALFWorld 512、AppWorld 1024），提示上限为 $C_{\mathrm{prompt}}=C_{\max}-M_{\mathrm{gen}}$；滚动时优先将最近完整轮次截到 $0.75C_{\mathrm{prompt}}$ 的水位。若初始锚定块与最新完整轮次超过这一预留水位，则保留这两个必要块，并允许使用至提示上限；超过提示上限时显式报错。整个过程按完整轮次处理。
 
@@ -123,36 +123,36 @@ $$
 
 每个 $q_j$ 都是同伴轨迹真实终局成功的缩放值。一次计算出的 $\mu$ 永远不会成为另一次 $\mu$ 的输入。支持质量同时反映邻居数量与距离；相同的邻居数可以有不同的 $S$。其数值作为连续收缩量使用，日志中可直接解释，含义限于当前组的可观测证据。
 
-### 3.3 动作前基线
+### 3.3 对称动作前基线、续值共享与未决同伴加权
 
-先计算同任务留一轨迹先验，再构造动作前基线：
+先计算同任务留一轨迹先验与动作前/后对称共享强度（$\kappa=1, \lambda_{\max}=0.5$，移除正同伴续值门控）：
 
 $$
 \bar q_{-k}=\frac{1}{K-1}\sum_{j\ne k}q_j,\qquad
-b_{k,t}=\frac{\sum_j w_{kj,t}q_j+\kappa\bar q_{-k}}
-                   {S_{k,t}+\kappa},\qquad \kappa=1.
+\lambda^{\mathrm{pre}}_{k,t}=\lambda_{\max}\frac{S_{k,t}}{S_{k,t}+\kappa},\qquad
+\lambda^{\mathrm{post}}_{k,t}=\mathbf 1[t<T_k-1]\,\lambda_{\max}\frac{S_{k,t+1}}{S_{k,t+1}+\kappa},
 $$
 
-无局部支持时，基线自然等于任务级留一均值。已终止同伴仍可贡献任务级结果先验，其作用不会变成某个后续深度的虚构状态。基线只读取目标动作前信息和独立同伴数据；目标当前动作、当前动作后的观测及自身最终成败都不参与基线计算。
-
-### 3.4 正同伴门控下一状态共享与最终优势
-
-记下一深度存活同伴中的成功轨迹计数为 $N^+_{-k,t+1}=\sum_{j\in\mathcal P_{-k,t+1}}Y_j$。非终末动作的共享权重由正同伴指示、上限参数 $\lambda_{\max}=0.5$ 与下一状态支持质量共同决定：
-
 $$
-\lambda_{k,t}=\mathbf 1[N^+_{-k,t+1}\ge 1]\,\lambda_{\max}\frac{S_{k,t+1}}{S_{k,t+1}+\kappa},
-\qquad \lambda_{\max}=0.5.
+\tilde b_{k,t}=(1-\lambda^{\mathrm{pre}}_{k,t})\bar q_{-k}+\lambda^{\mathrm{pre}}_{k,t}\mu_{k,t},\qquad
+Z_{k,t}=(1-\lambda^{\mathrm{post}}_{k,t})G^{\mathrm{MC}}_{k,t}+\lambda^{\mathrm{post}}_{k,t}\bigl(r_{k,t}+\mu_{k,t+1}\bigr).
 $$
 
-终末动作规定 $\lambda_{k,t}=0$；当下一深度没有存活的成功同伴（$N^+_{-k,t+1}=0$）时同样令 $\lambda_{k,t}=0$，完整保留唯一胜者及领先轨迹在其余同伴淘汰后的终局回报。下一状态表示与正同伴指示均源自当前真实转移后的公开信息；$\lambda$ 不读取目标轨迹在这之后的动作或终局结果，也不使用预测误差调权。定义
+记深度 $t$ 前已提前获胜完赛的留一同伴数为 $C^+_{-k,t}=\sum_{j\neq k}(1-\mathbf 1[t<T_j])Y_j$，定义同先验平滑的未决同伴权重与最终步优势：
 
 $$
-Z_{k,t}=(1-\lambda_{k,t})G^{\mathrm{MC}}_{k,t}
-       +\lambda_{k,t}\bigl(r_{k,t}+\mu_{k,t+1}\bigr),\qquad
-A_{k,t}=\frac{Z_{k,t}-b_{k,t}}{R}.
+\omega_{-k,t}=\frac{(K-1-C^+_{-k,t})+\kappa}{(K-1)+\kappa},\qquad
+\tilde A_{k,t}=\frac{\omega_{-k,t}}{R}\bigl(Z_{k,t}-\tilde b_{k,t}\bigr).
 $$
 
-默认公式在没有下一状态支持或没有存活正同伴时恰好使用自身 Monte Carlo 回报；随着支持增加，使用有限幅度的同伴续值。末步完整保留官方终局回报。同质组直接零步返回；混合组信用量在参数更新前计算并冻结。
+基线 $\tilde b_{k,t}$ 与缩放 $\omega_{-k,t}$ 只读取目标动作前公开信息与同伴数据，在采样 $y_{k,t}$ 前完全确定。因 $\lambda^{\mathrm{pre}}$ 与 $\lambda^{\mathrm{post}}$ 对称使用同一 $\lambda_{\max}$，定义有界同伴势能 $\Phi_{-k,t}=\lambda^{\mathrm{pre}}_{k,t}(\mu_{k,t}-\bar q_{-k})$，则有精确伸缩恒等式：
+
+$$
+Z_{k,t}-\tilde b_{k,t}=(1-\lambda^{\mathrm{post}}_{k,t})(q_k-\bar q_{-k})+\bigl(\Phi_{-k,t+1}-\Phi_{-k,t}\bigr),\qquad
+\sum_{t=0}^{T_k-1}(\Phi_{-k,t+1}-\Phi_{-k,t})\equiv 0.
+$$
+
+无需令 $\lambda_{\max}=1$ 即可严格消去势能累加偏移；且由于 $1-\lambda^{\mathrm{post}}_{k,t}\in[0.5,1]$，胜轨不会因过度收缩变成负优势，高胜率组中全部 $M$ 条胜轨完赛后孤立漫游败轨步精确收敛为样本方差 $-\frac{K}{K-1}\hat{p}(1-\hat{p})\in[-0.286,-0.125]$（既削减 `7/8` 组 `-1.0` 重复扣罚洪峰 8 倍，又对晚期乱码维持严格负惩罚）。同质组直接零步返回；混合组信用量在参数更新前计算并冻结。
 
 实现按 `[depth, trajectory, feature]` 组织表示，用批量 Gram 矩阵一次形成所有同深度距离，再按 `[depth, target, peer]` 归约。时间复杂度为 $O(HK^2D)$，权重存储为 $O(HK^2)$。表示使用 CPU float32，信用加权与回报归约使用 CPU float64，避免大量 Python 子图循环与小规模 GPU 同步。
 
@@ -166,25 +166,13 @@ $$
 \psi_{k,t}=\left.\nabla_\theta\log\pi_\theta(y_{k,t}\mid p_{k,t})\right|_{\theta=\theta_{\mathrm{old}}}.
 $$
 
-由于 $b_{k,t}$ 在当前动作前已经确定，
-
-$$
-\mathbb E[b_{k,t}\psi_{k,t}\mid h_{k,t},D_{-k}]
-=b_{k,t}\sum_y\pi_{\mathrm{old}}(y\mid p_{k,t})
-\nabla\log\pi_{\mathrm{old}}(y\mid p_{k,t})=0.
-$$
-
-该结论针对行为策略采样点的基线 score 项；参数更新后的 PPO、多轮优化和近似续值目标需要分别分析。它也没有要求样本内平均优势为零。整个响应的 score 等于其实际采样词元 score 之和，因而与本文的轨迹损失求和口径一致。
-
-### 4.2 共享目标的偏差恒等式
-
-令 $V^{\pi_{\mathrm{old}}}(h_{t+1})$ 为相同有限时域、相同行为策略下的真实后续回报均值。分析条件包含：同伴与目标后续随机性在固定初态下独立；$\lambda_t$ 仅依赖当前已实现转移和同伴数据；环境转移遵循本次 rollout 的条件分布。把终末后继值定义为零，则
+在固定任务初态、冻结的行为策略 $\pi_{\mathrm{old}}$ 和参考参数下，由于 $\omega_{-k,t}$ 与 $\tilde b_{k,t}$ 均在当前动作前确定，有精确零期望恒等式 $\mathbb E[\omega_{-k,t}\tilde b_{k,t}\psi_{k,t}\mid h_{k,t},D_{-k}]=0$。进一步，令 $V^{\pi_{\mathrm{old}}}(h_{t+1})$ 为相同有限时域、相同行为策略下的真实后续回报均值，在独立与转移条件满足时，有
 
 $$
 \begin{aligned}
 \Delta_t
-&=\mathbb E[(Z_t-b_t)\psi_t]-\mathbb E[G^{\mathrm{MC}}_t\psi_t]\\
-&=\mathbb E\!\left[\lambda_t
+&=\mathbb E[\omega_t(Z_t-\tilde b_t)\psi_t]-\mathbb E[\omega_t G^{\mathrm{MC}}_t\psi_t]\\
+&=\mathbb E\!\left[\omega_t\lambda^{\mathrm{post}}_t
 \bigl(\mu_{-k,t+1}-V^{\pi_{\mathrm{old}}}(h_{t+1})\bigr)\psi_t\right].
 \end{aligned}
 $$
@@ -211,9 +199,7 @@ $$
 
 若某组所有 $Y_j$ 相等（全失败 $0/8$ 或全成功 $8/8$），该组作为同质组满足先验、基线和目标全部相等，任务优势严格为零，直接免除特征提取返回零优势。熵正则提供有限的分布扩散，参考正则约束偏离；二者在混合组批次中发挥作用，整体算法在无混合组轮次直接执行零步旁路而不靠纯正则更新参数。`all_zero_groups`、`all_one_groups` 与 `homogeneous_round_bypass` 会直接记录这一状态。
 
-一个失败轨迹中的动作可以因下一状态的成功同伴获得正优势，具体条件是 $N^+_{-k,t+1}\ge 1$ 且 $\lambda_{k,t}\mu_{k,t+1}>b_{k,t}$。这种条件将“得到正信用”的含义绑定到可计算估计。它也说明了良好前缀仍可能有负优势：设 $K=8$，目标最终失败，另七条轨迹成功；当前及下一深度完全匹配且均非终态。此时 $S_t=S_{t+1}=7$、$b_t=R$、$\mu_{t+1}=R$、$N^+_{-k,t+1}=7\ge 1$，默认 $\lambda_{\max}=0.5$ 给出 $\lambda_t=7/16$，于是 $A_t=-9/16$。即使这一步是共同的必要前缀，目标自身失败回报仍保留了主要权重。
-
-研究用官方任务表现和留出终局预测检验共享机制的作用。`positive_failed_steps` 与 `positive_peer_gated_steps` 分别描述失败轨迹获得正优势及无存活正同伴时被门控的次数；关于有效动作信用的解释依照上述共享条件，并与任务结果一同呈现。
+一个失败轨迹中的动作可以因下一状态的成功同伴获得正优势，具体条件是 $\lambda^{\mathrm{post}}_{k,t}\mu_{k,t+1} + (1 - \lambda^{\mathrm{post}}_{k,t})q_k > \tilde b_{k,t}$。在 `fgpo` 移除正同伴门控后，即使仅有一条胜轨（$M=1$）进入同伴共享的死胡同（$S_{w,t+1}>0,\mu_{w,t+1}=0$），其无效步优势也自动从 `+1.0` 收缩至 $1-\lambda^{\mathrm{post}}_{w,t}\in[0.5,1)$，不再盲目全额强化稀疏长胜轨中的空转废步。`positive_failed_steps` 与 `mean_pending_weight` 用于解释失败轨迹正信用位置与完赛未决权重变化。
 
 ## 5. PPO 更新与原子混合组权重
 
@@ -228,15 +214,16 @@ $$
 
 这些是保存的行为样本上的正则化 surrogate。裁剪、抽样参考项和近似续值共同决定实际更新；训练并不宣称每次参数变化都等于官方成功目标的精确梯度。默认全参数 bf16/SDPA、无 dropout，AdamW 学习率 $10^{-6}$、weight decay $0.01$，全局梯度范数裁剪 $1$。
 
-F-GPO 及其自身消融采用 `loss_normalization="trajectory"` 与原子混合组批处理。一轮首先筛选满足 $1\le\sum_{k\in g}Y_k\le K-1$ 的混合结果组 $\mathcal G_{\mathrm{mix}}$；若 $M=|\mathcal G_{\mathrm{mix}}|=0$，整轮跳过参考前向、PPO 与 AdamW（执行 `0` 次优化器步）；若 $M\ge 1$，每个完整的 $K=8$ 轨迹混合组 $m\in\mathcal G_{\mathrm{mix}}$ 作为一个独立原子批次并固定分母
+F-GPO 及其自身消融采用 `loss_normalization="trajectory"` 与 `entropy_normalization="token"` 的原子混合组批处理。一轮首先筛选满足 $1\le\sum_{k\in g}Y_k\le K-1$ 的混合结果组 $\mathcal G_{\mathrm{mix}}$；若 $M=|\mathcal G_{\mathrm{mix}}|=0$，整轮跳过参考前向、PPO 与 AdamW（执行 `0` 次优化器步）；若 $M\ge 1$，每个完整的 $K=8$ 轨迹混合组 $m\in\mathcal G_{\mathrm{mix}}$ 作为一个独立原子批次，记该批次总响应词元数为 $N_{\mathrm{tok},m}=|\mathcal B_m|$，保持策略与 KL 项固定轨迹分母 $Z_m=K=8$，而将不含基线的条件熵正则按响应词元数均值化：
 
 $$
 Z_m=K=8,\qquad
 \mathcal L_m=\frac{1}{Z_m}
-\sum_{i\in\mathcal B_m}\bigl(\ell^{\mathrm{PPO}}_i-\alpha H_i+\beta k_i\bigr).
+\sum_{i\in\mathcal B_m}\bigl(\ell^{\mathrm{PPO}}_i+\beta k_i\bigr)
+-\frac{\alpha}{N_{\mathrm{tok},m}}\sum_{i\in\mathcal B_m}H_i.
 $$
 
-在每个组内使用词元求和，保留长轨迹的更多决策项，同时确保每个混合组内部正负轨迹形成对称的完整对照。参数在每个混合组更新后变化，后续混合组与重入段按当前参数重新计算。三个已发表 baseline 保留作者 virtual-rank / microbatch 内的 token mean 及其聚合权重、优势归一化和 minibatch 设置；本节的混合组原子轨迹归一化是 F-GPO 的方法定义。
+策略与 KL 项继续使用词元求和，保留第 4.1 节基线零期望恒等式及对未闭合乱码失败步的完整惩罚；仅将条件熵改为组内词元均值，切断大词表（$V=151,936$）下因输出拉长引起的熵梯度线性正反馈。参数在每个混合组更新后变化，后续混合组与重入段按当前参数重新计算。三个已发表 baseline 保留作者 virtual-rank / microbatch 内的 token mean 及其聚合权重、优势归一化和 minibatch 设置。
 
 对 baseline 的一次 optimizer update，令 $W$ 为来源配方的 virtual world size，$A$ 为固定 gradient accumulation，$T_{r,b}$ 为 rank $r$ 上 microbatch $b$ 的真实响应词元数，则对应目标为
 
@@ -378,7 +365,7 @@ $$
 
 ## 8. 运行身份与交付状态
 
-协议 fgpo-r3-published-v4 的运行按 comparison 与 ablation 分目录保存。同一 study 可保存各自的单元和汇总，并引用已有的完整 F-GPO 结果。当前启动入口由[实验排程](fgpo_experiment_schedule_current.md)指向各主机配置。
+协议 `fgpo-r5-symmetric-v1` 的运行按 comparison 与 ablation 分目录保存。同一 study 可保存各自的单元和汇总，并引用已有的完整 F-GPO 结果。当前启动入口由[实验排程](fgpo_experiment_schedule_current.md)及 `configs/fgpo-r5-1p5b-*-colab.json` 指向各主机与 Colab 配置。
 
 恢复由 `effective_training_identity/require_training_identity` 约束：方法及发布配方来源、模型、任务、种子、历史、采样、信用、PPO 和 Adam 的有效语义保持一致。GPU 放置、KV 容量、offload、head/表示微批、staging、保存周期/分片、原始文件保留与主机预留等资源项可以调整；保存的 CUDA RNG 流数量保持一致。完成采集组、参考概率、优势与更新 cursor 在明确操作边界恢复。
 

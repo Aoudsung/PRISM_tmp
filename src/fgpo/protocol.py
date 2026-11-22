@@ -8,21 +8,23 @@ from .textcraft import (TEXTCRAFT_1P5B_FORMAT_STUDY, TEXTCRAFT_CONTEXT_TOKENS, T
 from .webshop import PAIRED_TRAIN_ROUNDS, TRAIN_GROUPS, TRAIN_ROUNDS, VALIDATION_SESSIONS, VALIDATION_WORKERS
 
 
-PROTOCOL = "fgpo-r3-published-v4"
+PROTOCOL = "fgpo-r5-symmetric-v1"
 TEXTCRAFT_RESPONSE192_STUDY = "textcraft-v4-response192-v1"
 TEXTCRAFT_RESPONSE192_TOKENS = 192
 WEBSHOP_PAIRED_STUDY = "webshop-150-paired-v1"
 WEBSHOP_JOINT_STUDY = "webshop-150-v4-joint-v1"
 WEBSHOP_JOINT_FROM_BASE_STUDY = "webshop-150-joint-from-base-v1"
 WEBSHOP_1P5B_ADAPTED_STUDY = "webshop-150-1p5b-joint-adapted-from-base-v1"
+WEBSHOP_R5_150_STUDY = "webshop-150-r5-from-base-v1"
 WEBSHOP_JOINT_FROM_BASE_STUDIES = (WEBSHOP_JOINT_FROM_BASE_STUDY, WEBSHOP_1P5B_ADAPTED_STUDY)
+WEBSHOP_FROM_BASE_STUDIES = (*WEBSHOP_JOINT_FROM_BASE_STUDIES, WEBSHOP_R5_150_STUDY)
 WEBSHOP_JOINT_SEED = 1
 WEBSHOP_JOINT_OVERRIDES = {"entropy_coef": .002, "credit_transfer_max": .25}
 WEBSHOP_RADIUS_STUDY = "webshop-150-v4-radius-v1"
 WEBSHOP_RADII = (.05, .10)
 WEBSHOP_RADIUS_OVERRIDES = {"entropy_coef": .002, "credit_prior_weight": .5, "credit_transfer_max": .125}
 WEBSHOP_CONTINUATION_STUDIES = (WEBSHOP_PAIRED_STUDY, WEBSHOP_JOINT_STUDY, WEBSHOP_RADIUS_STUDY)
-WEBSHOP_150_STUDIES = (*WEBSHOP_CONTINUATION_STUDIES, *WEBSHOP_JOINT_FROM_BASE_STUDIES)
+WEBSHOP_150_STUDIES = (*WEBSHOP_CONTINUATION_STUDIES, *WEBSHOP_FROM_BASE_STUDIES)
 WEBSHOP_FIXED_MENU = "WebShop_public_search_menu_matches_native_commands"
 EXACT_FIRST_HIT_METHOD = "fgpo_exact_first_hit"
 WEBSHOP_PAIRED_METHODS = ("fgpo", EXACT_FIRST_HIT_METHOD)
@@ -52,10 +54,12 @@ _OWN_DEFAULTS = {
     "learning_rate": 1e-6, "weight_decay": .01, "optimizer_betas": (.9, .999),
     "optimizer_eps": 1e-8, "gamma": 1., "reward_scale": 10.,
     "syntax_reward_penalty": 0., "ppo_minibatch_rows": None, "ppo_epochs": 1,
-    "loss_normalization": "trajectory", "ppo_clip_ratio": .2, "ppo_dual_clip": 3.,
+    "loss_normalization": "trajectory", "entropy_normalization": "token",
+    "ppo_clip_ratio": .2, "ppo_dual_clip": 3.,
     "entropy_coef": .001, "kl_coef": .01, "max_grad_norm": 1.,
     "temperature": 1., "eval_temperature": .4, "top_p": 1., "eval_top_p": 1.,
-    "history_length": None, "shuffle": False, "credit_transfer_max": .5,
+    "history_length": None, "shuffle": False,
+    "credit_radius": .10, "credit_prior_weight": 1., "credit_transfer_max": .5,
 }
 _RECIPE_ALIASES = {
     "learning_rate": "lr", "optimizer_betas": "betas", "optimizer_eps": "adam_eps",
@@ -145,6 +149,7 @@ def require_protocol(config):
     webshop_150 = study in WEBSHOP_150_STUDIES
     joint = study in (WEBSHOP_JOINT_STUDY, *WEBSHOP_JOINT_FROM_BASE_STUDIES)
     adapted_1p5b = study == WEBSHOP_1P5B_ADAPTED_STUDY
+    r5_webshop = study == WEBSHOP_R5_150_STUDY
     radius_study = study == WEBSHOP_RADIUS_STUDY
     if study is not None and not webshop_150 and not textcraft_response192 and not textcraft_format:
         raise ValueError(f"Unknown study protocol {study!r}")
@@ -157,7 +162,7 @@ def require_protocol(config):
                 config.get("seed", WEBSHOP_JOINT_SEED) != WEBSHOP_JOINT_SEED
                 or tuple(config.get("seeds", (WEBSHOP_JOINT_SEED,))) != (WEBSHOP_JOINT_SEED,)):
             raise ValueError(f"{study} uses seed 1")
-        if study in WEBSHOP_JOINT_FROM_BASE_STUDIES and not set(config.get("seeds", ())).issubset((0, 1, 2)):
+        if study in WEBSHOP_FROM_BASE_STUDIES and not set(config.get("seeds", ())).issubset((0, 1, 2)):
             raise ValueError(f"{study} uses seeds 0–2")
     elif EXACT_FIRST_HIT_METHOD in methods:
         raise ValueError("Exact first-hit credit is reserved for the 150-round paired WebShop study")
@@ -176,7 +181,7 @@ def require_protocol(config):
     for benchmark, method in pairs:
         options = resolve_method_config(config, method, benchmark)
         effective_study = options.get("study_protocol")
-        from_base_studies = (*WEBSHOP_JOINT_FROM_BASE_STUDIES, TEXTCRAFT_1P5B_FORMAT_STUDY)
+        from_base_studies = (*WEBSHOP_FROM_BASE_STUDIES, TEXTCRAFT_1P5B_FORMAT_STUDY)
         if study != effective_study and (study in from_base_studies or effective_study in from_base_studies):
             raise ValueError("Select the study protocol at the experiment level")
         output_limit = TEXTCRAFT_RESPONSE192_TOKENS if textcraft_response192 else OUTPUT_LIMITS[benchmark]
@@ -206,10 +211,12 @@ def require_protocol(config):
                 raise ValueError(f"{study} training recipe differs at " + ", ".join(changed))
         if method in OWN_METHODS:
             if (options["gamma"] != 1. or options["syntax_reward_penalty"] != 0.
-                    or options["loss_normalization"] != "trajectory" or options["history_length"] is not None
+                    or options["loss_normalization"] != "trajectory"
+                    or options.get("entropy_normalization") != "token"
+                    or options["history_length"] is not None
                     or int(options["trajectories"]) != 8 or options["ppo_minibatch_rows"] is not None
                     or int(options["output_tokens"]) != output_limit):
-                raise ValueError("Own V4 methods require undiscounted success, K=8 atomic mixed groups, official output limits and trajectory loss")
+                raise ValueError("Own r5 methods require undiscounted success, K=8 atomic mixed groups, official output limits, trajectory PPO loss, and token-mean entropy")
             rounds = PAIRED_TRAIN_ROUNDS if webshop_150 else TRAIN_ROUNDS
             if benchmark == "webshop" and (
                     options["rounds"] != rounds or options["groups"] != TRAIN_GROUPS
@@ -223,13 +230,18 @@ def require_protocol(config):
                     required.update(WEBSHOP_JOINT_OVERRIDES)
                 if adapted_1p5b:
                     required.update(credit_radius=.05, credit_prior_weight=.5)
+                if r5_webshop:
+                    radius = options.get("credit_radius")
+                    if radius not in WEBSHOP_RADII:
+                        raise ValueError(f"{study} requires the selected WebShop radius (.05 or .10)")
+                    required.update(credit_radius=radius)
                 if radius_study:
                     radius = options.get("credit_radius")
                     if radius not in WEBSHOP_RADII:
                         raise ValueError(f"{study} requires the selected WebShop radius (.05 or .10)")
                     required.update(WEBSHOP_RADIUS_OVERRIDES, credit_radius=radius)
                 changed = [key for key, value in required.items()
-                           if not _same_value(options.get(key) if adapted_1p5b else options.get(key, value), value)]
+                           if not _same_value(options.get(key) if (adapted_1p5b or r5_webshop) else options.get(key, value), value)]
                 if changed:
                     raise ValueError(f"{study} training recipe differs at " + ", ".join(changed))
             continue
@@ -254,6 +266,7 @@ def effective_training_identity(config):
         "max_context_tokens": int(options.get("max_context_tokens", 32768)),
         "rollout": "bounded_actor_prefix" if method in OWN_METHODS else "released_native_prompt",
         "constant_denominator": method in OWN_METHODS,
+        "entropy_normalization": options.get("entropy_normalization", "token") if method in OWN_METHODS else "token",
         "runtime": "pytorch_full_finetune_cpu_fp32_adamw_published_virtual_batch_v4",
     }
     for key in ("rounds", "groups", "trajectories", "output_tokens", "learning_rate", "weight_decay",
@@ -267,14 +280,16 @@ def effective_training_identity(config):
         identity.update(credit_radius=float(options.get("credit_radius", .10)),
                         credit_prior_weight=float(options.get("credit_prior_weight", 1.)),
                         credit_transfer_max=float(options.get("credit_transfer_max", .5)),
+                        credit_estimator=("exact_first_hit_v4" if method == EXACT_FIRST_HIT_METHOD
+                                          else "r5_symmetric_potential_pending_winner"),
                         own_batching="atomic_mixed_group",
                         group_denominator=int(options["trajectories"]),
                         homogeneous_group_bypass=True,
-                        positive_peer_continuation_gate=method != "fgpo_no_transfer",
+                        positive_peer_continuation_gate=(method == EXACT_FIRST_HIT_METHOD),
                         local_observation_matching=("exact_token_id" if method == EXACT_FIRST_HIT_METHOD
                                                     or benchmark in EXACT_OBSERVATION_BENCHMARKS
                                                     else "dual_view_cosine"),
-                        alfworld_frame="three_block_step_unquoted_commands_strict_tags_v4" if benchmark == "alfworld" else None)
+                        alfworld_frame="three_block_step_unquoted_commands_literal_xml_tags_r5" if benchmark == "alfworld" else None)
         if benchmark == "webshop":
             identity["webshop_recipe"] = {
                 "source_commit": UPSTREAM_COMMIT, "observation_mode": "text_rich", "use_small": True,
@@ -313,6 +328,12 @@ def effective_training_identity(config):
             "action": "single_tagged_native_command_or_empty_native_rejection",
             "terminal_outcome": "native_worker_won", "environment_seed": "seed_times_1000003_plus_episode_ordinal",
         }
+        if method in OWN_METHODS:
+            identity["textcraft_recipe"].update(
+                observation_representation="exact_visible_inventory_ids",
+                user_suffix="literal_xml_tags_r5",
+                strict_think_closure=True,
+            )
         if options.get("study_protocol") == TEXTCRAFT_1P5B_FORMAT_STUDY:
             identity["textcraft_recipe"]["public_system_prompt_suffix"] = "\n" + TEXTCRAFT_FORMAT_EXAMPLE
     return identity
