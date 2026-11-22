@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn.functional as F
 
-from .protocol import OWN_METHODS
+from .protocol import EXACT_FIRST_HIT_METHOD, OWN_METHODS
 from .public import EXACT_OBSERVATION_BENCHMARKS, HORIZONS
 
 
@@ -93,7 +93,8 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None, round_ind
     own = method in OWN_METHODS
     benchmark = trajectories[0].benchmark if trajectories else config.get("benchmark")
     needs_history = own and method != "fgpo_obs_only"
-    needs_obs = own and benchmark in HORIZONS and benchmark not in EXACT_OBSERVATION_BENCHMARKS
+    needs_obs = (own and method != EXACT_FIRST_HIT_METHOD
+                 and benchmark in HORIZONS and benchmark not in EXACT_OBSERVATION_BENCHMARKS)
     scale = float(config.get("reward_scale", 10.))
     chunk = int(config.get("head_chunk_tokens", 64))
     ledger = getattr(policy, "ledger", None)

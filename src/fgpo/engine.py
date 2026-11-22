@@ -23,8 +23,8 @@ from .public import HORIZONS,TERMINATORS
 from .webshop import VALIDATION_WORKERS
 from .textcraft import TEXTCRAFT_COUNTS
 from . import checkpoint
-from .protocol import (PROTOCOL, OWN_METHODS, METHODS, METHOD_ROLES, require_protocol,
-                       resolve_method_config, effective_training_identity, require_training_identity)
+from .protocol import (PROTOCOL, OWN_METHODS, METHODS, METHOD_ROLES, EXACT_FIRST_HIT_METHOD, require_protocol,
+                       resolve_method_config, effective_training_identity, require_training_identity, study_identity)
 
 
 def _mixed_groups(groups):
@@ -64,6 +64,7 @@ class Engine:
         if method not in METHODS:
             raise ValueError(f"Unknown formal study method {method!r}")
         self.method,self.benchmark,self.seed = method,self.config["benchmark"],int(self.config["seed"])
+        self.study = study_identity(self.config)
         self.appworld_eval_width = appworld_eval_batch_size(self.config)
         self.hgpo_rollout_width = appworld_hgpo_rollout_groups(self.config)
         self.fgpo_rollout_width = appworld_fgpo_rollout_groups(self.config)
@@ -277,6 +278,8 @@ class Engine:
                 self.rng.shuffle(rows)
             self.state.task_order = rows
         tasks = self.state.task_order
+        if self.study and self.benchmark == "webshop" and tasks != list(task_rows):
+            raise ValueError("Paired WebShop training order differs from the saved official task draw")
         self._install_signals()
         try:
             rounds = int(self.config["rounds"])
@@ -477,7 +480,7 @@ class Engine:
             "successes":sum(t.official_success for t in trajectories),"trajectories":len(trajectories),
             "method_role":METHOD_ROLES[self.method],
             "protocol":PROTOCOL,"optimizer_steps":self.optimizer.steps,"costs":self.ledger.snapshot(),
-            "metrics":self.state.update_cursor.metrics}
+            "metrics":self.state.update_cursor.metrics, **self.study}
         if self.state.published_batch_plan is not None:
             payload["published_batch"] = self.state.published_batch_plan["diagnostics"]
         if self.method in OWN_METHODS:
@@ -488,7 +491,9 @@ class Engine:
             steps = [row for t in trajectories for row in t.steps]
             total_steps = len(steps)
             syntax_valid = sum(bool(row.syntax_valid) for row in steps)
-            admissible_valid = sum(bool(row.environment_info.get("valid",False)) for row in steps)
+            admissibility = [row.environment_info.get("valid") for row in steps]
+            admissible_observed = sum(isinstance(valid, bool) for valid in admissibility)
+            admissible_valid = sum(valid is True for valid in admissibility)
             unterminated = sum((not row.response_ids) or (row.response_ids[-1] not in TERMINATORS) for row in steps)
             scored = (0 if self.state.reference_data is None
                       else int(self.state.reference_data.diagnostics.get("scored_trajectories",sum(len(g.trajectories) for g in mixed))))
@@ -504,15 +509,18 @@ class Engine:
                 "total_steps":total_steps,
                 "syntax_valid_steps":syntax_valid,
                 "syntax_valid_fraction":(syntax_valid/total_steps) if total_steps else 0.,
-                "admissible_valid_steps":admissible_valid,
-                "admissible_valid_fraction":(admissible_valid/total_steps) if total_steps else 0.,
+                "admissible_observed_steps":admissible_observed,
+                "admissible_valid_steps":admissible_valid if admissible_observed else None,
+                "admissible_valid_fraction":(admissible_valid/admissible_observed) if admissible_observed else None,
                 "unterminated_response_steps":unterminated,
                 "positive_peer_gated_steps":sum(int(item.get("positive_peer_gated_steps") or 0) for item in self.state.credit_diagnostics.values()),
                 "nonzero_advantages":sum(abs(v)>0 for v in self.state.advantages.values()),
                 "positive_failed_steps":sum(self.state.advantages[row.step_id]>0 for t in trajectories if not t.official_success for row in t.steps),
                 "intrinsic_reward_enabled":False,"credit_groups":self.state.credit_diagnostics,
                 "credit_diagnostic_scope":"held_out_outcomes_include_Bernoulli_noise_not_true_Q",
-                "claim_scope":"same_depth_history_support_and_nonrecursive_continuation_sharing",
+                "claim_scope":("cross_depth_exact_observation_support_and_nonrecursive_first_hit_continuation_sharing"
+                    if self.method == EXACT_FIRST_HIT_METHOD else
+                    "same_depth_history_support_and_nonrecursive_continuation_sharing"),
                 "positive_failed_steps_interpretation":"credit_assignment_count_not_verified_helpful_actions",
                 "additional_diagnostic_rollouts":0}
         with (self.output_dir/"training.jsonl").open("ab") as handle:
@@ -543,6 +551,8 @@ class Engine:
                     for key,value in (("protocol",PROTOCOL),("method",self.method),("benchmark",self.benchmark),("seed",self.seed),("split",split)):
                         if row[key]!=value:
                             raise ValueError("Persisted official evaluation belongs to another study identity")
+                    if row.get("study_protocol") != self.config.get("study_protocol"):
+                        raise ValueError("Persisted official evaluation belongs to another study budget")
                     version = row.get("model_version") if catalog is not None else row.get("model_version",self.optimizer.steps)
                     if version != self.optimizer.steps:
                         raise ValueError("Official evaluation journal belongs to a different actor update")
@@ -573,7 +583,7 @@ class Engine:
                 status = self._evaluate_batched(catalog,env_factory,split,path,completed,trajectory_ids,evaluation_config)
                 return {"status":status,"protocol":PROTOCOL,
                         "records":[completed[task_id] for task_id in catalog if task_id in completed],
-                        "method":self.method,"benchmark":self.benchmark,"seed":self.seed,"split":split}
+                        "method":self.method,"benchmark":self.benchmark,"seed":self.seed,"split":split, **self.study}
             for index,task in enumerate(task_rows):
                 if task["task_id"] in completed:
                     records.append(completed[task["task_id"]])
@@ -647,7 +657,7 @@ class Engine:
         from .rollout import collect_evaluation
 
         identity = {"protocol":PROTOCOL,"method":self.method,"benchmark":self.benchmark,
-                    "seed":self.seed,"split":split,"model_version":self.optimizer.steps}
+                    "seed":self.seed,"split":split,"model_version":self.optimizer.steps, **self.study}
 
         def publish(spec,episode):
             row = {"task_id":spec.task_id,**asdict(episode),**identity}
@@ -702,7 +712,7 @@ class Engine:
             "rounds_completed":self.state.round,"phase":self.state.phase,
             "optimizer_steps":self.optimizer.steps if self.optimizer else 0,
             "costs_scope":"initialization_and_training_before_official_evaluation",
-            "costs":self.ledger.snapshot()}
+            "costs":self.ledger.snapshot(), **self.study}
 
     def save_checkpoint(self,path):
         if self._storage_finalized:
@@ -857,6 +867,8 @@ class Engine:
                 bucket_mib=float(self.config.get("optimizer_bucket_mib",64)),
                 pin_memory=bool(self.config.get("optimizer_pin_memory",True)))
             self.optimizer.load_state_dict(saved["optimizer"])
+            if self.study and self.optimizer.steps != int(saved["metadata"]["model_version"]):
+                raise ValueError("Saved Adam step and paired actor model version differ")
             self.optimizer.bucket_bytes = int(float(self.config.get("optimizer_bucket_mib",64))*1024*1024)
             self.optimizer.pin_memory = bool(self.config.get("optimizer_pin_memory",True))
             self.optimizer.restore_gradients(saved["gradients"])

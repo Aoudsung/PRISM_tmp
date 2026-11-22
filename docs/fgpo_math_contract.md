@@ -248,7 +248,7 @@ CPU AdamW 保存 FP32 master/m/v，先完成全局范数的设备归约与有限
 
 ## 9. 研究身份、基线与源码映射
 
-主配置为 `configs/fgpo-r3-host-a.json`、`configs/fgpo-r3-host-b.json` 与 `configs/fgpo-r3-colab-a100.json`，协议为 `fgpo-r3-published-v4`。主比较固定为 F-GPO、GiGPO（NeurIPS 2025）、HGPO（ICLR 2026）、GraphGPO（ICML 2026）四个方法，ALFWorld/AppWorld 两个 benchmark 与种子 0、1、2，共 $4\times2\times3=24$ 个运行单元。三个自身消融仅在 ALFWorld 各运行三个种子，新增 $3\times1\times3=9$ 个单元；完整 F-GPO 的结果直接复用主比较。正式训练合计 33 个单元。主结果表比较四个完整方法，自身消融独立呈现。
+运行身份由协议 fgpo-r3-published-v4 与其实际配置共同决定。主比较与自身消融分开保存，当前执行范围见[实验排程](fgpo_experiment_schedule_current.md)。
 
 | 正式方法 ID | 来源与本研究采用的配方 | 原 ALFWorld 配方的主要设置 |
 |---|---|---|
@@ -261,11 +261,11 @@ CPU AdamW 保存 FP32 master/m/v，先完成全局范数的设备归约与有限
 
 本研究使用的来源虚拟批参数 $(W,b,A)$ 分别为 GiGPO $(2,32,4)$、HGPO $(4,8,8)$、GraphGPO $(4,4,4)$。这些值定义数学上的响应权重，和实际执行模型的物理 GPU 数分别记录。GiGPO 固定来源中可用的 full-finetuning 脚本使用 Qwen2.5-1.5B，本研究将其原配方迁移到统一的 Qwen2.5-7B，并保留该来源的两 rank 与 32 行 microbatch 规则。HGPO 和 GraphGPO 使用其 7B 配方。
 
-ALFWorld 保留发布算法与来源配方并披露上述 backbone 迁移；AppWorld 为本研究明确标记的 benchmark 迁移：执行原生 Python，固定任务/API bootstrap、保留近期完整交互消息，响应上限 1024，遵守 AppWorld 的官方时域和评价接口。上述三篇论文没有报告本研究的 AppWorld 迁移结果。四方法运行于本仓库的 SDPA、缓存、offloaded AdamW 与日志路径，原作者的 vLLM/Ray/FSDP 运行栈不构成本次逐位复现承诺。各方法保留自己的训练轮数、prompt、输出和更新配方，官方测试只评价最终模型。共同预算区间内的曲线仅来自每轮已有行为采样的训练成功率日志，不增加中途测试集评价；实际轨迹、token、环境步、optimizer step、GPU 小时和峰值显存共同说明成本。
+ALFWorld 保留发布算法与来源配方并披露上述 backbone 迁移。四方法运行于本仓库的 SDPA、缓存、offloaded AdamW 与日志路径，原作者的 vLLM/Ray/FSDP 运行栈不构成本次逐位复现承诺。各方法保留自己的训练轮数、prompt、输出和更新配方，官方测试只评价最终模型。共同预算区间内的曲线仅来自每轮已有行为采样的训练成功率日志，不增加中途测试集评价；实际轨迹、token、环境步、optimizer step、GPU 小时和峰值显存共同说明成本。
 
-实验必要性按 claim 收敛：四方法主比较回答相对已发表方法的官方任务效果与成本；`fgpo_obs_only` 对应历史条件匹配；`fgpo_no_transfer` 对应续值共享；`fgpo_no_support_weight` 对应支持收缩。各消融改变本方法的一个机制，并复用相同正式日志解释更新。短两轮历史、shared 变体、冻结 native 模型、BiPACE、SELF、Skill-DisCo 均不进入本次正式矩阵；不增加参数 sweep、系统配置网格或额外采样诊断。
+主比较衡量正式官方效果与实际成本。三个自身消融的目标依次为历史条件匹配、下一状态续值共享和支持收缩。诊断复用正式日志。已启动的消融保存并暂停，未启动的消融移出队列。
 
-最终模型的完整评测为 ALFWorld `valid_unseen` 的 134 任务，以及 AppWorld `test_normal` 的 168 任务与 `test_challenge` 的 417 任务。每个 AppWorld 训练单元在两个 split 评价，split 不重复计为训练单元。官方 success/TGC/SGC 与任务完成数一并记录，三个种子均完整报告。
+官方终评按各实验预先指定的完整任务集逐种子记录指标、分母和任务完成数。
 
 `effective_training_identity/require_training_identity` 约束恢复时相同的协议、方法、种子、模型、任务、上下文、生成、信用、PPO 和 Adam 有效参数，已发表方法同时保留来源与解析配方。GPU 放置、缓存容量、offload、传输桶及 head/representation 微批属于资源项，row minibatch（或 F-GPO 原子混合组语义）属于训练身份。CUDA RNG 流数量保持一致。旧 `fgpo-r3-published-v3`、`fgpo-r3-success-v2` 及更早协议的待执行优势和优化状态禁止复用；中断恢复以已保存完整组、信用结果和更新 cursor 为单位。
 
@@ -284,4 +284,4 @@ ALFWorld 保留发布算法与来源配方并披露上述 backbone 迁移；AppW
 | `baseline_specs.py / published_baselines.py / published_batching.py / baselines.py` | 已发表来源配方、信用算法、batch 复制与更新权重、原生 prompt/动作与 benchmark 迁移 |
 | `protocol.py / engine.py / runner.py` | published-v4 方法身份、正式矩阵、同质轮零步旁路、GCS/本地恢复与生命周期 |
 
-截至本次修订完成的是静态实现与源代码审阅。指定服务器连接说明未随当前仓库提供，尚未执行上述正式单元，文档不报告成功率、显存实测或加速倍数。数值容差、阶段成本和 benchmark 表现随服务器的正式真实任务运行记录，不扩展为独立合成实验或放行流程。
+任务结果、阶段成本和运行资源以服务器正式记录为准。

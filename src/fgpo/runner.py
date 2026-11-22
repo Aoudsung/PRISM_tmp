@@ -15,6 +15,7 @@ from .metrics import official_summary
 from .baseline_specs import PUBLISHED_SOURCES
 from .records import CostLedger, monotonic_seconds
 from .protocol import (METHODS, METHOD_ROLES, OFFICIAL_EVALUATION_SPLITS, OFFICIAL_HORIZONS, SUITE_METHODS, SUITE_BENCHMARKS,
+                       WEBSHOP_CONTINUATION_STUDIES, study_identity, suite_methods,
                        method_benchmark_pairs, resolve_method_config, require_protocol,
                        require_training_identity)
 from .textcraft import TEXTCRAFT_COUNTS
@@ -42,6 +43,8 @@ def require_identity(saved, expected):
     for key in ('protocol', 'method', 'benchmark', 'seed', 'model_path'):
         if saved[key] != expected[key]:
             raise ValueError(f'Existing cell identity differs at {key}; no work was restarted.')
+    if saved.get('study_protocol') != expected.get('study_protocol'):
+        raise ValueError('Existing cell belongs to a different study budget.')
 
 
 def isolate_gpus(physical_ids, excluded_ids):
@@ -112,8 +115,9 @@ def _file_lock(path, *, nonblocking=False, error_message=None):
 
 
 def _validate_suite_cells(cells, config, suite):
-    allowed = set(method_benchmark_pairs(SUITE_METHODS[suite], SUITE_BENCHMARKS[suite]))
+    allowed = set(method_benchmark_pairs(suite_methods(config, suite), SUITE_BENCHMARKS[suite]))
     if any(saved['protocol'] != config['protocol']
+           or saved.get('study_protocol') != config.get('study_protocol')
            or (saved['benchmark'], saved['method']) not in allowed for saved in cells):
         raise ValueError('Existing suite summary belongs to another experiment definition')
 
@@ -302,6 +306,13 @@ def _resume_pending_finalization(config, cell_config, output, complete_path, com
 def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, Engine, resume, startup_receipt=None):
     resume_from = None
     catalog_seconds = 0.0
+    study = study_identity(cell_config)
+    continuation = {}
+    if cell_config.get('study_protocol') in WEBSHOP_CONTINUATION_STUDIES and method == 'fgpo':
+        from .webshop_continuation import prepared_origin
+        if not resume:
+            raise ValueError('The 150-round V4 arm requires a prepared round-60 continuation and --resume.')
+        continuation['continuation'] = prepared_origin(output, cell_config)
     evaluation_splits = config.get('evaluation_splits', {}).get(benchmark, OFFICIAL_EVALUATION_SPLITS[benchmark])
     if output.exists():
         if not resume:
@@ -338,6 +349,8 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
             if benchmark == 'appworld' and method == 'g2po':
                 train_tasks = [task for difficulty in cell_config['appworld_train_difficulties']
                                for task in catalog.list_tasks('train', difficulty=difficulty)]
+            elif study and benchmark == 'webshop':
+                train_tasks = catalog.list_tasks('train', train_rounds=cell_config['rounds'])
             else:
                 train_tasks = catalog.list_tasks('train')
             evaluation_tasks = {split: catalog.list_tasks(split)
@@ -388,6 +401,7 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
             and engine.state.completed
             and training.get('rounds_completed') == engine.state.round
             and training.get('optimizer_steps') == engine.optimizer.steps
+            and training.get('study_protocol') == cell_config.get('study_protocol')
             and all(training.get(key) == cell_config[key]
                     for key in ('protocol', 'method', 'benchmark', 'seed')))
         if not reusable_training:
@@ -397,7 +411,7 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
         if training.get('status') == 'interrupted':
             return {'status': 'interrupted', 'protocol':config['protocol'], 'method': method, 'benchmark': benchmark,
                     'seed': seed, 'model_path': cell_config['model_path'],
-                    'checkpoint': str(checkpoint), 'training': training}
+                    'checkpoint': str(checkpoint), 'training': training, **study, **continuation}
         scores = {}
         for split, tasks in evaluation_tasks.items():
             summary_path = output / split / 'evaluation_summary.json'
@@ -417,14 +431,15 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
             summary = official_summary(benchmark, records, tasks)
             summary.update(protocol=config['protocol'],method=method, benchmark=benchmark, seed=seed,
                            model_path=cell_config['model_path'], split=split,
-                           model_version=engine.optimizer.steps)
+                           model_version=engine.optimizer.steps, **study)
             write_json(output / split / 'evaluation_records.json', records)
             write_json(summary_path, summary)
             if evaluation.get('status') == 'interrupted':
                 checkpoint = engine.save_checkpoint(output / 'checkpoint')
                 return {'status': 'interrupted', 'protocol':config['protocol'], 'method': method, 'benchmark': benchmark,
                         'seed': seed, 'model_path': cell_config['model_path'],
-                        'checkpoint': str(checkpoint), 'evaluation': {**scores, split: summary}}
+                        'checkpoint': str(checkpoint), 'evaluation': {**scores, split: summary},
+                        **study, **continuation}
             scores[split] = summary
         completed_checkpoint = engine.prepare_completed_checkpoint(training, scores)
         result = {'status': 'complete', 'protocol':config['protocol'], 'method': method, 'benchmark': benchmark, 'seed': seed,
@@ -435,7 +450,7 @@ def _run_locked_cell(config, cell_config, output, *, method, benchmark, seed, En
                   'training_resume_supported': False, 'finalization_stage': 'preliminary',
                   'training': training, 'evaluation': scores, 'costs': engine.ledger.snapshot(),
                   'costs_scope':'complete_cell_including_official_evaluation_and_final_model_export',
-                  'environment_pool':env_factory.statistics()}
+                  'environment_pool':env_factory.statistics(), **study, **continuation}
         write_json(output / 'cell_summary.json', result, durable=True)
         engine.reclaim_completed_checkpoint(output / 'cell_summary.json')
         engine.publish_final_logs()
@@ -569,6 +584,8 @@ def aggregate_only(selected, suite_dir, config, suite, *, records_format):
                                    ('method', method), ('seed', seed), ('split', split)):
                     if record[key] != value:
                         raise ValueError(f'Official receipt identity differs at {key}: {path}')
+                if record.get('study_protocol') != cell.get('study_protocol'):
+                    raise ValueError(f'Official receipt belongs to a different study budget: {path}')
                 if 'model_version' in saved and record.get('model_version') != saved['model_version']:
                     raise ValueError(f'Official receipt model version differs: {path}')
             scores = official_summary(benchmark, records, official_tasks[split])
@@ -582,7 +599,8 @@ def aggregate_only(selected, suite_dir, config, suite, *, records_format):
     table = alfworld_table(aggregates)
     report = {'protocol': config['protocol'], 'suite': suite,
               'report_only': True, 'records_format': records_format,
-              'cells': cells, 'aggregates': aggregates, 'alfworld_table1': table}
+              'cells': cells, 'aggregates': aggregates, 'alfworld_table1': table,
+              **study_identity(config)}
     for cell, (_, _, _, output) in zip(cells, selected):
         write_json(output / 'reporting_summary.json', cell)
     write_json(suite_dir / 'study_reporting_summary.json', report)
@@ -636,7 +654,7 @@ def main(argv=None):
     benchmarks = args.benchmarks if args.benchmarks is not None else plan['benchmarks']
     seeds = args.seeds if args.seeds is not None else config['seeds']
     if (not methods or not benchmarks or not seeds
-            or not set(methods).issubset(set(plan['methods']) & set(SUITE_METHODS[args.suite]))
+            or not set(methods).issubset(set(plan['methods']) & set(suite_methods(config, args.suite)))
             or not set(benchmarks).issubset(set(plan['benchmarks']) & set(SUITE_BENCHMARKS[args.suite]))
             or not set(seeds).issubset(config['seeds'])):
         raise ValueError('CLI selection must be a subset of the declared claim-scoped suite')
@@ -706,7 +724,7 @@ def main(argv=None):
                 'protocol': config['protocol'], 'suite': args.suite, 'experiment_plan': plan,
                 'cells': cells, 'aggregates': aggregates, 'alfworld_table1': table,
                 'reference_cells': references, 'reference_aggregates': reference_aggregates,
-                'design': 'docs/fgpo_design_and_derivation.md'})
+                'design': 'docs/fgpo_design_and_derivation.md', **study_identity(config)})
             (suite_dir / 'study_table1.md').write_text(table['markdown'], encoding='utf-8')
         if cell['status'] == 'interrupted':
             return 130

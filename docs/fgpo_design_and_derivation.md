@@ -16,7 +16,7 @@
 | [BiPACE，2026 预印本](https://arxiv.org/html/2606.25556v1) | 使用当前 actor 的 prompt 末位隐藏态近邻聚类；Q-style PACE 在簇内按动作聚合，形成局部动作值与状态值之差。 | 论文的 prompt 包含近期历史。r3 使用冻结参考表示、同深度匹配、整轨迹排除和下一状态续值；本地观察值消融的结果只说明自身设计。 |
 | [GraphGPO，ICML 2026](https://proceedings.mlr.press/v306/cheng26e.html) | 将多条轨迹合成状态转移图，用到成功目标的图距离变化分配动作信用。 | 失败轨迹前缀获得跨轨迹信用已有先例。r3 直接共享真实终局回报，避免将最短成功路径解释为策略平均续值。 |
 | [RewardFlow，NeurIPS 2026](https://arxiv.org/abs/2603.18859) | 通过共享状态连接轨迹，从成功节点沿图反向传播与最短路径距离有关的势函数，以势差形成动作级信号。 | 图传播与稠密信用已有直接竞争方案。r3 的共享值始终来自同伴的实际 Monte Carlo 结果。 |
-| [G2PO，2026 公开版本](https://arxiv.org/abs/2606.22995) | 合并相同观测形成全局转移图，聚合状态值，按边计算并标准化 TD 信用；包含 AppWorld 实验。 | r3 按剩余时域区分状态，并采用固定奖励尺度。会议归属以正式出版来源为准，当前所引公开页未标会议。 |
+| [G2PO，2026 公开版本](https://arxiv.org/abs/2606.22995) | 合并相同观测形成全局转移图，聚合状态值，按边计算并标准化 TD 信用。 | r3 按剩余时域区分状态，并采用固定奖励尺度。会议归属以正式出版来源为准，当前所引公开页未标会议。 |
 | [ECPO，EMNLP 2026](https://aclanthology.org/2026.emnlp-main.172/) | 对规范动作的少量样本估计进行收缩，并依据动作内方差调节信用，处理偶然高回报与稀疏证据。 | 小样本信用可靠性已有专门工作。r3 只用可观测距离与支持质量控制共享，诊断来自正式日志，不增加校准器或额外训练目标。 |
 | [MCGPO，2026 年 10 月预印本](https://arxiv.org/abs/2610.13755) | 用动作前状态摘要和规则标注进度匹配上下文，固定分折隔离候选动作与定向偏好的终局证据，以支持权重缩放 GraphGPO 之外的成对学习项。 | 分折隔离与支持加权也已有近邻工作。r3 的估计对象是同深度平均续值，使用公开历史表示与单一 PPO 更新，无 rubric 标注或额外成对目标。 |
 
@@ -24,7 +24,7 @@
 
 论文定位围绕这组可检验的贡献展开。历史表示、留一基线、核权重和 PPO 本身属于已有工具；算法组合的价值由完整 benchmark、与已发表近年方法的关系及实际成本共同体现。当前正式主比较只有 F-GPO 与 **GiGPO、HGPO、GraphGPO**。三种 baseline 分别代表局部 anchor 信用、历史层级信用和跨轨迹图信用，覆盖本方案必须面对的直接竞争关系。表中其余工作用于解释研究边界，当前最小实验计划不为其新增单元。
 
-比较器采用作者发布源码的完整算法配方，并将来源固定到明确提交。ALFWorld 保留来源算法、提示和 batch 语义；GiGPO 从公开 1.5B 全参配方迁移到本研究 7B 基座，HGPO/GraphGPO 采用作者 7B 配方。AppWorld 另标注为 benchmark 迁移。统一 PyTorch 执行后端承载全部方法，论文呈现完整方法的质量与成本。机制归因由三个 F-GPO 自身消融完成。
+比较器采用作者发布源码的完整算法配方，并将来源固定到明确提交。ALFWorld 保留来源算法、提示和 batch 语义；GiGPO 从公开 1.5B 全参配方迁移到本研究 7B 基座，HGPO/GraphGPO 采用作者 7B 配方。统一 PyTorch 执行后端承载全部方法，论文呈现完整方法的质量与成本。机制归因由三个 F-GPO 自身消融完成。
 
 ## 2. 目标、信息边界与真实历史
 
@@ -310,20 +310,7 @@ AdamW 的 fp32 主权重、一阶和二阶矩保存在 CPU。默认 64 MiB 传�
 
 ### 7.1 按 claim 保留最小实验
 
-`experiment_suites` 把已发表方法比较与自身消融分开定义。主比较为四种方法 × 两个 benchmark × 三个训练种子，共 **24 个训练单元**；三个自身消融只在 ALFWorld 上分别运行三个种子，新增 **9 个单元**。消融中的完整 F-GPO 直接复用主比较的三个 ALFWorld 单元，合计 **33 个训练单元**。
-
-| Suite 与方法 | Benchmark / 种子 | 新增单元 | 必须回答的 claim 及保留理由 |
-|---|---|---:|---|
-| `comparison / fgpo` | ALFWorld、AppWorld / 0、1、2 | 6 | 完整方法的官方任务表现及实际成本；提供所有主比较和自身消融的目标结果 |
-| `comparison / gigpo` | ALFWorld、AppWorld / 0、1、2 | 6 | 对照出发点 GiGPO 的已发表相对状态信用方法，检验方案相对原研究路线的进展 |
-| `comparison / hgpo` | ALFWorld、AppWorld / 0、1、2 | 6 | 对照直接使用历史层级信用的已发表方法，建立历史条件化方向的竞争关系 |
-| `comparison / graphgpo` | ALFWorld、AppWorld / 0、1、2 | 6 | 对照已发表跨轨迹成功路径图信用方法，检验本方案续值共享的完整方法表现 |
-| `ablation / fgpo_obs_only` | ALFWorld / 0、1、2 | 3 | 只去除历史距离项，检验本方法历史匹配对留出预测与任务表现的贡献 |
-| `ablation / fgpo_no_transfer` | ALFWorld / 0、1、2 | 3 | 设全部 $\lambda=0$，保留原匹配与动作前基线，检验下一状态续值共享 |
-| `ablation / fgpo_no_support_weight` | ALFWorld / 0、1、2 | 3 | 非终末下一状态满足 $N^+_{-k,t+1}\ge 1 \land S>0$ 时令 $\lambda=1$，其余核与基线保持一致，检验连续共享收缩 |
-| `ablation / fgpo` 参考行 | 复用主比较的 ALFWorld 三种子 | 0 | 为三个机制消融提供同一完整方法结果，不再训练 |
-
-ALFWorld 承担直接来源 benchmark 与机制消融，AppWorld 承担完整方法向原生代码 agent 的迁移证据；机制消融的直接结论限定在 ALFWorld。三个训练种子用于公开训练变动，完整官方划分保证终点指标有一致口径。短历史实验、超参数扫描、模型规模扫描、系统模块消融和独立诊断 rollout 均不在计划中。已有代码兼容路径与相关文献不会自动增加实验单元。
+当前训练以完整 F-GPO 的官方表现和实际成本为主，TextCraft 与 WebShop 的执行顺序由[当前排程](fgpo_experiment_schedule_current.md)维护。已启动的消融保存并暂停，未启动的消融移出执行队列。第 7.4 节保留各机制对应的诊断定义。
 
 ### 7.2 已发表 baseline 的来源、配方与迁移
 
@@ -345,9 +332,9 @@ ALFWorld 承担直接来源 benchmark 与机制消融，AppWorld 承担完整方
 | HGPO 7B 配方 | 4 | 8 | 256 | 8 | 32 |
 | GraphGPO 7B 配方 | 4 | 4 | 64 | 4 | 64 |
 
-ALFWorld 接入作者发布的公开观测、原生动作与提示配方。HGPO/GraphGPO 的来源就是 7B，GiGPO 公开全参脚本使用 1.5B，本研究明确标注其 **7B backbone 迁移**并保留上述来源 batch 配方。三个已发表工作均未报告 AppWorld 实验，因此 AppWorld 的结果另记为**已发表算法的 benchmark 迁移**：用原生 Python action 与公开 stdout，保留初始任务/API bootstrap 及最近记忆，接入各自信用规则。AppWorld 使用 1024-token 生成上限和完整消息窗口；ALFWorld 仍保留各作者的提示容量与截断规则。所有参考和 PPO 概率都在最终实际采样前缀上重算。
+ALFWorld 接入作者发布的公开观测、原生动作与提示配方。HGPO/GraphGPO 的来源就是 7B，GiGPO 公开全参脚本使用 1.5B，本研究明确标注其 **7B backbone 迁移**并保留上述来源 batch 配方。所有参考和 PPO 概率都在最终实际采样前缀上重算。
 
-执行后端统一为本仓库的 PyTorch/SDPA、组内批量采样、持久官方环境与 CPU-master AdamW。复现范围是算法及发布配方在该后端的实现，计算系统与原作者分布式系统分别注明。主比较因此支持完整方法级的质量—成本判断，机制归因由第 7.1 节的三个自身消融承担。
+执行后端统一为本仓库的 PyTorch/SDPA、组内批量采样、持久官方环境与 CPU-master AdamW。复现范围是算法及发布配方在该后端的实现，计算系统与原作者分布式系统分别注明。主比较因此支持完整方法级的质量—成本判断。
 
 ### 7.3 实际预算与完整官方评测
 
@@ -358,14 +345,13 @@ ALFWorld 接入作者发布的公开观测、原生动作与提示配方。HGPO/
 | 每种子完整轨迹量 | 7680 | 19200 | 20480 | 19200 |
 | 信用折扣 γ | 1 | .95 | .95 | .10 |
 | ALFWorld 每步生成上限 | 512 | 512 | 512 | 512 |
-| AppWorld 每步生成上限 | 1024 | 1024 | 1024 | 1024 |
 | ALFWorld 提示 / 历史规则 | 32768 总上下文内的初始锚定与完整轮次滚动（三块整数帧） | 2048 prompt，最近两轮记忆，超限 error | 4096 prompt，最近两轮记忆，作者 left truncation | 2048 prompt，最近两轮记忆及公开状态摘要，超限 error |
 | PPO 批次划分 | 混合结果组 K=8 原子整组（无混合组则跳过更新） | 256 row | 256 row | 64 row（7B 配方） |
 | Loss reduction | 固定混合组轨迹分母 $Z_m=8$ | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean |
 
 共同基座为 Qwen2.5-7B-Instruct，全参数 bf16/SDPA；种子为 0、1、2；AdamW lr=`1e-6`、weight decay=`.01`、betas=`(.9,.999)`、epsilon=`1e-8`、全局梯度范数上限 1。每轮一次 PPO epoch，clip=.2、dual clip=3、entropy=.001、参考正则=.01。训练采样温度为 1，评估为 .4，`top_p=1`。F-GPO 的信用参数为 $R=10,\epsilon=.10,\kappa=1,\lambda_{\max}=0.5$ 并启用正同伴门控；baseline 的奖励尺度和语法处理以来源配方为准。
 
-时域上限为 ALFWorld 50 步、AppWorld 100 步。训练任务取官方训练划分，每个最终 checkpoint 完整评测 ALFWorld `valid_unseen` 的 134 个任务，或 AppWorld `test_normal` 的 168 个任务与 `test_challenge` 的 417 个任务。ALFWorld 报告 SR，AppWorld 报告官方 TGC 和基于完整 scenario 的 SGC，并附完成任务数。三个种子的逐项结果、均值与标准差均公开；中断产生的部分评测保持部分状态。
+上表描述已发布的家务基准配方。TextCraft 与 WebShop 的实际预算、官方划分和追加对照见[当前排程](fgpo_experiment_schedule_current.md)。正式终评按各自既定任务计算，部分结果保留原分母与完成状态。
 
 主表同时列最终质量、实际轨迹量、环境步数、响应词元、端到端时间与设备小时。各方法按已声明的配方终点报告，训练窗口差异随结果呈现；训练组成功率曲线解释学习进展，最终测试分数单独列出。当前计划的效率结论以质量与实际成本的联合结果为依据，不增加中途测试集挑选、额外预算扫描或独立系统基准实验。
 
@@ -373,7 +359,7 @@ ALFWorld 接入作者发布的公开观测、原生动作与提示配方。HGPO/
 
 | Claim | 直接实验 | 复用的诊断及用途 |
 |---|---|---|
-| 完整方法的任务表现和实际成本 | `comparison` 的四种完整方法 | 最终官方 SR/TGC/SGC、真实样本与 token 数、wall/device-seconds、阶段峰值、语法/合法动作率与逐批梯度范数，形成质量—成本报告 |
+| 完整方法的任务表现和实际成本 | `comparison` 的四种完整方法 | 最终官方指标、真实样本与 token 数、wall/device-seconds、阶段峰值、语法/合法动作率与逐批梯度范数，形成质量—成本报告 |
 | 历史条件化改善本方法的匹配 | 完整 F-GPO 与 `fgpo_obs_only` | 匹配覆盖、支持质量和留一 outcome Brier，解释距离改变后的预测表现 |
 | 下一状态共享提供任务收益 | 完整 F-GPO 与 `fgpo_no_transfer` | 共享比例、正同伴门控步数、回报移动量及训练进展，确认实际使用的共享量与任务变化 |
 | 连续支持收缩有作用 | 完整 F-GPO 与 `fgpo_no_support_weight` | $S$、有效同伴数与 $\lambda$，解释共享强度改变后的任务及预测结果 |
@@ -392,19 +378,8 @@ $$
 
 ## 8. 运行身份与交付状态
 
-`fgpo-r3-published-v4` 使用新的 study 根目录，内部按 suite 分成 `comparison/` 与 `ablation/`，各自保存单元和 `study_summary.json`。先完成主比较，再以同一 `--output-dir` 执行消融；消融 summary 引用 `../comparison/alfworld/fgpo/seed-X/cell_summary.json`，复用完整方法结果。
-
-在指定服务器的独立 checkout 中，将 `PYTHONPATH` 指向 `src`，使用配置指定的既有 Python 与真实分配卡号：
-
-```bash
-python -m fgpo.runner --config configs/fgpo-r3-host-a.json --output-dir outputs/fgpo-r3-published-v4-study --suite comparison --gpu <physical_gpu_ids>
-python -m fgpo.runner --config configs/fgpo-r3-host-a.json --output-dir outputs/fgpo-r3-published-v4-study --suite ablation --gpu <physical_gpu_ids>
-```
-
-Host B 使用 `configs/fgpo-r3-host-b.json`，Colab 使用 `configs/fgpo-r3-colab-a100.json`。`comparison` 是默认 suite；`--methods/--benchmarks/--seeds` 只选择该 suite 的计划子集，用于按完整 cell 分配服务器。新 suite 可以在已有 study 根目录中创建；`--resume` 只恢复当前所选 suite 的目录。旧 `v3` 及其更早协议的运行结果与 pending update 留在原 study 目录，不迁入新的训练状态。
+协议 fgpo-r3-published-v4 的运行按 comparison 与 ablation 分目录保存。同一 study 可保存各自的单元和汇总，并引用已有的完整 F-GPO 结果。当前启动入口由[实验排程](fgpo_experiment_schedule_current.md)指向各主机配置。
 
 恢复由 `effective_training_identity/require_training_identity` 约束：方法及发布配方来源、模型、任务、种子、历史、采样、信用、PPO 和 Adam 的有效语义保持一致。GPU 放置、KV 容量、offload、head/表示微批、staging、保存周期/分片、原始文件保留与主机预留等资源项可以调整；保存的 CUDA RNG 流数量保持一致。完成采集组、参考概率、优势与更新 cursor 在明确操作边界恢复。
 
-当前交付是完整方案和对应源代码的静态修订与交叉审阅，尚未执行服务器训练、显存测量或正式 benchmark。仓库 [AGENTS.md](../AGENTS.md) 要求所有项目运行在指定服务器完成；当前会话没有 `SSH_Document.md`，已知 `mgt01` 入口在可用连接环境中无法解析。文中没有已执行的成功率、显存节省比例或加速倍数。正式连接恢复后直接执行上述 33 个必要训练单元及其官方评测，从相同日志形成任务表现、共享机制和实际成本的研究结论。
-
-指定服务器上的 `.research/research.sqlite` 继续作为实际研究记录来源；当前会话没有访问该数据库，未生成或改写运行记录。
+指定服务器上的研究记录和正式日志保存实际命令、检查点与官方结果。

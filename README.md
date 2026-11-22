@@ -4,7 +4,7 @@
 
 本分支从 `977bb86` 重构并收敛为 `fgpo-r3-published-v4` 正式协议。F-GPO 在同任务独立轨迹中，按**相同步深度、相近实际可见历史**共享真实终局成功回报，研究有限时域 agent 的跨轨迹信用分配。方法采用 γ=1、固定回报尺度、整轨迹留一基线、正同伴门控的有限支持下一状态续值共享，以及仅针对混合结果组的原子轨迹归一化 PPO。
 
-当前协议为 **`fgpo-r3-published-v4`**。完整研究规划包含 24 个已发表方法比较单元与 9 个自身消融单元，总计 33 个训练单元；每个单元附完整官方评测。当前仅运行用户授权的 F-GPO：Colab 正式训练已进入参数更新，Host B 已停止；三个种子的最终官方评测与 Table 1 结果待完整运行后汇总。
+当前协议为 **fgpo-r3-published-v4**。TextCraft 与 WebShop 优先执行 F-GPO 主实验。已启动的消融保存并暂停，未启动的消融移出排程。各卡位及种子的实际状态见[当前实验排程](docs/fgpo_experiment_schedule_current.md)。
 
 ## 方案、实现与来源
 
@@ -13,7 +13,7 @@
 | 路径 | 职责 |
 |---|---|
 | `src/fgpo/filtration.py`、`records.py` | 整数 token 历史、完整轮窗口、三块公开观测偏移、唯一响应归属和真实成本记录 |
-| `src/fgpo/credit.py`、`reference.py` | 同深度留一正同伴门控续值、ALFWorld 精确观测匹配与 AppWorld 双视角核、混合组筛选后参考评分 |
+| `src/fgpo/credit.py`、`reference.py` | 同深度留一正同伴门控续值、ALFWorld 精确观测匹配与 WebShop 双视角核、混合组筛选后参考评分 |
 | `src/fgpo/baseline_specs.py`、`published_baselines.py`、`published_batching.py` | 已发表 baseline 的固定来源、有效配方、信用规则与作者 batch/损失语义 |
 | `src/fgpo/cache.py`、`policy.py` | 几何 KV、停放完成槽解码、有效位置、完整提示批处理、采样与有界表示微批 |
 | `src/fgpo/optimization.py` | 原子混合组批次与分母、解析词表反向、一次主干反向、逐批范数与首批一致性诊断和 CPU-master AdamW |
@@ -24,18 +24,9 @@
 
 动作前基线的 score 恒等式适用于行为策略采样点；续值共享的偏差由匹配误差和共享权重决定。正式训练使用带 clipping、entropy 和参考正则的 PPO。论文论证围绕这一明确的估计对象、条件性误差分析和官方任务表现展开。
 
-## 必要的正式实验
+## 正式实验
 
-配置中的 `experiment_suites` 明确区分 `comparison` 与 `ablation`。主表只有完整 F-GPO 和三个已发表 baseline；机制归因使用 F-GPO 自身消融。
-
-| Suite | 方法与范围 | 新训练单元 | 必要性与对应 claim |
-|---|---|---:|---|
-| `comparison` | `fgpo`、`gigpo`、`hgpo`、`graphgpo` × ALFWorld/AppWorld × seeds 0/1/2 | 24 | 检验完整方法相对已发表状态信用、历史层级信用及图信用方法的最终表现和实际训练成本 |
-| `ablation` | `fgpo_obs_only` × ALFWorld × seeds 0/1/2 | 3 | 检验历史匹配项是否改善本方法的留出预测和任务表现；actor 的可见历史保持一致 |
-| `ablation` | `fgpo_no_transfer` × ALFWorld × seeds 0/1/2 | 3 | 检验下一状态续值共享的增益；保留原匹配与留一基线 |
-| `ablation` | `fgpo_no_support_weight` × ALFWorld × seeds 0/1/2 | 3 | 检验连续支持收缩的作用；有支持时设 λ=1，其余核和基线保持一致 |
-
-消融表直接引用 `comparison` 中 ALFWorld 的三个 F-GPO 单元。短历史实验、额外超参数扫描、模型规模扫描、系统模块消融和独立诊断 rollout 均不进入当前计划。相关工作只承担文献定位作用；它们不会自动扩展运行矩阵。
+TextCraft 在 Host A 和 Host B 评测完整 79 道验证题，报告总体、配方深度分组成功率和实际成本。Host B 在 WebShop 使用同种子的 128 道官方题，报告满分成功率、平均 Score 和实际成本。已取得的家务基准官方结果继续用于论文主表与训练日志诊断。[TextCraft 排程](docs/fgpo_v4_textcraft_execution_plan.md) · [WebShop 排程](docs/fgpo_webshop_host_b_schedule.md)
 
 ### 已发表 baseline 的复现范围
 
@@ -47,17 +38,15 @@
 
 三者来源统一固定为作者仓库 [verl-agent，提交 `20bd331bdbc9026a5668e11362178e10ab7400c8`](https://github.com/langfengQ/verl-agent/tree/20bd331bdbc9026a5668e11362178e10ab7400c8)。[baseline_specs.py](src/fgpo/baseline_specs.py) 保存论文版本、逐文件来源、参数及论文/代码差异。例如，GiGPO 发布代码的 episode 标准化按重复的 step rows 统计；HGPO 的代码按观测后缀分组、排除零优势后重归一化；GraphGPO 发布代码使用 `10 * gamma**d(next)`。本实现按这些已标明的发布源码配方执行。
 
-ALFWorld 使用作者发布的算法、提示与 batch 配方；HGPO/GraphGPO 来源即 7B 配方，GiGPO 的公开全参训练脚本为 1.5B，本研究明确记录其 **7B backbone 迁移**。AppWorld 另标注为 **已发表方法的 benchmark 迁移**：保留方法的信用规则，以原生 Python 动作、初始任务/API bootstrap 和公开交互记录接入。上述三篇论文未报告 AppWorld 实验。
+ALFWorld 使用作者发布的算法、提示与 batch 配方；HGPO/GraphGPO 来源即 7B 配方，GiGPO 的公开全参训练脚本为 1.5B，本研究明确记录其 **7B backbone 迁移**。
 
-所有方法共用本仓库的 PyTorch/SDPA、批量采样、CPU-master AdamW 和官方评分后端，保留各自配方中的历史、折扣、生成预算、优势归一化、训练长度和 loss reduction。baseline 的 reduction 保留作者 virtual-rank / microbatch 内的 token mean 及聚合权重，batch copy 与 balance 的处理顺序也属于复现定义。主比较报告完整方法级表现；三个自身消融承担机制归因。最终分数同时附实际轨迹量、环境步、响应词元和设备小时。
+所有方法共用本仓库的 PyTorch/SDPA、批量采样、CPU-master AdamW 和官方评分后端，保留各自配方中的历史、折扣、生成预算、优势归一化、训练长度和 loss reduction。baseline 的 reduction 保留作者 virtual-rank / microbatch 内的 token mean 及聚合权重，batch copy 与 balance 的处理顺序也属于复现定义。主比较报告完整方法及实际成本。最终分数同时附实际轨迹量、环境步、响应词元和设备小时。
 
 发布源码的 batch 准备由 `published_batching.py` 显式重现：GiGPO 在复制、平衡已有记录后计算优势，HGPO/GraphGPO 在优势计算后复制和平衡。每个 microbatch 的 token 系数为 `1 / (virtual_world_size × fixed_accumulation × actual_response_tokens)`，最后不足额 minibatch 仍保留固定 accumulation。复制只改变已采样记录的统计与 loss 权重，真实轨迹、环境交互和采样成本均按原始数据计数。
 
 ### 训练量与官方评测
 
-F-GPO 及其消融为 60 rounds ×16 groups ×8 trajectories，每种子 7680 条完整轨迹；GiGPO/GraphGPO 为每种子 19200 条，HGPO 为 20480 条。共同基座是 Qwen2.5-7B-Instruct。训练采样温度为 1，评估为 .4，`top_p=1`。F-GPO 的每步生成上限为 ALFWorld 512（配合三块整数帧与 `<think>/<action>` 确定性提取）、AppWorld 1024；默认 $\lambda_{\max}=0.5$，采用混合结果组 $K=8$ 原子整组更新与同质轮零步旁路；三个 baseline 的 ALFWorld 原配方为 512，AppWorld 迁移为 1024。时域上限分别为 50 和 100。
-
-每个最终模型评测 ALFWorld `valid_unseen` 全部 134 个任务，或 AppWorld `test_normal` 全部 168、`test_challenge` 全部 417 个任务。ALFWorld 报告 SR；AppWorld 按官方完整任务与 scenario 成员关系报告 TGC/SGC。论文同时呈现三个种子的结果、均值和标准差。训练日志中的成功率曲线用于说明训练进展，最终官方测试分数单列。
+F-GPO 每轮采样 16 组、每组 8 条轨迹。家务基准已有 60 轮结果，官方评测包括完整 134 道未见任务。WebShop 使用配对的 60 轮与 150 轮检查点。TextCraft 的训练预算为 50 轮，每步最多 128 个生成 token。各基准的默认、联合参数（joint）和 radius 配置见 [F-GPO 分基准超参数](docs/fgpo_hyperparameters.md)。
 
 ALFWorld 评测摘要同时在 `task_types` 中按官方任务前缀输出 `Pick / Look / Clean / Heat / Cool / Pick2 / All` 七列百分比成功率，`All` 与原总体 SR 相同。`aggregate_cells` 给出各列实际种子的 `mean`、`sample_std`（ddof=1）、`seeds` 与 `seed_count`；未齐三个种子时如实标记，单种子的标准差为 null。正式 study 摘要包含 `alfworld_table1` 并写出 `study_table1.md`。已运行进程的既有官方评测可用同一 runner 的 `--aggregate-only` 从落盘记录生成 `reporting_summary.json`、`study_reporting_summary.json` 与 `study_reporting_table1.md`；该入口直接汇总，不加载模型、重跑训练或评测，也不改终态检查点与成本。
 
@@ -65,24 +54,11 @@ ALFWorld 评测摘要同时在 `task_types` 中按官方任务前缀输出 `Pick
 
 ## 指定服务器上的运行入口
 
-所有项目执行按 [AGENTS.md](AGENTS.md) 在指定服务器完成。本地只编辑与静态阅读源码。配置为 [Host A](configs/fgpo-r3-host-a.json) 和 [Host B](configs/fgpo-r3-host-b.json)，分别使用 `/apps/users/adminuser/fgpo-r3` 与 `/home/chenxiangwei/workspace/fgpo-r3` 下的独立 checkout，并沿用各自配置中已有的 Python、模型和官方数据路径。
-
-在指定服务器上，将 `PYTHONPATH` 设为该 checkout 的 `src`，使用配置中的 Python。先运行主比较，再用同一 study 根目录运行消融；`<physical_gpu_ids>` 填当次实际分配的物理卡号：
-
-```bash
-python -m fgpo.runner --config configs/fgpo-r3-host-a.json --output-dir outputs/fgpo-r3-published-study --suite comparison --gpu <physical_gpu_ids>
-python -m fgpo.runner --config configs/fgpo-r3-host-a.json --output-dir outputs/fgpo-r3-published-study --suite ablation --gpu <physical_gpu_ids>
-```
-
-`comparison` 为默认 suite。主结果位于 `comparison/`，消融结果位于 `ablation/`，各自保存 `study_summary.json`。消融 summary 引用 `../comparison/alfworld/fgpo/seed-X/cell_summary.json`，复用已有完整 F-GPO 结果。
-
-`--methods`、`--benchmarks`、`--seeds` 只能选择当前 suite 的计划子集，用于分配完整 cell；主比较不接受自身消融 ID。`--resume` 恢复所选 suite 目录中的状态；已有 study 根目录可以新建另一 suite。Host B 使用对应配置。每个进程显式分配不重叠 GPU；`--model-gpu` 从其已分配卡中选择模型计算子集。
-
-`scripts/launch_fgpo_formal.py` 与 `scripts/launch_fgpo_host_b.py` 是公共 runner 的薄入口。新的 v4 study 使用独立输出目录，旧奖励、旧比较协议和旧 pending update 保留在原 study 中。
+所有训练和评估在指定服务器执行，沿用各配置中已有的 Python、模型和官方数据路径。现行命令和顺序由[当前实验排程](docs/fgpo_experiment_schedule_current.md)指向两台主机的具体安排。已保存的运行可通过通用 runner 的 resume 参数从同协议快照继续；实验入口保留 comparison 和 ablation 的独立目录，以及对已有正式结果的汇总能力。
 
 ## 显存、计算与更新实现
 
-参考阶段仅在存在混合结果组时激活，按真实 actor 段一次计算混合组轨迹的主干；同段多个响应合并为有界 head chunks，段级复用 `aggregate_model_calls` 并携带真实轮次与组归属，每段统一下载概率。层 hook 只保留动作前 prompt 末位表示，`obs_only` 跳过历史特征；AppWorld 局部观测先去重再按长度和 token budget 分微批，ALFWorld 直接使用纯观测整数元组匹配从而省略 `z_obs` 前向。信用计算完成后释放特征引用，行为段 `SegmentRecord` 一次冻结共享并在轮末日志落盘后释放已完成轮的轨迹引用，减少更新阶段的 CPU 常驻内存和 checkpoint 负担。
+参考阶段仅在存在混合结果组时激活，按真实 actor 段一次计算混合组轨迹的主干；同段多个响应合并为有界 head chunks，段级复用 `aggregate_model_calls` 并携带真实轮次与组归属，每段统一下载概率。层 hook 只保留动作前 prompt 末位表示，`obs_only` 跳过历史特征；WebShop 局部观测先去重再按长度和 token budget 分微批，ALFWorld 直接使用纯观测整数元组匹配从而省略 `z_obs` 前向。信用计算完成后释放特征引用，行为段 `SegmentRecord` 一次冻结共享并在轮末日志落盘后释放已完成轮的轨迹引用，减少更新阶段的 CPU 常驻内存和 checkpoint 负担。
 
 采样使用逐层几何 KV 缓冲、`active-rows-v3` 停放完成槽解码、真实有效 mask 和逻辑 RoPE 位置；当主机已知 `right_padded` 且全部物理列有效时，cached 单 token 解码传入 `attention_mask=None` 避免冗余掩码与 GQA 展开，继续行保留扩容余量并裁去退出后尾部空列，`_sample_turn` 直接向轮转步移交停放分片避免无用合批拷贝，并限制增量重放中的物理 padding 与长窗口查询块峰值（异长/ragged GQA 后端改造保留为后续工作）。缓存行选择按设备上传一次 indices；已结束响应的 padding 槽位跳过词表投影。不同完整提示可以批量 prefill；所有正式方法都采用组内批量模型采样。环境进程复用解释器，每个 episode 重新建立独立 world；F-GPO 的完成响应可提前派发环境执行。
 
@@ -96,7 +72,7 @@ PPO 在全同结果轮（`M_mix=0`）直接零步旁路；存在混合结果组�
 
 ## 交付与记录状态
 
-每个 cell 默认保存有效配置与 baseline 来源、官方任务清单、训练 claim 诊断、成本日志、逐任务官方评测及最终模型。当前恢复点仍包含其所需完整轨迹、概率、优势和更新 cursor。`retain_training_artifacts=false` 关闭历史 group、reference-round 和单条轨迹的重复归档；设为 true 时保留训练 group 与每轮参考数据，baseline 的组内轨迹只保存在 group 中。AppWorld 在官方结果复制进轨迹后关闭数据库并删除本 episode 独占的输出目录，共享基础数据保留。`costs.jsonl` 区分 `host_dispatch` 和阶段 `synchronized_wall`；端到端效率使用 `wall_seconds`、`allocated_device_seconds`（由 `CostLedger.credit_startup` 锚定进启动冷资产与进引擎前区间，不与相位叠加混淆）。
+每个 cell 默认保存有效配置与 baseline 来源、官方任务清单、训练 claim 诊断、成本日志、逐任务官方评测及最终模型。当前恢复点仍包含其所需完整轨迹、概率、优势和更新 cursor。`retain_training_artifacts=false` 关闭历史 group、reference-round 和单条轨迹的重复归档；设为 true 时保留训练 group 与每轮参考数据，baseline 的组内轨迹只保存在 group 中。`costs.jsonl` 区分 `host_dispatch` 和阶段 `synchronized_wall`；端到端效率使用 `wall_seconds`、`allocated_device_seconds`（由 `CostLedger.credit_startup` 锚定进启动冷资产与进引擎前区间，不与相位叠加混淆）。
 
 续训身份包括协议、有效方法配方、任务、采样、信用、PPO 和 Adam 语义。默认 `checkpoint_interval_rounds=8`：首组采样前、每 8 轮、训练结束及托管停止时保存完整一致快照。组/reference 边界只在 actor/Adam 版本已保存时复用参数文件保存进度。SIGINT/SIGTERM 在安全边界保存待更新梯度和 cursor；强制终止从最近完整快照恢复，最多重做一个 8 轮间隔内的工作。训练统计回到快照的字节游标，成本日志保留已实际发生的完整事件；损坏或恢复放弃（包括相同已提交前缀上来自 `LOGS` 的未提交尾）的半写尾一次计入单调 `discarded_incomplete_tail_bytes` 并将 `usage_complete` 标为 false（区别于活跃发布中的瞬时 `uncommitted_tail_bytes_at_publish`）。GCS 所有保留读路径通过 `open_snapshot`/`readers/<lease>.json` 线性化读租约保护整个读取与异常清理周期，传输统计区分 `actor`/`optimizer`/`gradients`/`reference`/`teacher`/`state`/`artifacts`/`journals` 的实际新传与复用及 `metadata_uploaded_bytes`。新快照文件和日志同步后发布 CURRENT，随后回收旧快照。
 

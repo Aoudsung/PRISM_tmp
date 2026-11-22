@@ -1,16 +1,19 @@
 """Task selection in the released GraphGPO WebShop driver."""
 
 TRAIN_ROUNDS = 60
+PAIRED_TRAIN_ROUNDS = 150
 TRAIN_GROUPS = 16
 VALIDATION_WORKERS = 128
 VALIDATION_SESSIONS = 500
 
 
-def task_schedule(split, seed, goal_count):
+def task_schedule(split, seed, goal_count, *, train_rounds=TRAIN_ROUNDS):
     import numpy as np
 
+    if train_rounds not in (TRAIN_ROUNDS, PAIRED_TRAIN_ROUNDS):
+        raise ValueError("WebShop task draws use the 60-round or 150-round study budget")
     if split == "train":
-        first, stop, rounds, workers = VALIDATION_SESSIONS, goal_count, TRAIN_ROUNDS, TRAIN_GROUPS
+        first, stop, rounds, workers = VALIDATION_SESSIONS, goal_count, train_rounds, TRAIN_GROUPS
     elif split == "test":
         first, stop, rounds, workers = 0, VALIDATION_SESSIONS, 1, VALIDATION_WORKERS
         seed += 1000

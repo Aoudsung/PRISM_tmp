@@ -22,8 +22,8 @@ from typing import Any, Mapping
 import uuid
 
 from .public import HORIZONS
-from .textcraft import TextCraftEnv
-from .webshop import VALIDATION_SESSIONS, task_schedule
+from .textcraft import TEXTCRAFT_1P5B_FORMAT_STUDY, TextCraftEnv
+from .webshop import TRAIN_ROUNDS, VALIDATION_SESSIONS, task_schedule
 
 
 ALFWORLD_TASK_TYPES = {
@@ -203,9 +203,9 @@ class WebShopEnv:
             )
             self.world_seed = seed
 
-    def list_tasks(self, split, *, seed):
+    def list_tasks(self, split, *, seed, train_rounds=TRAIN_ROUNDS):
         self._open(seed)
-        return task_schedule(split, seed, len(self.world.server.goals))
+        return task_schedule(split, seed, len(self.world.server.goals), train_rounds=train_rounds)
 
     def _observation(self, text):
         self.clickables = []
@@ -396,7 +396,7 @@ class AppWorldEnv:
 
 class EnvironmentProcess:
     """One JSON channel and private working directory per official environment slot."""
-    def __init__(self, python, benchmark, data_root, run_dir, *, seed=0):
+    def __init__(self, python, benchmark, data_root, run_dir, *, seed=0, textcraft_format_example=False):
         self.run_dir = Path(run_dir).resolve()
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.benchmark = benchmark
@@ -416,7 +416,8 @@ class EnvironmentProcess:
             cwd=self.run_dir, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=self.log, text=True, encoding='utf-8', bufsize=1)
         try:
-            self._rpc('initialize', benchmark=benchmark, data_root=str(data_root), run_dir=str(self.run_dir))
+            self._rpc('initialize', benchmark=benchmark, data_root=str(data_root), run_dir=str(self.run_dir),
+                      textcraft_format_example=textcraft_format_example)
         except BaseException:
             self._shutdown()
             raise
@@ -439,9 +440,9 @@ class EnvironmentProcess:
         self.action_schema = response['action_schema']
         return response['result']
 
-    def list_tasks(self, split, *, difficulty=None):
+    def list_tasks(self, split, *, difficulty=None, train_rounds=TRAIN_ROUNDS):
         if self.benchmark == 'webshop':
-            return self._rpc('list_tasks', split, seed=self.seed)
+            return self._rpc('list_tasks', split, seed=self.seed, train_rounds=train_rounds)
         if difficulty is None:
             return self._rpc('list_tasks', split)
         return self._rpc('list_tasks', split, difficulty=difficulty)
@@ -485,7 +486,9 @@ class EnvironmentProcess:
 def make_env(config, benchmark, run_dir, *, seed=0):
     python_key = benchmark + '_python_executable' if benchmark in ('alfworld', 'webshop', 'textcraft') else 'python_executable'
     python = config[python_key]
-    return EnvironmentProcess(python, benchmark, config[benchmark + '_data_root'], run_dir, seed=seed)
+    return EnvironmentProcess(python, benchmark, config[benchmark + '_data_root'], run_dir, seed=seed,
+                              textcraft_format_example=(benchmark == 'textcraft'
+                                  and config.get('study_protocol') == TEXTCRAFT_1P5B_FORMAT_STUDY))
 
 
 class _EnvironmentLease:
@@ -627,7 +630,8 @@ def _worker():
                     options = packet['kwargs']
                     cls = {'alfworld': ALFWorldEnv, 'appworld': AppWorldEnv,
                            'webshop': WebShopEnv, 'textcraft': TextCraftEnv}[options['benchmark']]
-                    environment = cls(options['data_root'], run_dir=options['run_dir'])
+                    kwargs = {'format_example': True} if options.get('textcraft_format_example') else {}
+                    environment = cls(options['data_root'], run_dir=options['run_dir'], **kwargs)
                     result = None
                 elif method == 'release_episode':
                     environment.close()

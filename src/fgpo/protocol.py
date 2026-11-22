@@ -2,20 +2,39 @@
 from .baseline_specs import (PUBLISHED_RECIPES, PUBLISHED_SOURCES, UPSTREAM_COMMIT, published_recipe,
                              supports_published_benchmark)
 from .public import EXACT_OBSERVATION_BENCHMARKS, HORIZONS as OFFICIAL_HORIZONS, OUTPUT_LIMITS
-from .textcraft import TEXTCRAFT_CONTEXT_TOKENS, TEXTCRAFT_COUNTS, TEXTCRAFT_SOURCE_COMMIT, TEXTCRAFT_TRAIN_GROUPS, TEXTCRAFT_TRAIN_ROUNDS
-from .webshop import TRAIN_GROUPS, TRAIN_ROUNDS, VALIDATION_SESSIONS, VALIDATION_WORKERS
+from .textcraft import (TEXTCRAFT_1P5B_FORMAT_STUDY, TEXTCRAFT_CONTEXT_TOKENS, TEXTCRAFT_COUNTS,
+                        TEXTCRAFT_FORMAT_EXAMPLE, TEXTCRAFT_SOURCE_COMMIT, TEXTCRAFT_TRAIN_GROUPS,
+                        TEXTCRAFT_TRAIN_ROUNDS)
+from .webshop import PAIRED_TRAIN_ROUNDS, TRAIN_GROUPS, TRAIN_ROUNDS, VALIDATION_SESSIONS, VALIDATION_WORKERS
 
 
 PROTOCOL = "fgpo-r3-published-v4"
+TEXTCRAFT_RESPONSE192_STUDY = "textcraft-v4-response192-v1"
+TEXTCRAFT_RESPONSE192_TOKENS = 192
+WEBSHOP_PAIRED_STUDY = "webshop-150-paired-v1"
+WEBSHOP_JOINT_STUDY = "webshop-150-v4-joint-v1"
+WEBSHOP_JOINT_FROM_BASE_STUDY = "webshop-150-joint-from-base-v1"
+WEBSHOP_1P5B_ADAPTED_STUDY = "webshop-150-1p5b-joint-adapted-from-base-v1"
+WEBSHOP_JOINT_FROM_BASE_STUDIES = (WEBSHOP_JOINT_FROM_BASE_STUDY, WEBSHOP_1P5B_ADAPTED_STUDY)
+WEBSHOP_JOINT_SEED = 1
+WEBSHOP_JOINT_OVERRIDES = {"entropy_coef": .002, "credit_transfer_max": .25}
+WEBSHOP_RADIUS_STUDY = "webshop-150-v4-radius-v1"
+WEBSHOP_RADII = (.05, .10)
+WEBSHOP_RADIUS_OVERRIDES = {"entropy_coef": .002, "credit_prior_weight": .5, "credit_transfer_max": .125}
+WEBSHOP_CONTINUATION_STUDIES = (WEBSHOP_PAIRED_STUDY, WEBSHOP_JOINT_STUDY, WEBSHOP_RADIUS_STUDY)
+WEBSHOP_150_STUDIES = (*WEBSHOP_CONTINUATION_STUDIES, *WEBSHOP_JOINT_FROM_BASE_STUDIES)
+WEBSHOP_FIXED_MENU = "WebShop_public_search_menu_matches_native_commands"
+EXACT_FIRST_HIT_METHOD = "fgpo_exact_first_hit"
+WEBSHOP_PAIRED_METHODS = ("fgpo", EXACT_FIRST_HIT_METHOD)
 ABLATION_METHODS = ("fgpo_obs_only", "fgpo_no_transfer", "fgpo_no_support_weight")
-OWN_METHODS = ("fgpo",) + ABLATION_METHODS
+OWN_METHODS = ("fgpo",) + ABLATION_METHODS + (EXACT_FIRST_HIT_METHOD,)
 PUBLISHED_METHODS = tuple(PUBLISHED_RECIPES)
 COMPARISON_METHODS = ("fgpo",) + PUBLISHED_METHODS
-METHODS = COMPARISON_METHODS + ABLATION_METHODS
+METHODS = COMPARISON_METHODS + ABLATION_METHODS + (EXACT_FIRST_HIT_METHOD,)
 RETIRED_METHODS = ("fgpo_no_befp", "fgpo_no_dag_loo", "fgpo_no_full_filtration",
                    "gigpo_shared", "bipace_q_shared", "native_qwen_shared",
                    "bipace_q", "self", "skill_disco", "native_qwen")
-METHOD_ROLES = {method: ("proposed_method" if method == "fgpo" else
+METHOD_ROLES = {method: ("proposed_method" if method in WEBSHOP_PAIRED_METHODS else
                          "own_ablation" if method in ABLATION_METHODS else
                          "published_baseline") for method in METHODS}
 
@@ -50,9 +69,24 @@ _RECIPE_ALIASES = {
 def method_benchmark_pairs(methods, benchmarks):
     """Keep the declared iteration order and select each available recipe."""
     return tuple((benchmark, method) for benchmark in benchmarks for method in methods
-                 if (benchmark != "webshop" or method in ("fgpo", "fgpo_obs_only", "fgpo_no_transfer"))
+                 if (method != EXACT_FIRST_HIT_METHOD or benchmark == "webshop")
+                 and (benchmark != "webshop" or method in (*WEBSHOP_PAIRED_METHODS, "fgpo_obs_only", "fgpo_no_transfer"))
                  and (benchmark != "textcraft" or method in (*OWN_METHODS, "graphgpo", "g2po"))
                  and (method not in PUBLISHED_METHODS or supports_published_benchmark(method, benchmark)))
+
+
+def suite_methods(config, suite):
+    if suite == "comparison":
+        study = config.get("study_protocol")
+        if study == WEBSHOP_PAIRED_STUDY:
+            return WEBSHOP_PAIRED_METHODS
+        if study in WEBSHOP_150_STUDIES:
+            return ("fgpo",)
+    return SUITE_METHODS[suite]
+
+
+def study_identity(config):
+    return {"study_protocol": config["study_protocol"]} if config.get("study_protocol") is not None else {}
 
 
 def resolve_method_config(config, method=None, benchmark=None):
@@ -72,6 +106,8 @@ def resolve_method_config(config, method=None, benchmark=None):
         options.update(recipe)
         options.update({key: recipe[source] for key, source in _RECIPE_ALIASES.items()})
         options["loss_normalization"] = "token"
+    elif method == EXACT_FIRST_HIT_METHOD:
+        options.update(credit_transfer_max=1.)
     options.update(config.get("method_configs", {}).get(method, {}))
     if method in OWN_METHODS:
         limits = {**OUTPUT_LIMITS, **options.get("output_tokens_by_benchmark", {})}
@@ -93,6 +129,38 @@ def require_protocol(config):
     if any(method not in METHODS for method in methods):
         raise ValueError("Select the published comparison or a named own-method ablation from this protocol")
     benchmarks = (config["benchmark"],) if "benchmark" in config else tuple(config.get("benchmarks", ()))
+    study = config.get("study_protocol")
+    textcraft_response192 = study == TEXTCRAFT_RESPONSE192_STUDY
+    textcraft_format = study == TEXTCRAFT_1P5B_FORMAT_STUDY
+    if textcraft_response192 and (
+            config.get("suite", "comparison") != "comparison" or benchmarks != ("textcraft",)
+            or methods != ("fgpo",) or config.get("seed", 0) != 0
+            or tuple(config.get("seeds", (0,))) != (0,)):
+        raise ValueError("TextCraft response192 requires the F-GPO comparison at seed 0")
+    if textcraft_format and (
+            config.get("suite", "comparison") != "comparison" or benchmarks != ("textcraft",)
+            or methods != ("fgpo",) or config.get("seed", 1) != 1
+            or tuple(config.get("seeds", (1,))) != (1,)):
+        raise ValueError("TextCraft 1.5B format requires the F-GPO comparison at seed 1")
+    webshop_150 = study in WEBSHOP_150_STUDIES
+    joint = study in (WEBSHOP_JOINT_STUDY, *WEBSHOP_JOINT_FROM_BASE_STUDIES)
+    adapted_1p5b = study == WEBSHOP_1P5B_ADAPTED_STUDY
+    radius_study = study == WEBSHOP_RADIUS_STUDY
+    if study is not None and not webshop_150 and not textcraft_response192 and not textcraft_format:
+        raise ValueError(f"Unknown study protocol {study!r}")
+    if webshop_150:
+        if (config.get("suite", "comparison") != "comparison" or benchmarks != ("webshop",)
+                or not methods or not set(methods).issubset(suite_methods(config, "comparison"))
+                or WEBSHOP_FIXED_MENU not in config.get("adaptations", ())):
+            raise ValueError("The 150-round study requires the repaired WebShop menu and its declared methods")
+        if study in (WEBSHOP_JOINT_STUDY, WEBSHOP_RADIUS_STUDY) and (
+                config.get("seed", WEBSHOP_JOINT_SEED) != WEBSHOP_JOINT_SEED
+                or tuple(config.get("seeds", (WEBSHOP_JOINT_SEED,))) != (WEBSHOP_JOINT_SEED,)):
+            raise ValueError(f"{study} uses seed 1")
+        if study in WEBSHOP_JOINT_FROM_BASE_STUDIES and not set(config.get("seeds", ())).issubset((0, 1, 2)):
+            raise ValueError(f"{study} uses seeds 0–2")
+    elif EXACT_FIRST_HIT_METHOD in methods:
+        raise ValueError("Exact first-hit credit is reserved for the 150-round paired WebShop study")
     for benchmark, horizon in config.get("horizons", {}).items():
         if benchmark not in OFFICIAL_HORIZONS or horizon != OFFICIAL_HORIZONS[benchmark]:
             raise ValueError(f"Invalid official horizon for {benchmark!r}")
@@ -107,6 +175,11 @@ def require_protocol(config):
         raise ValueError("Selected methods have no published recipe for the selected benchmarks")
     for benchmark, method in pairs:
         options = resolve_method_config(config, method, benchmark)
+        effective_study = options.get("study_protocol")
+        from_base_studies = (*WEBSHOP_JOINT_FROM_BASE_STUDIES, TEXTCRAFT_1P5B_FORMAT_STUDY)
+        if study != effective_study and (study in from_base_studies or effective_study in from_base_studies):
+            raise ValueError("Select the study protocol at the experiment level")
+        output_limit = TEXTCRAFT_RESPONSE192_TOKENS if textcraft_response192 else OUTPUT_LIMITS[benchmark]
         if options["ppo_epochs"] != 1 or options["shuffle"]:
             raise ValueError("This implementation uses one PPO epoch with the released stable row order")
         # PPO old/current/reference probabilities all use the unit-temperature law.
@@ -116,20 +189,49 @@ def require_protocol(config):
         if benchmark == "textcraft" and (
                 options["rounds"] != TEXTCRAFT_TRAIN_ROUNDS or options["groups"] != TEXTCRAFT_TRAIN_GROUPS
                 or options["trajectories"] != 8 or options.get("seed", 0) not in (0, 1, 2)
-                or options["reward_scale"] != 10. or options["output_tokens"] != OUTPUT_LIMITS[benchmark]
+                or options["reward_scale"] != 10. or options["output_tokens"] != output_limit
                 or options["max_context_tokens"] != TEXTCRAFT_CONTEXT_TOKENS):
-            raise ValueError("TextCraft uses 50 rounds, 16 eight-slot groups, seeds 0–2, an 8192-token context and 128-token responses")
+            raise ValueError(f"TextCraft uses 50 rounds, 16 eight-slot groups, seeds 0–2, an 8192-token context and {output_limit}-token responses")
+        if textcraft_response192:
+            required = {"learning_rate": 2e-6, "entropy_coef": .0005, "kl_coef": .02,
+                        "credit_prior_weight": .5, "credit_transfer_max": .5}
+            changed = [key for key, value in required.items() if options.get(key) != value]
+            if changed:
+                raise ValueError(f"{study} training recipe differs at " + ", ".join(changed))
+        if textcraft_format:
+            required = {**_OWN_DEFAULTS, "rounds": TEXTCRAFT_TRAIN_ROUNDS, "learning_rate": 2e-6,
+                        "credit_radius": .10, "credit_prior_weight": .5, "credit_transfer_max": .5}
+            changed = [key for key, value in required.items() if not _same_value(options.get(key), value)]
+            if changed:
+                raise ValueError(f"{study} training recipe differs at " + ", ".join(changed))
         if method in OWN_METHODS:
             if (options["gamma"] != 1. or options["syntax_reward_penalty"] != 0.
                     or options["loss_normalization"] != "trajectory" or options["history_length"] is not None
                     or int(options["trajectories"]) != 8 or options["ppo_minibatch_rows"] is not None
-                    or int(options["output_tokens"]) != OUTPUT_LIMITS[benchmark]):
+                    or int(options["output_tokens"]) != output_limit):
                 raise ValueError("Own V4 methods require undiscounted success, K=8 atomic mixed groups, official output limits and trajectory loss")
+            rounds = PAIRED_TRAIN_ROUNDS if webshop_150 else TRAIN_ROUNDS
             if benchmark == "webshop" and (
-                    options["rounds"] != TRAIN_ROUNDS or options["groups"] != TRAIN_GROUPS
+                    options["rounds"] != rounds or options["groups"] != TRAIN_GROUPS
                     or options.get("seed", 0) not in (0, 1, 2) or options["reward_scale"] != 10.
                     or options.get("max_context_tokens", 32768) != 32768):
-                raise ValueError("WebShop F-GPO uses 60 rounds, 16 groups, seeds 0–2, a 32768-token context and a full-success reward of 10")
+                raise ValueError(f"WebShop F-GPO uses {rounds} rounds, 16 groups, seeds 0–2, a 32768-token context and a full-success reward of 10")
+            if webshop_150:
+                required = {**_OWN_DEFAULTS, "rounds": PAIRED_TRAIN_ROUNDS, "credit_radius": .10,
+                            "credit_prior_weight": 1., "credit_transfer_max": 1. if method == EXACT_FIRST_HIT_METHOD else .5}
+                if joint:
+                    required.update(WEBSHOP_JOINT_OVERRIDES)
+                if adapted_1p5b:
+                    required.update(credit_radius=.05, credit_prior_weight=.5)
+                if radius_study:
+                    radius = options.get("credit_radius")
+                    if radius not in WEBSHOP_RADII:
+                        raise ValueError(f"{study} requires the selected WebShop radius (.05 or .10)")
+                    required.update(WEBSHOP_RADIUS_OVERRIDES, credit_radius=radius)
+                changed = [key for key, value in required.items()
+                           if not _same_value(options.get(key) if adapted_1p5b else options.get(key, value), value)]
+                if changed:
+                    raise ValueError(f"{study} training recipe differs at " + ", ".join(changed))
             continue
         recipe = published_recipe(method, benchmark, config["model_path"])
         required = {**recipe, **{key: recipe[source] for key, source in _RECIPE_ALIASES.items()},
@@ -169,7 +271,8 @@ def effective_training_identity(config):
                         group_denominator=int(options["trajectories"]),
                         homogeneous_group_bypass=True,
                         positive_peer_continuation_gate=method != "fgpo_no_transfer",
-                        local_observation_matching=("exact_token_id" if benchmark in EXACT_OBSERVATION_BENCHMARKS
+                        local_observation_matching=("exact_token_id" if method == EXACT_FIRST_HIT_METHOD
+                                                    or benchmark in EXACT_OBSERVATION_BENCHMARKS
                                                     else "dual_view_cosine"),
                         alfworld_frame="three_block_step_unquoted_commands_strict_tags_v4" if benchmark == "alfworld" else None)
         if benchmark == "webshop":
@@ -180,6 +283,21 @@ def effective_training_identity(config):
                 "task_selection": "released_worker_seed_and_session_index",
                 "terminal_outcome": "native_purchase_score_equals_one",
             }
+            if options.get("study_protocol") in WEBSHOP_150_STUDIES:
+                identity["study_protocol"] = options["study_protocol"]
+                identity["webshop_menu"] = WEBSHOP_FIXED_MENU
+            if method == EXACT_FIRST_HIT_METHOD:
+                identity["credit_matching"] = {
+                    "kernel_distance": "max(history_cosine_distance,absolute_step_distance_divided_by_horizon)",
+                    "exact_observation_required": True,
+                    "time_window_steps": 1,
+                    "peer_weight": "maximum_over_alive_steps_one_vote_per_other_trajectory",
+                    "prior": "other_trajectory_terminal_success_mean",
+                    "stop": "first_strictly_later_alive_step_with_positive_support_else_termination",
+                    "stop_value": "weighted_mean_of_other_trajectory_terminal_success",
+                    "transfer": "stop_support_over_support_plus_one_if_other_successful_peer_is_alive_in_time_window_else_zero",
+                    "terminal_transfer": 0.,
+                }
     else:
         identity["published_recipe"] = published_recipe(method, benchmark, options["model_path"])
         # This description records the existing schedule and leaves cell identity stable.
@@ -187,12 +305,16 @@ def effective_training_identity(config):
         identity["published_recipe"]["betas"] = tuple(identity["published_recipe"]["betas"])
         identity["source_commit"] = PUBLISHED_SOURCES[method]["repo_commit"]
     if benchmark == "textcraft":
+        if options.get("study_protocol") in (TEXTCRAFT_RESPONSE192_STUDY, TEXTCRAFT_1P5B_FORMAT_STUDY):
+            identity["study_protocol"] = options["study_protocol"]
         identity["textcraft_recipe"] = {
             "source_commit": TEXTCRAFT_SOURCE_COMMIT, "split_counts": dict(TEXTCRAFT_COUNTS),
             "observation": "native_feedback_and_visible_inventory",
             "action": "single_tagged_native_command_or_empty_native_rejection",
             "terminal_outcome": "native_worker_won", "environment_seed": "seed_times_1000003_plus_episode_ordinal",
         }
+        if options.get("study_protocol") == TEXTCRAFT_1P5B_FORMAT_STUDY:
+            identity["textcraft_recipe"]["public_system_prompt_suffix"] = "\n" + TEXTCRAFT_FORMAT_EXAMPLE
     return identity
 
 

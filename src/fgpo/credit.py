@@ -1,7 +1,8 @@
 """History-conditioned peer value sharing for finite-horizon terminal success.
 
-Each value target uses real outcomes from other complete trajectories at the
-same decision depth. No estimated value is propagated through another estimate.
+Each value target uses real outcomes from other complete trajectories. V4
+matches at the same depth; the exact first-hit variant allows adjacent depths.
+No estimated value is propagated through another estimate.
 The leave-one-trajectory-out baseline is action independent; value sharing is
 an approximate, biased estimator whose error depends on history matching.
 See docs/fgpo_math_contract.md for the r3 objective and estimator contract.
@@ -15,7 +16,7 @@ import torch
 import torch.nn.functional as F
 
 from .public import EXACT_OBSERVATION_BENCHMARKS, HORIZONS
-from .protocol import OWN_METHODS as METHODS, RETIRED_METHODS
+from .protocol import EXACT_FIRST_HIT_METHOD, OWN_METHODS as METHODS, RETIRED_METHODS
 
 
 ALGORITHM = "r3_history_conditioned_peer_value_sharing"
@@ -33,6 +34,9 @@ class CrossTrajectoryCredit:
     for the remaining weight. Terminal transitions have no continuation term.
     Y denotes reward_scale times official success. Advantages divide by this
     fixed scale, with no random group RMS or hand-written syntax reward.
+
+    The WebShop first-hit variant uses the strongest eligible state per peer
+    and shares from the first strictly later state with support.
     """
 
     def __init__(self, trajectories, reference_data, *, method="fgpo", config=None):
@@ -44,12 +48,16 @@ class CrossTrajectoryCredit:
         if method not in METHODS:
             raise ValueError(f"Unknown r3 credit method {method!r}")
         self.method = method
+        self.exact_first_hit = method == EXACT_FIRST_HIT_METHOD
         self.trajectories = tuple(trajectories)
         self.reference = reference_data
         options: Mapping = {} if config is None else config
-        self.radius = float(options.get("credit_radius", .10))
-        self.prior_weight = float(options.get("credit_prior_weight", 1.))
-        self.transfer_max = float(options.get("credit_transfer_max", .5))
+        if self.exact_first_hit:
+            self.radius, self.prior_weight, self.transfer_max = .10, 1., 1.
+        else:
+            self.radius = float(options.get("credit_radius", .10))
+            self.prior_weight = float(options.get("credit_prior_weight", 1.))
+            self.transfer_max = float(options.get("credit_transfer_max", .5))
         self.reward_scale = float(options.get("reward_scale", 10.))
         if not math.isfinite(self.radius) or self.radius <= 0:
             raise ValueError("credit_radius must be finite and positive")
@@ -77,6 +85,8 @@ class CrossTrajectoryCredit:
         self.horizon = int(options.get("horizons", HORIZONS)[benchmark])
         if self.horizon <= 0:
             raise ValueError("The official finite horizon must be positive")
+        if self.exact_first_hit and (benchmark != "webshop" or self.horizon != 15 or self.count != 8):
+            raise ValueError("Exact first-hit credit requires WebShop with horizon 15 and eight trajectories")
 
         self.rows, times, owners, terminals = [], [], [], []
         self.lengths = [len(t.steps) for t in self.trajectories]
@@ -129,7 +139,7 @@ class CrossTrajectoryCredit:
         features[self.times, self.owners] = flat
         return features
 
-    def _exact_obs_match(self) -> torch.Tensor:
+    def _observation_codes(self, *, pure=False) -> torch.Tensor:
         codes = torch.zeros((self.depth, self.count), dtype=torch.long, device="cpu")
         vocab: dict[tuple[int, ...], int] = {}
         for owner, trajectory in enumerate(self.trajectories):
@@ -138,13 +148,58 @@ class CrossTrajectoryCredit:
             previous = tuple(trajectory.initial_observation_ids)
             for depth_idx, row in enumerate(trajectory.steps):
                 codes[depth_idx, owner] = vocab.setdefault(previous, len(vocab) + 1)
-                previous = tuple(row.observation_repr_ids)
-        return (codes[:, :, None] == codes[:, None, :]) & (codes[:, :, None] > 0)
+                previous = tuple(row.observation_ids if pure else row.observation_repr_ids)
+        return codes
+
+    def _first_hit_weights(self):
+        hist = self._features("z_hist")
+        codes = self._observation_codes(pure=True)
+        other = ~torch.eye(self.count, dtype=torch.bool, device="cpu")
+
+        def matches(left, right, time_distance):
+            left_codes, right_codes = codes[left, :, None], codes[right, None, :]
+            eligible = (left_codes == right_codes) & (left_codes > 0) & other
+            distance = (1.0 - torch.bmm(hist[left], hist[right].transpose(1, 2))).clamp_(time_distance, 2.0)
+            return (1.0 - distance / self.radius).clamp_min_(0.0) * eligible
+
+        # At H=15, a .10 radius gives positive time support only at offsets 0 and ±1.
+        # Adjacent matches are symmetric. Keep only the largest weight per peer.
+        weights = matches(slice(None), slice(None), 0.0)
+        if self.depth > 1:
+            adjacent = matches(slice(None, -1), slice(1, None), 1.0 / self.horizon)
+            weights[:-1] = torch.maximum(weights[:-1], adjacent)
+            weights[1:] = torch.maximum(weights[1:], adjacent.transpose(1, 2))
+        return weights.to(torch.float64)
+
+    def _same_depth_weights(self):
+        # Shapes are [depth, target trajectory, peer trajectory].
+        eligible = self.valid[:, :, None] & self.valid[:, None, :]
+        eligible &= ~torch.eye(self.count, dtype=torch.bool, device="cpu")[None, :, :]
+        if self.benchmark in EXACT_OBSERVATION_BENCHMARKS:
+            codes = self._observation_codes()
+            obs_match = (codes[:, :, None] == codes[:, None, :]) & (codes[:, :, None] > 0)
+            if self.method == "fgpo_obs_only":
+                return (obs_match & eligible).to(torch.float64)
+            hist = self._features("z_hist")
+            hist_dist = (1.0 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0.0, 2.0)
+            return ((1.0 - hist_dist / self.radius).clamp_min_(0.0) * (obs_match & eligible)).to(torch.float64)
+
+        obs = self._features("z_obs")
+        distance = (1.0 - torch.bmm(obs, obs.transpose(1, 2))).clamp_(0.0, 2.0)
+        del obs
+        if self.method != "fgpo_obs_only":
+            hist = self._features("z_hist")
+            history_distance = (1.0 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0.0, 2.0)
+            torch.maximum(distance, history_distance, out=distance)
+            del hist, history_distance
+        return ((1.0 - distance / self.radius).clamp_min_(0.0) * eligible).to(torch.float64)
 
     @torch.no_grad()
     def advantages(self):
-        matching_mode = ("exact_token_id" if self.benchmark in EXACT_OBSERVATION_BENCHMARKS
+        matching_mode = ("exact_token_id" if self.exact_first_hit or self.benchmark in EXACT_OBSERVATION_BENCHMARKS
                          else "dual_view_cosine")
+        first_hit_stats = ({"first_hit_steps": 0, "mean_first_hit_distance": None,
+                            "mean_first_hit_transfer_distance": None} if self.exact_first_hit else {})
         if not self.rows:
             self.diagnostics = {
                 "algorithm": ALGORITHM, "method": self.method,
@@ -159,11 +214,12 @@ class CrossTrajectoryCredit:
                 "positive_peer_gated_steps": 0,
                 "loo_outcome_brier": None,
                 "loo_task_prior_brier": None,
+                **first_hit_stats,
             }
             return {}
         if self.homogeneous:
             count = int(self.valid.sum())
-            zero_transfer = self.all_zero or self.method == "fgpo_no_transfer"
+            zero_transfer = self.all_zero or self.method == "fgpo_no_transfer" or self.exact_first_hit
             self.diagnostics = {
                 "algorithm": ALGORITHM,
                 "method": self.method,
@@ -196,38 +252,13 @@ class CrossTrajectoryCredit:
                 "mean_advantage": 0.0,
                 "advantage_min": 0.0,
                 "advantage_max": 0.0,
+                **first_hit_stats,
             }
             return {row.step_id: 0.0 for row in self.rows}
         if self.reference is None:
             raise ValueError("Mixed-outcome r3 credit requires frozen-reference features")
 
-        # Shapes are [depth, target trajectory, peer trajectory]. This computes
-        # O(H*K^2) matches, rather than comparing every pair of temporal nodes.
-        eligible = self.valid[:, :, None] & self.valid[:, None, :]
-        eligible &= ~torch.eye(self.count, dtype=torch.bool, device="cpu")[None, :, :]
-        if self.benchmark in EXACT_OBSERVATION_BENCHMARKS:
-            obs_match = self._exact_obs_match()
-            if self.method == "fgpo_obs_only":
-                weights = (obs_match & eligible).to(torch.float64)
-            else:
-                hist = self._features("z_hist")
-                hist_dist = (1.0 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0.0, 2.0)
-                del hist
-                weights = ((1.0 - hist_dist / self.radius).clamp_min_(0.0) * (obs_match & eligible)).to(torch.float64)
-                del hist_dist
-            del obs_match
-        else:
-            obs = self._features("z_obs")
-            distance = (1.0 - torch.bmm(obs, obs.transpose(1, 2))).clamp_(0.0, 2.0)
-            del obs
-            if self.method != "fgpo_obs_only":
-                hist = self._features("z_hist")
-                history_distance = (1.0 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0.0, 2.0)
-                torch.maximum(distance, history_distance, out=distance)
-                del hist, history_distance
-            weights = ((1.0 - distance / self.radius).clamp_min_(0.0) * eligible).to(torch.float64)
-            del distance
-
+        weights = self._first_hit_weights() if self.exact_first_hit else self._same_depth_weights()
         support = weights.sum(dim=-1)
         weighted_outcomes = torch.matmul(weights, self.outcomes)
         positive_support = support > 0
@@ -237,6 +268,9 @@ class CrossTrajectoryCredit:
             support + self.prior_weight
         )
         valid_won = self.valid.to(torch.long) * (self.outcomes > 0).to(torch.long)[None, :]
+        if self.exact_first_hit:
+            # A peer alive at v+1 is already alive at v. Include v-1 once per peer.
+            valid_won[1:] = torch.maximum(valid_won[1:], valid_won[:-1])
         has_positive_peer = (valid_won.sum(dim=-1, keepdim=True) - valid_won) >= 1
         if self.method == "fgpo_no_transfer":
             state_share = torch.zeros_like(support)
@@ -247,10 +281,28 @@ class CrossTrajectoryCredit:
                 self.transfer_max * support / (support + self.prior_weight)
             )
 
-        next_values = torch.cat((peer_values[1:], torch.zeros_like(peer_values[:1])), dim=0)
-        next_share = torch.cat((state_share[1:], torch.zeros_like(state_share[:1])), dim=0)
-        next_pos_sup = torch.cat((positive_support[1:], torch.zeros_like(positive_support[:1])), dim=0)
-        next_pos_peer = torch.cat((has_positive_peer[1:], torch.zeros_like(has_positive_peer[:1])), dim=0)
+        if self.exact_first_hit:
+            depths = torch.arange(self.depth, device="cpu")[:, None]
+            terminal_depth = self.valid.sum(dim=0, keepdim=True)
+            supported_depths = torch.where(positive_support, depths, terminal_depth)
+            # Shift the suffix minimum one step: the hit must be strictly later.
+            # Only support controls the stopping point; the success gate acts there.
+            first_supported = supported_depths.flip(0).cummin(dim=0).values.flip(0)
+            next_hit = torch.cat((first_supported[1:], terminal_depth))
+
+            def at_hit(values):
+                padded = torch.cat((values, torch.zeros_like(values[:1])))
+                return padded.gather(0, next_hit)
+
+            next_values = at_hit(peer_values)
+            next_share = at_hit(state_share)
+            next_pos_sup = next_hit < terminal_depth
+            next_pos_peer = at_hit(has_positive_peer)
+        else:
+            next_values = torch.cat((peer_values[1:], torch.zeros_like(peer_values[:1])), dim=0)
+            next_share = torch.cat((state_share[1:], torch.zeros_like(state_share[:1])), dim=0)
+            next_pos_sup = torch.cat((positive_support[1:], torch.zeros_like(positive_support[:1])), dim=0)
+            next_pos_peer = torch.cat((has_positive_peer[1:], torch.zeros_like(has_positive_peer[:1])), dim=0)
         terminal = torch.zeros_like(self.valid)
         terminal[self.times, self.owners] = self.terminals
         continuation = self.valid & ~terminal
@@ -268,6 +320,16 @@ class CrossTrajectoryCredit:
             weights, support, peer_values, baseline, next_share, target, advantage,
             matching_mode=matching_mode, gated_steps=int(gated.sum()),
         )
+        if self.exact_first_hit:
+            distances = (next_hit - depths).to(torch.float64)
+            hit_distances = distances[continuation & next_pos_sup]
+            transfer_distances = distances[next_share > 0]
+            first_hit_stats.update(
+                first_hit_steps=hit_distances.numel(),
+                mean_first_hit_distance=float(hit_distances.mean()) if hit_distances.numel() else None,
+                mean_first_hit_transfer_distance=(float(transfer_distances.mean()) if transfer_distances.numel() else None),
+            )
+            self.diagnostics.update(first_hit_stats)
         return {row.step_id: value for row, value in zip(self.rows, values)}
 
     def _record_diagnostics(self, weights, support, peer_values, baseline, share, target, advantage,

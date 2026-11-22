@@ -2,8 +2,7 @@
   "protocol": "fgpo-r3-published-v4",
   "local_files_only": true,
   "benchmarks": [
-    "alfworld",
-    "appworld"
+    "alfworld"
   ],
   "seeds": [
     0,
@@ -29,16 +28,15 @@
         "ecpo"
       ],
       "benchmarks": [
-        "alfworld",
-        "appworld"
+        "alfworld"
       ],
-      "planned_cells": 33,
+      "planned_cells": 18,
       "claims": [
         "C1_method_level_official_success",
         "C5_actual_end_to_end_cost"
       ],
-      "necessity": "Compare the proposed method with five published baselines on ALFWorld and four on AppWorld.",
-      "interpretation": "Use the published estimators with declared benchmark and backbone transfers, including the G2PO AppWorld V4 migration. Report recipe cost beside final performance.",
+      "necessity": "Compare the proposed method with five published baselines on ALFWorld.",
+      "interpretation": "Use the published estimators with declared benchmark and backbone transfers. Report recipe cost beside final performance.",
       "checkpoint_selection": "final_predeclared_training_round_only"
     },
     "ablation": {
@@ -142,7 +140,6 @@
     "fresh_published_v4_study_no_v1_v2_or_v3_resume",
     "Qwen2.5_7B_backbone_and_full_official_evaluation",
     "published_ALFWorld_credit_prompt_reward_and_training_recipes",
-    "AppWorld_native_Python_transfer_not_original_paper_experiment",
     "PyTorch_batch_rollout_and_CPU_FP32_master_AdamW_runtime",
     "released_copy_balance_virtual_microbatch_weights_for_published_PPO",
     "GiGPO_published_1_5B_full_finetune_recipe_transferred_to_study_7B",

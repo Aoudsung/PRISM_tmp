@@ -15,6 +15,10 @@ TEXTCRAFT_OUTPUT_TOKENS = 128
 TEXTCRAFT_CONTEXT_TOKENS = 8192
 TEXTCRAFT_TRAIN_ROUNDS = 50
 TEXTCRAFT_TRAIN_GROUPS = 16
+TEXTCRAFT_1P5B_FORMAT_STUDY = "textcraft-1p5b-joint-format-from-base-v1"
+TEXTCRAFT_FORMAT_EXAMPLE = (
+    "Example response format: <think>I will check the inventory.</think><action>inventory</action>"
+)
 TEXTCRAFT_SYSTEM_PROMPT = (
     "You are an expert agent in TextCraft. Craft the goal item using the listed recipes. "
     "Use one command each step: get <count> <raw item>, "
@@ -58,7 +62,7 @@ def textcraft_observation(raw: str) -> str:
 class TextCraftEnv:
     benchmark = "textcraft"
 
-    def __init__(self, data_root, *, run_dir):
+    def __init__(self, data_root, *, run_dir, format_example=False):
         root = Path(data_root).resolve()
         sys.path.insert(0, str(root / "vendor/agent_system/environments/env_package"))
         from textcraft.envs import TextCraftWorker, _load_goal_index, _load_split
@@ -77,7 +81,10 @@ class TextCraftEnv:
             self.tasks.update((row["task_id"], row) for row in rows)
         self.world = self.task = self.info = None
         self.done = False
-        self.action_schema = {"benchmark": self.benchmark, "native_system_prompt": TEXTCRAFT_SYSTEM_PROMPT}
+        prompt = TEXTCRAFT_SYSTEM_PROMPT
+        if format_example:
+            prompt += "\n" + TEXTCRAFT_FORMAT_EXAMPLE
+        self.action_schema = {"benchmark": self.benchmark, "native_system_prompt": prompt}
 
     def list_tasks(self, split):
         return self.catalog[split]
