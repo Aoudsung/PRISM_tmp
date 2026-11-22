@@ -62,6 +62,11 @@ def _row_stats(row: dict) -> dict:
     wins = int(row.get("successes") or 0)
     syn = diag.get("syntax_valid_fraction")
     adm = diag.get("admissible_valid_fraction")
+    tot_steps = int(diag.get("total_steps") or 0)
+    adm_steps = int(diag.get("admissible_valid_steps") or 0)
+    adm_obs = diag.get("admissible_observed_steps")
+    if adm_obs is None and diag.get("admissible_valid_steps") is not None:
+        adm_obs = round(adm_steps / float(adm)) if adm and float(adm) > 0 else tot_steps
     return {
         "round": int(row["round"]),
         "wins": wins,
@@ -72,10 +77,10 @@ def _row_stats(row: dict) -> dict:
         "total_groups": int(diag.get("total_groups") or len(credit_groups) or 16),
         "mixed_gids": mixed_gids,
         "syn_steps": int(diag.get("syntax_valid_steps") or 0),
-        "tot_steps": int(diag.get("total_steps") or 0),
+        "tot_steps": tot_steps,
         "syn_pct": 100.0 * float(syn) if syn is not None else None,
-        "adm_steps": int(diag.get("admissible_valid_steps") or 0),
-        "adm_obs": int(diag.get("admissible_observed_steps") or 0),
+        "adm_steps": adm_steps,
+        "adm_obs": int(adm_obs or 0),
         "adm_pct": 100.0 * float(adm) if adm is not None else None,
         "unterm": int(diag.get("unterminated_response_steps") or 0),
         "ent_tok": _ent_per_tok(row),
@@ -83,15 +88,27 @@ def _row_stats(row: dict) -> dict:
         "gated": int(diag.get("positive_peer_gated_steps") or 0),
         "opt_steps": int(row.get("optimizer_steps") or 0),
         "opt_in_round": int(diag.get("optimizer_steps_in_round") or 0),
-        "wall_s": float(costs.get("wall_seconds") or 0.0),
+        "cum_wall_s": float(costs.get("wall_seconds") or 0.0),
     }
+
+
+def _round_wall_map(rows: list[dict]) -> dict[int, float]:
+    ordered = sorted(rows, key=lambda r: int(r["round"]))
+    out: dict[int, float] = {}
+    prev = 0.0
+    for r in ordered:
+        cum = float((r.get("costs") or {}).get("wall_seconds") or 0.0)
+        delta = (cum - prev) if cum >= prev else cum
+        out[int(r["round"])] = delta
+        prev = cum
+    return out
 
 
 def _fmt(val: float | None, spec: str = ".2f", suffix: str = "") -> str:
     return "—" if val is None else f"{val:{spec}}{suffix}"
 
 
-def _window_summary(rows: list[dict], lo: int, hi: int) -> dict | None:
+def _window_summary(rows: list[dict], wall_by_r: dict[int, float], lo: int, hi: int) -> dict | None:
     sub = [r for r in rows if lo <= int(r["round"]) <= hi]
     if not sub:
         return None
@@ -104,7 +121,7 @@ def _window_summary(rows: list[dict], lo: int, hi: int) -> dict | None:
     adm_steps = sum(s["adm_steps"] for s in stats)
     mixed = sum(s["mixed"] for s in stats)
     unterm = sum(s["unterm"] for s in stats)
-    wall_h = sum(s["wall_s"] for s in stats) / 3600.0
+    wall_h = sum(wall_by_r.get(s["round"], 0.0) for s in stats) / 3600.0
     ents = [s["ent_tok"] for s in stats if s["ent_tok"] is not None]
     omegas = [s["omega"] for s in stats if s["omega"] is not None]
     return {
@@ -202,6 +219,8 @@ def report_alfworld(r5_out: Path, v4_ref: Path) -> None:
     print(f"  Live status: {_live_costs_progress(r5_cell)}")
     v4_by_r = {int(r["round"]): r for r in v4_rows}
     r5_by_r = {int(r["round"]): r for r in r5_rows}
+    v4_wall = _round_wall_map(v4_rows)
+    r5_wall = _round_wall_map(r5_rows)
 
     if r5_rows:
         print("  Round | r5 SR (w/128) | V4 SR (w/128) | Mix r5/V4 (+gain/-loss) | Syn% r5/V4 | Adm% r5/V4 | Unterm r5/V4 | Ent/tok r5/V4 | Omega(r5) | Gate(V4) | Wall(s) r5/V4")
@@ -218,7 +237,7 @@ def report_alfworld(r5_out: Path, v4_ref: Path) -> None:
                 unt_str = f"{s5['unterm']:4d}/{s4['unterm']:4d}"
                 ent_str = f"{_fmt(s5['ent_tok'], '.3f')}/{_fmt(s4['ent_tok'], '.3f')}"
                 gate_str = f"{s4['gated']:4d}"
-                wall_str = f"{s5['wall_s']:.0f}/{s4['wall_s']:.0f}"
+                wall_str = f"{r5_wall.get(r, 0.0):.0f}/{v4_wall.get(r, 0.0):.0f}"
             else:
                 v4_sr = "   —   ( — )"
                 mix_str = f"{s5['mixed']:2d}/ —"
@@ -227,7 +246,7 @@ def report_alfworld(r5_out: Path, v4_ref: Path) -> None:
                 unt_str = f"{s5['unterm']:4d}/  —"
                 ent_str = f"{_fmt(s5['ent_tok'], '.3f')}/  —"
                 gate_str = "  —"
-                wall_str = f"{s5['wall_s']:.0f}/ —"
+                wall_str = f"{r5_wall.get(r, 0.0):.0f}/ —"
             print(
                 f"  R{r:02d}   | {s5['sr']:5.2f}% ({s5['wins']:3d}) | {v4_sr} | "
                 f"{mix_str:21s} | {syn_str:11s} | {adm_str:11s} | {unt_str:9s} | "
@@ -237,8 +256,8 @@ def report_alfworld(r5_out: Path, v4_ref: Path) -> None:
         print("  r5 R0 still sampling (no completed row in training.jsonl yet).")
 
     for label, lo, hi in (("R0 (Zero-Shot Tag Framing)", 0, 0), ("R0-R5", 0, 5), ("R0-R14 (Full V4 Paired)", 0, 14), ("R0-Latest", 0, 999)):
-        w5 = _window_summary(r5_rows, lo, hi)
-        w4 = _window_summary(v4_rows, lo, hi)
+        w5 = _window_summary(r5_rows, r5_wall, lo, hi)
+        w4 = _window_summary(v4_rows, v4_wall, lo, hi)
         if w5 or w4:
             p5 = f"{w5['wins']}/{w5['trajs']} ({w5['sr']:.2f}%) mix={w5['mixed']} syn={_fmt(w5['syn_pct'], '.1f', '%')} adm={_fmt(w5['adm_pct'], '.1f', '%')} unterm={w5['unterm']} h={w5['wall_h']:.2f}" if w5 else "pending"
             p4 = f"{w4['wins']}/{w4['trajs']} ({w4['sr']:.2f}%) mix={w4['mixed']} syn={_fmt(w4['syn_pct'], '.1f', '%')} adm={_fmt(w4['adm_pct'], '.1f', '%')} unterm={w4['unterm']} h={w4['wall_h']:.2f}" if w4 else "—"
@@ -254,7 +273,7 @@ def report_other_benchmark(name: str, cell: Path, split: str, note: str, ref_eva
     print(f"  Live status: {_live_costs_progress(cell)}")
     rows = _read_jsonl(cell / "training.jsonl")
     if rows:
-        w = _window_summary(rows, 0, 999)
+        w = _window_summary(rows, _round_wall_map(rows), 0, 999)
         last = _row_stats(rows[-1])
         print(
             f"  Completed {len(rows)} rounds ({w['rounds']}): "
