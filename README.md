@@ -1,10 +1,10 @@
-# F-GPO r3
+# F-GPO r7 (`fgpo-r7-token-mean-v1`)
 
 协作模型的执行平台、session ID、PI 续接命令与退役记录见 [协作会话登记](docs/COLLABORATOR_SESSIONS.md)。
 
-本分支从 `977bb86` 重构并收敛为 `fgpo-r3-published-v4` 正式协议。F-GPO 在同任务独立轨迹中，按**相同步深度、相近实际可见历史**共享真实终局成功回报，研究有限时域 agent 的跨轨迹信用分配。方法采用 γ=1、固定回报尺度、整轨迹留一基线、正同伴门控的有限支持下一状态续值共享，以及仅针对混合结果组的原子轨迹归一化 PPO。
+本分支在 `V4`（`fgpo-r3-published-v4`）的基础上，经 `r5`（对称势能、未决同伴缩放 $\kappa$、按词元均值化熵）、`r6`（规范充分 POMDP 滤子 $\Pi(\mathcal{H}_t)$、TextCraft 两条公开公理与 `H=60/70` 双评估）演化至 **`r7`（`fgpo-r7-token-mean-v1`）**。F-GPO 在同任务独立轨迹中，按**相同步深度、相近实际可见历史**共享真实终局成功回报，使用 $\gamma=1$、固定回报尺度 $R=10$、整轨迹留一基线、正同伴对称有限支持续值共享与均衡打乱的词元均值微批 PPO（`loss_normalization="token"`, `entropy_normalization="token"`, `ppo_epochs=1`, `ppo_minibatch_rows=256`, `lr=1e-6`, `credit_prior_weight=1.0`），并配合 8 线程并发 GCS 分片 `compose` 检查点（Colab `checkpoint_interval_rounds=20`，零本地检查点下行流量）。
 
-当前协议为 **fgpo-r3-published-v4**。TextCraft 与 WebShop 优先执行 F-GPO 主实验。已启动的消融保存并暂停，未启动的消融移出排程。各卡位及种子的实际状态见[当前实验排程](docs/fgpo_experiment_schedule_current.md)。
+当前主推协议为 **`fgpo-r7-token-mean-v1`**。核心配置与运行入口见 `configs/fgpo-r7-1p5b-*.json` 及 `scripts/{colab_run_r7_1p5b_queue,run_fgpo_host_r7_1p5b_queue,colab_gcs_keepalive,compare_r7_vs_r6_r5_v4}.{sh,py}`。
 
 ## 方案、实现与来源
 
@@ -12,17 +12,18 @@
 
 | 路径 | 职责 |
 |---|---|
-| `src/fgpo/filtration.py`、`records.py` | 整数 token 历史、完整轮窗口、三块公开观测偏移、唯一响应归属和真实成本记录 |
-| `src/fgpo/credit.py`、`reference.py` | 同深度留一正同伴门控续值、ALFWorld 精确观测匹配与 WebShop 双视角核、混合组筛选后参考评分 |
+| `src/fgpo/filtration.py`、`public.py`、`records.py` | 规范充分 POMDP 滤子、整数 token 历史、三块公开观测偏移、唯一响应归属与真实成本记录 |
+| `src/fgpo/credit.py`、`reference.py`、`textcraft.py` | 对称动作前/后势能、$\kappa$ 平滑未决同伴权重、TextCraft 公开规则与 `H=60/70` 双时域评估、混合组筛选后参考评分 |
 | `src/fgpo/baseline_specs.py`、`published_baselines.py`、`published_batching.py` | 已发表 baseline 的固定来源、有效配方、信用规则与作者 batch/损失语义 |
 | `src/fgpo/cache.py`、`policy.py` | 几何 KV、停放完成槽解码、有效位置、完整提示批处理、采样与有界表示微批 |
-| `src/fgpo/optimization.py` | 原子混合组批次与分母、解析词表反向、一次主干反向、逐批范数与首批一致性诊断和 CPU-master AdamW |
+| `src/fgpo/optimization.py` | 均衡打乱 `mixed_token_mean`（及统一 `step_token`）微批、解析词表反向、一次主干反向与 CPU-master AdamW |
 | `src/fgpo/envs.py`、`rollout.py`、`baselines.py` | 持久官方环境、组内批量采样、ALFWorld `<think>/<action>` 提取及各方法原生观测/动作接口 |
-| `src/fgpo/protocol.py`、`engine.py`、`runner.py` | v4 方法与配方身份、两个实验 suite、同质轮零步旁路、恢复和完整官方评测 |
+| `src/fgpo/checkpoint_gcs.py` | 8 并发 GCS 分片上传与 `compose` 合并、大盘直存 `.gcs-staging` 落盘暂存及增量日志流同步 |
+| `src/fgpo/protocol.py`、`engine.py`、`runner.py` | `r7` 协议与配方身份、同质轮零步旁路、恢复和完整官方评测 |
 
-参考模型固定为 cell 初始 Qwen 权重。历史特征取实际 actor prompt 末位的倒数第八层；局部观测特征取当前公开反馈的独立表示。F-GPO 使用最多 32768 tokens 的有界历史，超限时保留初始任务/bootstrap 与最近完整轮次。采样、参考评分和 PPO 使用同一真实前缀；终末反馈保存在轨迹中，参考阶段只计算训练需要的响应概率和动作前特征。
+参考模型固定为 cell 初始 Qwen 权重。历史特征取实际 actor prompt 末位的倒数第八层；局部观测特征取当前公开反馈的独立表示。F-GPO 使用有界历史，超限时保留初始任务/bootstrap 与最近完整轮次；采样、参考评分和 PPO 使用同一真实前缀。
 
-动作前基线的 score 恒等式适用于行为策略采样点；续值共享的偏差由匹配误差和共享权重决定。正式训练使用带 clipping、entropy 和参考正则的 PPO。论文论证围绕这一明确的估计对象、条件性误差分析和官方任务表现展开。
+动作前基线的 score 恒等式适用于行为策略采样点；续值共享的偏差由匹配误差和共享权重决定。正式训练使用带 clipping、token-mean 条件熵与截断 k3 参考正则的 PPO。
 
 ## 正式实验
 
@@ -62,7 +63,7 @@ ALFWorld 评测摘要同时在 `task_types` 中按官方任务前缀输出 `Pick
 
 采样使用逐层几何 KV 缓冲、`active-rows-v3` 停放完成槽解码、真实有效 mask 和逻辑 RoPE 位置；当主机已知 `right_padded` 且全部物理列有效时，cached 单 token 解码传入 `attention_mask=None` 避免冗余掩码与 GQA 展开，继续行保留扩容余量并裁去退出后尾部空列，`_sample_turn` 直接向轮转步移交停放分片避免无用合批拷贝，并限制增量重放中的物理 padding 与长窗口查询块峰值（异长/ragged GQA 后端改造保留为后续工作）。缓存行选择按设备上传一次 indices；已结束响应的 padding 槽位跳过词表投影。不同完整提示可以批量 prefill；所有正式方法都采用组内批量模型采样。环境进程复用解释器，每个 episode 重新建立独立 world；F-GPO 的完成响应可提前派发环境执行。
 
-PPO 在全同结果轮（`M_mix=0`）直接零步旁路；存在混合结果组时按完整 $K=8$ 混合组构建原子批次（固定分母 $Z_m=8$），并只计算当前组内段所拥有响应所需的因果前缀。输出头按响应词元分块立即反向，使用 logprob/entropy 的一阶解析导数，显式 adjoint 缓冲随响应词元数分配，最后通过 gather 对主干执行一次反向，裁剪计数、有序 FP64 差值和与最大值在输出设备按段归集并于段边界读回，同时记录逐批裁剪前范数与首批次同权重概率一致性误差。AdamW 的 FP32 master/moments 在 CPU，梯度与权重通过有界 staging 桶传输。解码、参考和 PPO 段日志按操作、role 与真实轮次/组聚合精确计数，减少逐块同步与 JSON 写入；启动、环境、同步阶段及最终发布回收事件保留。
+PPO 在全同结果轮（`M_mix=0`）直接零步旁路；存在混合结果组时在 `r7` 将全部混合组响应步打乱并均衡切分为 `ppo_minibatch_rows=256`、`ppo_epochs=1` 的词元均值微批（`mixed_token_mean`，策略、k3 KL 与条件熵统一按 `1/N_tok_m` 归一化），只计算当前组内段所拥有响应所需的因果前缀。输出头按响应词元分块立即反向，使用 logprob/entropy 的一阶解析导数，显式 adjoint 缓冲随响应词元数分配，最后通过 gather 对主干执行一次反向，裁剪计数、有序 FP64 差值和与最大值在输出设备按段归集并于段边界读回，同时记录逐批裁剪前范数与首批次同权重概率一致性误差。AdamW 的 FP32 master/moments 在 CPU，梯度与权重通过有界 staging 桶传输；Colab GCS 断点支持 8 并发分段与服务端 `compose` 合并。
 
 资源默认值包括 `head_chunk_tokens=64`、`optimizer_bucket_mib=64`、`cache_initial_capacity=1024`、`representation_token_budget=8192`、`representation_batch_size=8`、`environment_pool_size=8`、`working_memory_gib=6`、`activation_offload=false`。实际峰值由正式运行记录；几何容量、逻辑长度和 allocator reserved bytes 分别报告。
 
