@@ -20,6 +20,14 @@ def clock() -> float:
     return time.clock_gettime(time.CLOCK_MONOTONIC)
 
 
+def proportional_representation_layer(num_layers: int) -> int:
+    """Select ~5/7 semantic depth across arbitrary model scales (20 for 28-layer 1.5B/7B)."""
+    count = int(num_layers)
+    if count < 1:
+        raise ValueError("Model must contain at least one decoder layer")
+    return (5 * count) // 7
+
+
 @dataclass
 class KVState:
     cache: Any
@@ -345,6 +353,10 @@ class CausalPolicy(nn.Module):
     def base(self):
         return self.model.get_base_model() if self.adaptation else self.model
 
+    @property
+    def representation_layer(self) -> int:
+        return proportional_representation_layer(len(self.base.model.layers))
+
     @contextmanager
     def use_collection_replica(self, backbone):
         if backbone is None:
@@ -492,11 +504,19 @@ class CausalPolicy(nn.Module):
         )
         if attention_mask is None:
             key_width = past + ids.shape[1]
+            uncached_causal = (not use_cache) and (past == 0)
             if all_valid_single_token:
                 mask = None
                 model_mask = None
                 if position_ids is None:
                     position_ids = torch.full((ids.shape[0], 1), past, dtype=torch.long, device=device)
+                else:
+                    position_ids = position_ids.to(device)
+            elif uncached_causal:
+                mask = None
+                model_mask = None
+                if position_ids is None:
+                    position_ids = torch.arange(ids.shape[1], dtype=torch.long, device=device).unsqueeze(0).expand(ids.shape[0], -1)
                 else:
                     position_ids = position_ids.to(device)
             else:
@@ -610,7 +630,7 @@ class CausalPolicy(nn.Module):
                                  "cached_query_key_positions": ids.numel() * key_width if sampling_cache else 0,
                                  "executed_decoder_layers": index + 1 if stop_at_hidden_layer else len(self.base.model.layers)})
 
-    def packed_segment_hidden(self, token_ids, *, hidden_layer=-8, role="packed_segment",
+    def packed_segment_hidden(self, token_ids, *, hidden_layer="auto", role="packed_segment",
                               hidden_positions=None, stop_at_hidden_layer=False):
         """Score causal tokens, optionally retaining only requested layer positions.
 
@@ -619,16 +639,18 @@ class CausalPolicy(nn.Module):
         for response scoring. Representation-only callers may exit at that
         layer; both returned tensors then contain the selected positions.
         """
-        return self.body(tuple(token_ids)[:-1], hidden_layer=hidden_layer, role=role,
+        resolved_layer = self.representation_layer if hidden_layer == "auto" else hidden_layer
+        return self.body(tuple(token_ids)[:-1], hidden_layer=resolved_layer, role=role,
                          hidden_positions=hidden_positions, stop_at_hidden_layer=stop_at_hidden_layer)[:2]
 
     @torch.no_grad()
-    def observation_embeddings(self, rows, *, role="reference.observation_embedding", layer=-8):
+    def observation_embeddings(self, rows, *, role="reference.observation_embedding", layer=None):
         rows = tuple(tuple(row) for row in rows)
         if not rows:
             return torch.empty((0, self.base.config.hidden_size), dtype=torch.float32)
         if any(not row or len(row) > self.max_context_tokens for row in rows):
             raise ValueError("Observation representations require nonempty in-context token sequences")
+        target_layer = self.representation_layer if layer is None else layer
         ordered = sorted(range(len(rows)), key=lambda i: len(rows[i]))
         batches, current = [], []
         for index in ordered:
@@ -647,15 +669,14 @@ class CausalPolicy(nn.Module):
             width = max(lengths)
             ids = torch.tensor([row + (self.tokenizer.pad_token_id,) * (width - len(row))
                                 for row in selected_rows], dtype=torch.long, device=self.device)
-            valid = torch.arange(width, device=self.device)[None, :] < torch.tensor(lengths, device=self.device)[:, None]
-            hidden, _, _ = self.body(ids, attention_mask=valid, hidden_layer=layer,
+            hidden, _, _ = self.body(ids, attention_mask=None, hidden_layer=target_layer,
                 stop_at_hidden_layer=True, actual_tokens=sum(lengths), logical_length=width, role=role)
             vectors = hidden[torch.arange(len(indices), device=hidden.device),
                              torch.tensor(lengths, device=hidden.device) - 1]
             result[indices] = torch.nn.functional.normalize(vectors.float(), dim=-1).cpu()
             # Release this batch before evaluating the next RHS: assignment to
             # `hidden` alone would retain the previous full output meanwhile.
-            del hidden, vectors, ids, valid
+            del hidden, vectors, ids
         return result
 
     def _cache_root(self, ids, valid, lengths, role):

@@ -98,7 +98,7 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None, round_ind
     scale = float(config.get("reward_scale", 10.))
     chunk = int(config.get("head_chunk_tokens", 64))
     ledger = getattr(policy, "ledger", None)
-    result = ReferenceRound(conditioning="canonical-pomdp-filtration-r6" if own else "actual-bounded-actor-prefix-r3")
+    result = ReferenceRound(conditioning="canonical-tag-preserving-pomdp-filtration-r8" if own else "actual-bounded-actor-prefix-r3")
     observation_users = {}
     segment_items = []
     for trajectory in trajectories:
@@ -145,9 +145,10 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None, round_ind
              (ledger.aggregate_model_calls() if ledger is not None else nullcontext()):
             if len(mb) == 1:
                 _, segment, rows, closed = mb[0]
+                rep_layer = policy.representation_layer
                 hidden, layer = policy.packed_segment_hidden(
                     segment.token_ids[:closed],
-                    hidden_layer=-8 if needs_history else None,
+                    hidden_layer=rep_layer if needs_history else None,
                     hidden_positions=[row.prompt_length - 1 for row in rows] if needs_history else None,
                     role="reference.packed_segment",
                 )
@@ -174,12 +175,12 @@ def prepare_round(policy, trajectories, *, method="fgpo", config=None, round_ind
                 pad_id = policy.tokenizer.pad_token_id
                 ids = torch.tensor([seq + (pad_id,) * (width - len(seq)) for seq in seqs],
                                    dtype=torch.long, device=policy.device)
-                valid = torch.arange(width, device=policy.device)[None, :] < torch.tensor(lengths, device=policy.device)[:, None]
+                rep_layer = policy.representation_layer
                 hidden, layer, _ = policy.body(
-                    ids, attention_mask=valid, hidden_layer=-8 if needs_history else None,
+                    ids, attention_mask=None, hidden_layer=rep_layer if needs_history else None,
                     actual_tokens=sum(lengths), logical_length=width, role="reference.packed_segment",
                 )
-                del ids, valid
+                del ids
                 histories = None
                 if needs_history:
                     hist_positions = [b * width + (row.prompt_length - 1)

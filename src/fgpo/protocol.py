@@ -1,14 +1,18 @@
 """Published comparisons and claim-scoped own ablations; independent of torch."""
+import json
+from pathlib import Path
+
 from .baseline_specs import (PUBLISHED_RECIPES, PUBLISHED_SOURCES, UPSTREAM_COMMIT, published_recipe,
                              supports_published_benchmark)
 from .public import EVAL_HORIZONS, EXACT_OBSERVATION_BENCHMARKS, HORIZONS as OFFICIAL_HORIZONS, OUTPUT_LIMITS
 from .textcraft import (TEXTCRAFT_1P5B_FORMAT_STUDY, TEXTCRAFT_CONTEXT_TOKENS, TEXTCRAFT_COUNTS,
-                        TEXTCRAFT_EVAL_HORIZON, TEXTCRAFT_FORMAT_EXAMPLE, TEXTCRAFT_SOURCE_COMMIT,
-                        TEXTCRAFT_TRAIN_GROUPS, TEXTCRAFT_TRAIN_ROUNDS)
+                        TEXTCRAFT_EVAL_HORIZON, TEXTCRAFT_FORMAT_EXAMPLE, TEXTCRAFT_PUBLISHED_OUTPUT_TOKENS,
+                        TEXTCRAFT_SOURCE_COMMIT, TEXTCRAFT_TRAIN_GROUPS, TEXTCRAFT_TRAIN_ROUNDS)
 from .webshop import PAIRED_TRAIN_ROUNDS, TRAIN_GROUPS, TRAIN_ROUNDS, VALIDATION_SESSIONS, VALIDATION_WORKERS
 
 
-PROTOCOL = "fgpo-r7-token-mean-v1"
+PROTOCOL = "fgpo-r8-scale-invariant-v1"
+REFERENCE_HIDDEN_SIZE = 3584
 TEXTCRAFT_RESPONSE192_STUDY = "textcraft-v4-response192-v1"
 TEXTCRAFT_RESPONSE192_TOKENS = 192
 WEBSHOP_PAIRED_STUDY = "webshop-150-paired-v1"
@@ -18,8 +22,15 @@ WEBSHOP_1P5B_ADAPTED_STUDY = "webshop-150-1p5b-joint-adapted-from-base-v1"
 WEBSHOP_R5_150_STUDY = "webshop-150-r5-from-base-v1"
 WEBSHOP_R6_150_STUDY = "webshop-150-r6-from-base-v1"
 WEBSHOP_R7_150_STUDY = "webshop-150-r7-from-base-v1"
+WEBSHOP_R8_150_STUDY = "webshop-150-r8-from-base-v1"
 WEBSHOP_JOINT_FROM_BASE_STUDIES = (WEBSHOP_JOINT_FROM_BASE_STUDY, WEBSHOP_1P5B_ADAPTED_STUDY)
-WEBSHOP_FROM_BASE_STUDIES = (*WEBSHOP_JOINT_FROM_BASE_STUDIES, WEBSHOP_R5_150_STUDY, WEBSHOP_R6_150_STUDY, WEBSHOP_R7_150_STUDY)
+WEBSHOP_FROM_BASE_STUDIES = (
+    *WEBSHOP_JOINT_FROM_BASE_STUDIES,
+    WEBSHOP_R5_150_STUDY,
+    WEBSHOP_R6_150_STUDY,
+    WEBSHOP_R7_150_STUDY,
+    WEBSHOP_R8_150_STUDY,
+)
 WEBSHOP_JOINT_SEED = 1
 WEBSHOP_JOINT_OVERRIDES = {"entropy_coef": .002, "credit_transfer_max": .25}
 WEBSHOP_RADIUS_STUDY = "webshop-150-v4-radius-v1"
@@ -61,8 +72,31 @@ _OWN_DEFAULTS = {
     "entropy_coef": .001, "kl_coef": .01, "max_grad_norm": 1.,
     "temperature": 1., "eval_temperature": .4, "top_p": 1., "eval_top_p": 1.,
     "history_length": None, "shuffle": True,
-    "credit_radius": .10, "credit_prior_weight": 1., "credit_transfer_max": .5,
+    "credit_radius": .08, "credit_time_radius": .10,
+    "credit_prior_weight": 1., "credit_transfer_max": 1.,
 }
+
+
+def scale_learning_rate(base_lr: float, hidden_size: int | None) -> float:
+    """Keep constant step size <=7B and scale inversely with residual width above d=3584."""
+    lr = float(base_lr)
+    if hidden_size is None or int(hidden_size) <= 0:
+        return lr
+    return lr * min(1.0, float(REFERENCE_HIDDEN_SIZE) / float(hidden_size))
+
+
+def _model_hidden_size(model_path) -> int | None:
+    if not model_path:
+        return None
+    cfg_file = Path(str(model_path)) / "config.json"
+    if not cfg_file.is_file():
+        return None
+    try:
+        data = json.loads(cfg_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get("hidden_size")
+    return int(value) if isinstance(value, int) and value > 0 else None
 _RECIPE_ALIASES = {
     "learning_rate": "lr", "optimizer_betas": "betas", "optimizer_eps": "adam_eps",
     "groups": "tasks_per_round", "trajectories": "group_size",
@@ -113,9 +147,14 @@ def resolve_method_config(config, method=None, benchmark=None):
         options.update({key: recipe[source] for key, source in _RECIPE_ALIASES.items()})
         options["loss_normalization"] = "token"
     elif method == EXACT_FIRST_HIT_METHOD:
-        options.update(credit_transfer_max=1.)
+        options.update(credit_radius=.10, credit_time_radius=.10, credit_prior_weight=1., credit_transfer_max=1.)
     options.update(config.get("method_configs", {}).get(method, {}))
     if method in OWN_METHODS:
+        if options.get("learning_rate") == "auto" or (
+                "learning_rate" not in config and "learning_rate" not in config.get("method_configs", {}).get(method, {})):
+            options["learning_rate"] = scale_learning_rate(
+                _OWN_DEFAULTS["learning_rate"], _model_hidden_size(options.get("model_path"))
+            )
         limits = {**OUTPUT_LIMITS, **options.get("output_tokens_by_benchmark", {})}
         options["output_tokens"] = int(options.get("output_tokens", limits[benchmark]))
     return options
@@ -154,6 +193,7 @@ def require_protocol(config):
     r5_webshop = study == WEBSHOP_R5_150_STUDY
     r6_webshop = study == WEBSHOP_R6_150_STUDY
     r7_webshop = study == WEBSHOP_R7_150_STUDY
+    r8_webshop = study == WEBSHOP_R8_150_STUDY
     radius_study = study == WEBSHOP_RADIUS_STUDY
     if study is not None and not webshop_150 and not textcraft_response192 and not textcraft_format:
         raise ValueError(f"Unknown study protocol {study!r}")
@@ -188,7 +228,12 @@ def require_protocol(config):
         from_base_studies = (*WEBSHOP_FROM_BASE_STUDIES, TEXTCRAFT_1P5B_FORMAT_STUDY)
         if study != effective_study and (study in from_base_studies or effective_study in from_base_studies):
             raise ValueError("Select the study protocol at the experiment level")
-        output_limit = TEXTCRAFT_RESPONSE192_TOKENS if textcraft_response192 else OUTPUT_LIMITS[benchmark]
+        if benchmark == "textcraft" and method in PUBLISHED_METHODS:
+            output_limit = TEXTCRAFT_PUBLISHED_OUTPUT_TOKENS
+        elif textcraft_response192:
+            output_limit = TEXTCRAFT_RESPONSE192_TOKENS
+        else:
+            output_limit = OUTPUT_LIMITS[benchmark]
         # PPO old/current/reference probabilities all use the unit-temperature law.
         if (options["temperature"] != 1. or options["top_p"] != 1.
                 or options["eval_temperature"] != .4 or options["eval_top_p"] != 1.):
@@ -207,7 +252,8 @@ def require_protocol(config):
                 raise ValueError(f"{study} training recipe differs at " + ", ".join(changed))
         if textcraft_format:
             required = {**_OWN_DEFAULTS, "rounds": TEXTCRAFT_TRAIN_ROUNDS, "learning_rate": 2e-6,
-                        "credit_radius": .10, "credit_prior_weight": .5, "credit_transfer_max": .5}
+                        "credit_radius": .10, "credit_time_radius": .10,
+                        "credit_prior_weight": .5, "credit_transfer_max": .5}
             changed = [key for key, value in required.items() if not _same_value(options.get(key), value)]
             if changed:
                 raise ValueError(f"{study} training recipe differs at " + ", ".join(changed))
@@ -220,7 +266,7 @@ def require_protocol(config):
                     or int(options.get("ppo_minibatch_rows") or 0) < 1
                     or int(options.get("ppo_epochs", 0)) != 1
                     or int(options["output_tokens"]) != output_limit):
-                raise ValueError("Own r7 methods require undiscounted success, K=8, 1-epoch token-mean PPO minibatches, official output limits, and token-mean entropy")
+                raise ValueError("Own r8 methods require undiscounted success, K=8, 1-epoch token-mean PPO minibatches, official output limits, and token-mean entropy")
             rounds = PAIRED_TRAIN_ROUNDS if webshop_150 else TRAIN_ROUNDS
             if benchmark == "webshop" and (
                     options["rounds"] != rounds or options["groups"] != TRAIN_GROUPS
@@ -228,9 +274,15 @@ def require_protocol(config):
                     or options.get("max_context_tokens", 32768) != 32768):
                 raise ValueError(f"WebShop F-GPO uses {rounds} rounds, 16 groups, seeds 0–2, a 32768-token context and a full-success reward of 10")
             if webshop_150:
-                required = {**_OWN_DEFAULTS, "rounds": PAIRED_TRAIN_ROUNDS, "credit_radius": .10,
-                            "credit_prior_weight": _OWN_DEFAULTS["credit_prior_weight"] if (r6_webshop or r7_webshop) else 1.,
-                            "credit_transfer_max": 1. if method == EXACT_FIRST_HIT_METHOD else .5}
+                expected_lr = scale_learning_rate(
+                    _OWN_DEFAULTS["learning_rate"], _model_hidden_size(options.get("model_path"))
+                )
+                if r8_webshop:
+                    required = {**_OWN_DEFAULTS, "rounds": PAIRED_TRAIN_ROUNDS, "learning_rate": expected_lr}
+                else:
+                    required = {**_OWN_DEFAULTS, "rounds": PAIRED_TRAIN_ROUNDS, "credit_radius": .10,
+                                "credit_prior_weight": _OWN_DEFAULTS["credit_prior_weight"] if (r6_webshop or r7_webshop) else 1.,
+                                "credit_transfer_max": 1. if method == EXACT_FIRST_HIT_METHOD else .5}
                 if joint:
                     required.update(WEBSHOP_JOINT_OVERRIDES)
                 if adapted_1p5b:
@@ -246,7 +298,7 @@ def require_protocol(config):
                         raise ValueError(f"{study} requires the selected WebShop radius (.05 or .10)")
                     required.update(WEBSHOP_RADIUS_OVERRIDES, credit_radius=radius)
                 changed = [key for key, value in required.items()
-                           if not _same_value(options.get(key) if (adapted_1p5b or r5_webshop or r6_webshop or r7_webshop) else options.get(key, value), value)]
+                           if not _same_value(options.get(key) if (adapted_1p5b or r5_webshop or r6_webshop or r7_webshop or r8_webshop) else options.get(key, value), value)]
                 if changed:
                     raise ValueError(f"{study} training recipe differs at " + ", ".join(changed))
             continue
@@ -272,7 +324,7 @@ def effective_training_identity(config):
         "eval_horizon": EVAL_HORIZONS[benchmark],
         "evaluation_splits": OFFICIAL_EVALUATION_SPLITS[benchmark],
         "max_context_tokens": int(options.get("max_context_tokens", 32768)),
-        "rollout": "canonical_pomdp_filtration_r6" if method in OWN_METHODS else "released_native_prompt",
+        "rollout": "canonical_tag_preserving_pomdp_filtration_r8" if method in OWN_METHODS else "released_native_prompt",
         "constant_denominator": False,
         "entropy_normalization": options.get("entropy_normalization", "token") if method in OWN_METHODS else "token",
         "runtime": "pytorch_full_finetune_cpu_fp32_adamw_published_virtual_batch_v4",
@@ -285,19 +337,21 @@ def effective_training_identity(config):
         identity[key] = options[key]
     identity["optimizer_betas"] = tuple(options["optimizer_betas"])
     if method in OWN_METHODS:
-        identity.update(credit_radius=float(options.get("credit_radius", .10)),
+        identity.update(credit_radius=float(options.get("credit_radius", .08)),
+                        credit_time_radius=float(options.get("credit_time_radius", .10)),
                         credit_prior_weight=float(options.get("credit_prior_weight", 1.)),
-                        credit_transfer_max=float(options.get("credit_transfer_max", .5)),
+                        credit_transfer_max=float(options.get("credit_transfer_max", 1.)),
+                        representation_layer_rule="floor_5L_over_7",
                         credit_estimator=("exact_first_hit_v4" if method == EXACT_FIRST_HIT_METHOD
-                                          else "r5_symmetric_potential_pending_winner"),
-                        own_batching="balanced_mixed_token_mean_r7",
+                                          else "r8_symmetric_empirical_bayes_cross_depth"),
+                        own_batching="balanced_mixed_token_mean_zero_mask_sdpa_r8",
                         group_denominator=None,
                         homogeneous_group_bypass=True,
                         positive_peer_continuation_gate=(method == EXACT_FIRST_HIT_METHOD),
                         local_observation_matching=("exact_token_id" if method == EXACT_FIRST_HIT_METHOD
                                                     or benchmark in EXACT_OBSERVATION_BENCHMARKS
                                                     else "dual_view_cosine"),
-                        alfworld_frame="canonical_pomdp_unquoted_commands_literal_xml_tags_r6" if benchmark == "alfworld" else None)
+                        alfworld_frame="canonical_tag_preserving_affordance_and_public_effects_r8" if benchmark == "alfworld" else None)
         if benchmark == "webshop":
             identity["webshop_recipe"] = {
                 "source_commit": UPSTREAM_COMMIT, "observation_mode": "text_rich", "use_small": True,
@@ -339,7 +393,7 @@ def effective_training_identity(config):
         if method in OWN_METHODS:
             identity["textcraft_recipe"].update(
                 observation_representation="exact_visible_inventory_ids",
-                user_suffix="canonical_pomdp_pinned_recipes_literal_xml_tags_r6",
+                user_suffix="canonical_tag_preserving_pinned_recipes_r8",
                 train_horizon=OFFICIAL_HORIZONS["textcraft"],
                 eval_horizon=TEXTCRAFT_EVAL_HORIZON,
                 strict_think_closure=True,

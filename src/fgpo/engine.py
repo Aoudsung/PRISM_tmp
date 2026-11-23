@@ -186,7 +186,13 @@ class Engine:
                 "loss_normalization":self.config.get("loss_normalization","token"),
                 "entropy_normalization":self.config.get("entropy_normalization","token"),
                 "chunk_tokens":int(self.config.get("head_chunk_tokens",64)),
-                "gamma":1.,"intrinsic_reward":False}
+                "gamma":1.,"intrinsic_reward":False,
+                "representation_layer":policy.representation_layer,
+                "hidden_size":int(policy.base.config.hidden_size),
+                "credit_radius":float(self.config.get("credit_radius",.08)),
+                "credit_time_radius":float(self.config.get("credit_time_radius",.10)),
+                "credit_prior_weight":float(self.config.get("credit_prior_weight",1.)),
+                "credit_transfer_max":float(self.config.get("credit_transfer_max",1.))}
                 if self.method in OWN_METHODS else published_recipe(self.method,self.benchmark,self.config["model_path"]))})
         if self.method not in OWN_METHODS:
             policy.metadata["published_source"] = PUBLISHED_SOURCES[self.method]
@@ -530,7 +536,7 @@ class Engine:
                 "credit_diagnostic_scope":"held_out_outcomes_include_Bernoulli_noise_not_true_Q",
                 "claim_scope":("cross_depth_exact_observation_support_and_nonrecursive_first_hit_continuation_sharing"
                     if self.method == EXACT_FIRST_HIT_METHOD else
-                    "same_depth_history_support_and_nonrecursive_continuation_sharing"),
+                    "bounded_cross_depth_support_and_symmetric_eb_peer_sharing"),
                 "positive_failed_steps_interpretation":"credit_assignment_count_not_verified_helpful_actions",
                 "additional_diagnostic_rollouts":0}
         with (self.output_dir/"training.jsonl").open("ab") as handle:

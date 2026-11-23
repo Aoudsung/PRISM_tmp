@@ -19,19 +19,23 @@ from .public import EXACT_OBSERVATION_BENCHMARKS, HORIZONS
 from .protocol import EXACT_FIRST_HIT_METHOD, OWN_METHODS as METHODS, RETIRED_METHODS
 
 
-ALGORITHM = "r5_symmetric_peer_value_sharing"
+ALGORITHM = "r8_symmetric_empirical_bayes_peer_sharing"
 
 
 class CrossTrajectoryCredit:
     """One same-task rollout group, with time-indexed independent peer outcomes.
 
-    For peer j at the same depth as x, w_j(x) = [1 - d(x,j)/radius]_+.
+    For target step (k, t) and peer j != k, each peer contributes at most one
+    bounded cross-depth match:
+        w_{k,t,j} = max_{t': |t-t'|/(H*time_radius) < 1} [1 - max(d(x,j)/radius, |t-t'|/(H*time_radius))]_+
+    and exact discrete-state equality for ALFWorld, WebShop, and TextCraft.
     The prior is the mean terminal outcome of all other trajectories, including
     completed peers as task-level evidence, never as synthetic current states.
-    The r5 estimator pairs symmetric pre/post peer potential contraction with
-    smoothed pending-peer scaling omega = (K - 1 - C^+_{-k,t} + kappa) / (K - 1 + kappa),
-    preserving leave-one-out action independence and potential telescoping for any
-    lambda_max in [0, 1] without positive-peer continuation gating.
+    The r8 estimator pairs symmetric Empirical Bayes pre/post peer potential
+    contraction with uniform depth weights (omega == 1), preserving
+    leave-one-out action independence and full-trajectory zero-sum telescoping
+    for any lambda_max in [0, 1] without positive-peer continuation gating or
+    pending-winner depth distortion.
     Y denotes reward_scale times official success. Advantages divide by this
     fixed scale, with no random group RMS or hand-written syntax reward.
 
@@ -52,14 +56,17 @@ class CrossTrajectoryCredit:
         self.reference = reference_data
         options: Mapping = {} if config is None else config
         if self.exact_first_hit:
-            self.radius, self.prior_weight, self.transfer_max = .10, 1., 1.
+            self.radius, self.time_radius, self.prior_weight, self.transfer_max = .10, .10, 1., 1.
         else:
-            self.radius = float(options.get("credit_radius", .10))
+            self.radius = float(options.get("credit_radius", .08))
+            self.time_radius = float(options.get("credit_time_radius", .10))
             self.prior_weight = float(options.get("credit_prior_weight", 1.))
-            self.transfer_max = float(options.get("credit_transfer_max", .5))
+            self.transfer_max = float(options.get("credit_transfer_max", 1.))
         self.reward_scale = float(options.get("reward_scale", 10.))
         if not math.isfinite(self.radius) or self.radius <= 0:
             raise ValueError("credit_radius must be finite and positive")
+        if not math.isfinite(self.time_radius) or self.time_radius < 0:
+            raise ValueError("credit_time_radius must be finite and non-negative")
         if not math.isfinite(self.prior_weight) or self.prior_weight <= 0:
             raise ValueError("credit_prior_weight must be finite and positive")
         if not math.isfinite(self.transfer_max) or not 0 <= self.transfer_max <= 1:
@@ -171,28 +178,69 @@ class CrossTrajectoryCredit:
             weights[1:] = torch.maximum(weights[1:], adjacent.transpose(1, 2))
         return weights.to(torch.float64)
 
-    def _same_depth_weights(self):
+    def _cross_depth_weights(self, *, time_radius: float | None = None):
         # Shapes are [depth, target trajectory, peer trajectory].
-        eligible = self.valid[:, :, None] & self.valid[:, None, :]
-        eligible &= ~torch.eye(self.count, dtype=torch.bool, device="cpu")[None, :, :]
-        if self.benchmark in EXACT_OBSERVATION_BENCHMARKS:
-            codes = self._observation_codes()
-            obs_match = (codes[:, :, None] == codes[:, None, :]) & (codes[:, :, None] > 0)
-            if self.method == "fgpo_obs_only":
-                return (obs_match & eligible).to(torch.float64)
-            hist = self._features("z_hist")
-            hist_dist = (1.0 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0.0, 2.0)
-            return ((1.0 - hist_dist / self.radius).clamp_min_(0.0) * (obs_match & eligible)).to(torch.float64)
+        # Each peer j != k contributes at most one maximum kernel weight across
+        # valid depths t' inside the normalized window |t - t'| / H < time_radius.
+        depth, count = self.depth, self.count
+        if depth == 0:
+            return torch.zeros((0, count, count), dtype=torch.float64, device="cpu")
+        other = ~torch.eye(count, dtype=torch.bool, device="cpu")
+        active_time_radius = self.time_radius if time_radius is None else float(time_radius)
+        exact_obs = self.benchmark in EXACT_OBSERVATION_BENCHMARKS
+        codes = self._observation_codes() if exact_obs else None
+        obs = None if exact_obs else self._features("z_obs")
+        hist = None if (exact_obs and self.method == "fgpo_obs_only") else (
+            None if (not exact_obs and self.method == "fgpo_obs_only") else self._features("z_hist")
+        )
 
-        obs = self._features("z_obs")
-        distance = (1.0 - torch.bmm(obs, obs.transpose(1, 2))).clamp_(0.0, 2.0)
-        del obs
-        if self.method != "fgpo_obs_only":
-            hist = self._features("z_hist")
-            history_distance = (1.0 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0.0, 2.0)
-            torch.maximum(distance, history_distance, out=distance)
-            del hist, history_distance
-        return ((1.0 - distance / self.radius).clamp_min_(0.0) * eligible).to(torch.float64)
+        # dt = 0 (strict same depth)
+        eligible0 = (self.valid[:, :, None] & self.valid[:, None, :]) & other[None, :, :]
+        if exact_obs:
+            obs_match0 = (codes[:, :, None] == codes[:, None, :]) & (codes[:, :, None] > 0)
+            if self.method == "fgpo_obs_only":
+                weights = (obs_match0 & eligible0).to(torch.float64)
+            else:
+                hist_dist0 = (1.0 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0.0, 2.0)
+                weights = ((1.0 - hist_dist0 / self.radius).clamp_min_(0.0) * (obs_match0 & eligible0)).to(torch.float64)
+        else:
+            dist0 = (1.0 - torch.bmm(obs, obs.transpose(1, 2))).clamp_(0.0, 2.0)
+            if hist is not None:
+                hist_dist0 = (1.0 - torch.bmm(hist, hist.transpose(1, 2))).clamp_(0.0, 2.0)
+                torch.maximum(dist0, hist_dist0, out=dist0)
+                del hist_dist0
+            weights = ((1.0 - dist0 / self.radius).clamp_min_(0.0) * eligible0).to(torch.float64)
+
+        if active_time_radius > 0.0 and depth > 1:
+            dt = 1
+            while dt < depth:
+                r_time = (float(dt) / float(self.horizon)) / active_time_radius
+                if r_time >= 1.0:
+                    break
+                elig_dt = (self.valid[:-dt, :, None] & self.valid[dt:, None, :]) & other[None, :, :]
+                if exact_obs:
+                    match_dt = ((codes[:-dt, :, None] == codes[dt:, None, :]) & (codes[:-dt, :, None] > 0)) & elig_dt
+                    if self.method == "fgpo_obs_only":
+                        w_dt = ((1.0 - r_time) * match_dt).to(torch.float64)
+                    else:
+                        hist_dist_dt = (1.0 - torch.bmm(hist[:-dt], hist[dt:].transpose(1, 2))).clamp_(0.0, 2.0)
+                        ratio_dt = torch.clamp_min(hist_dist_dt / self.radius, r_time)
+                        w_dt = ((1.0 - ratio_dt).clamp_min_(0.0) * match_dt).to(torch.float64)
+                else:
+                    dist_dt = (1.0 - torch.bmm(obs[:-dt], obs[dt:].transpose(1, 2))).clamp_(0.0, 2.0)
+                    if hist is not None:
+                        hist_dist_dt = (1.0 - torch.bmm(hist[:-dt], hist[dt:].transpose(1, 2))).clamp_(0.0, 2.0)
+                        torch.maximum(dist_dt, hist_dist_dt, out=dist_dt)
+                        del hist_dist_dt
+                    ratio_dt = torch.clamp_min(dist_dt / self.radius, r_time)
+                    w_dt = ((1.0 - ratio_dt).clamp_min_(0.0) * elig_dt).to(torch.float64)
+                weights[:-dt] = torch.maximum(weights[:-dt], w_dt)
+                weights[dt:] = torch.maximum(weights[dt:], w_dt.transpose(1, 2))
+                dt += 1
+        return weights
+
+    def _same_depth_weights(self):
+        return self._cross_depth_weights(time_radius=0.0)
 
     @torch.no_grad()
     def advantages(self):
@@ -211,6 +259,10 @@ class CrossTrajectoryCredit:
                 "homogeneous_bypass": self.homogeneous,
                 "local_observation_matching": matching_mode,
                 "horizon": self.horizon,
+                "credit_radius": self.radius,
+                "credit_time_radius": self.time_radius,
+                "credit_prior_weight": self.prior_weight,
+                "credit_transfer_max": self.transfer_max,
                 "positive_peer_gated_steps": 0,
                 "mean_pending_weight": None,
                 "loo_outcome_brier": None,
@@ -221,12 +273,7 @@ class CrossTrajectoryCredit:
         if self.homogeneous:
             count = int(self.valid.sum())
             zero_transfer = self.all_zero or self.method == "fgpo_no_transfer" or self.exact_first_hit
-            won = (self.outcomes > 0).to(torch.float64)
-            completed_won = (~self.valid).to(torch.float64) * won[None, :]
-            completed_won_peers = completed_won.sum(dim=-1, keepdim=True) - completed_won
-            omega = ((self.count - 1.0 - completed_won_peers) + self.prior_weight) / (
-                (self.count - 1.0) + self.prior_weight
-            )
+            omega = torch.ones_like(self.valid, dtype=torch.float64)
             self.diagnostics = {
                 "algorithm": ALGORITHM,
                 "method": self.method,
@@ -240,6 +287,7 @@ class CrossTrajectoryCredit:
                 "local_observation_matching": matching_mode,
                 "horizon": self.horizon,
                 "credit_radius": self.radius,
+                "credit_time_radius": self.time_radius,
                 "credit_prior_weight": self.prior_weight,
                 "credit_transfer_max": self.transfer_max,
                 "reward_scale": self.reward_scale,
@@ -266,7 +314,7 @@ class CrossTrajectoryCredit:
         if self.reference is None:
             raise ValueError("Mixed-outcome r3 credit requires frozen-reference features")
 
-        weights = self._first_hit_weights() if self.exact_first_hit else self._same_depth_weights()
+        weights = self._first_hit_weights() if self.exact_first_hit else self._cross_depth_weights()
         support = weights.sum(dim=-1)
         weighted_outcomes = torch.matmul(weights, self.outcomes)
         positive_support = support > 0
@@ -320,13 +368,8 @@ class CrossTrajectoryCredit:
             next_share = torch.cat((post_share[1:], torch.zeros_like(post_share[:1])), dim=0) * continuation
             gated = torch.zeros_like(continuation)
             target = (1.0 - next_share) * mc_return + next_share * (reward + next_values)
-            won = (self.outcomes > 0).to(torch.float64)
-            completed_won = (~self.valid).to(torch.float64) * won[None, :]
-            completed_won_peers = completed_won.sum(dim=-1, keepdim=True) - completed_won
-            omega = ((self.count - 1.0 - completed_won_peers) + self.prior_weight) / (
-                (self.count - 1.0) + self.prior_weight
-            )
-            advantage = omega * (target - baseline) / self.reward_scale
+            omega = torch.ones_like(support)
+            advantage = (target - baseline) / self.reward_scale
 
         # A fixed scale preserves task weighting. The syntax_valid field is a
         # diagnostic only; parsing outcomes do not replace the official reward.
@@ -380,6 +423,7 @@ class CrossTrajectoryCredit:
             "local_observation_matching": matching_mode,
             "horizon": self.horizon,
             "credit_radius": self.radius,
+            "credit_time_radius": self.time_radius,
             "credit_prior_weight": self.prior_weight,
             "credit_transfer_max": self.transfer_max,
             "reward_scale": self.reward_scale,

@@ -586,12 +586,10 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                                 pad_id = policy.tokenizer.pad_token_id
                                 ids = torch.tensor([seq + (pad_id,) * (width - len(seq)) for seq in seqs],
                                                    dtype=torch.long, device=policy.device)
-                                valid = (torch.arange(width, device=policy.device)[None, :] <
-                                         torch.tensor(lengths, device=policy.device)[:, None])
                                 hidden, _, _ = policy.body(
-                                    ids, attention_mask=valid, hidden_layer=None,
+                                    ids, attention_mask=None, hidden_layer=None,
                                     actual_tokens=sum(lengths), logical_length=width, role="ppo.current_segment")
-                                del ids, valid
+                                del ids
                                 position_ids = torch.tensor(positions, dtype=torch.long, device=hidden.device)
                                 response_hidden = hidden.reshape(len(sb) * width, -1).index_select(0, position_ids)
                                 del hidden, position_ids

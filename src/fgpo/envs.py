@@ -21,7 +21,7 @@ import threading
 from typing import Any, Mapping
 import uuid
 
-from .public import HORIZONS
+from .public import HORIZONS, update_alfworld_public_effects
 from .textcraft import TEXTCRAFT_1P5B_FORMAT_STUDY, TextCraftEnv
 from .webshop import TRAIN_ROUNDS, VALIDATION_SESSIONS, task_schedule
 
@@ -80,6 +80,7 @@ class ALFWorldEnv:
         self.state = None
         self.steps = 0
         self.done = False
+        self.public_effects: dict[str, str] = {}
         self.action_schema = {
             'benchmark': self.benchmark,
             'native_system_prompt': (
@@ -112,8 +113,12 @@ class ALFWorldEnv:
     def _observation(self):
         commands = list(self.state['admissible_commands']) if not self.done else []
         self.action_schema['available_actions'] = commands
-        return json.dumps({'native_observation': str(self.state['feedback']), 'step': self.steps,
-                           'classic_text_action_state': {'available_actions': commands}}, ensure_ascii=False)
+        return json.dumps({
+            'native_observation': str(self.state['feedback']),
+            'step': self.steps,
+            'classic_text_action_state': {'available_actions': commands},
+            'public_object_effects': dict(sorted(self.public_effects.items())),
+        }, ensure_ascii=False)
 
     def reset(self, task_id, initial_seed):
         self.close()
@@ -135,6 +140,7 @@ class ALFWorldEnv:
         self.world.seed(int(initial_seed))
         self.state = self.world.reset()
         self.steps, self.done = 0, False
+        self.public_effects = update_alfworld_public_effects({}, str(self.state['feedback']))
         match = re.search(r'Your task is to:\s*(.*)', str(self.state['feedback']))
         if match is None:
             raise ValueError('Official ALFWorld reset has no public instruction.')
@@ -154,6 +160,7 @@ class ALFWorldEnv:
         valid = text in self.state['admissible_commands']
         self.state, _, native_done = self.world.step(text)
         self.steps += 1
+        self.public_effects = update_alfworld_public_effects(self.public_effects, str(self.state['feedback']))
         won = bool(self.state['won'])
         self.done = bool(native_done or won or self.steps >= 50)
         return StepResult(self._observation(), self.done, won,
@@ -170,6 +177,7 @@ class ALFWorldEnv:
         if self.world is not None:
             self.world.close()
             self.world = None
+        self.public_effects = {}
 
 
 class WebShopEnv:

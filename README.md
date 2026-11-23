@@ -1,10 +1,10 @@
-# F-GPO r7 (`fgpo-r7-token-mean-v1`)
+# F-GPO r8 (`fgpo-r8-scale-invariant-v1`)
 
 协作模型的执行平台、session ID、PI 续接命令与退役记录见 [协作会话登记](docs/COLLABORATOR_SESSIONS.md)。
 
-本分支在 `V4`（`fgpo-r3-published-v4`）的基础上，经 `r5`（对称势能、未决同伴缩放 $\kappa$、按词元均值化熵）、`r6`（规范充分 POMDP 滤子 $\Pi(\mathcal{H}_t)$、TextCraft 两条公开公理与 `H=60/70` 双评估）演化至 **`r7`（`fgpo-r7-token-mean-v1`）**。F-GPO 在同任务独立轨迹中，按**相同步深度、相近实际可见历史**共享真实终局成功回报，使用 $\gamma=1$、固定回报尺度 $R=10$、整轨迹留一基线、正同伴对称有限支持续值共享与均衡打乱的词元均值微批 PPO（`loss_normalization="token"`, `entropy_normalization="token"`, `ppo_epochs=1`, `ppo_minibatch_rows=256`, `lr=1e-6`, `credit_prior_weight=1.0`），并配合 8 线程并发 GCS 分片 `compose` 检查点（Colab `checkpoint_interval_rounds=20`，零本地检查点下行流量）。
+本分支在 `V4`（`fgpo-r3-published-v4`）、`r5`（对称势能、按词元均值化熵）、`r6`（规范充分 POMDP 滤子、TextCraft 公开公理与 `H=60/70` 双评估）与 `r7`（`mixed_token_mean` 均衡微批与并发 GCS 检查点）的基础上，演化为统一尺度不变版本 **`r8`（`fgpo-r8-scale-invariant-v1`）**。F-GPO 在同任务独立轨迹中，按**有界跨深度窗口、精确公开状态与相近历史**共享真实终局成功回报，使用 $\gamma=1$、固定回报尺度 $R=10$、整轨迹留一先验、对称经验贝叶斯（Empirical Bayes）同伴势能（$\kappa=1.0, \lambda_{\max}=1.0, \omega\equiv 1.0, \epsilon_{\mathrm{rep}}=0.08, \epsilon_{\mathrm{time}}=0.10$）、按深度比例选取的表征层 $\ell^*(L)=\lfloor 5L/7\rfloor$、宽度感知学习率 $\eta(d_{\mathrm{model}})=10^{-6}\min(1,3584/d_{\mathrm{model}})$、零掩码右填充无缓存因果微批及均衡词元均值 PPO（`loss_normalization="token"`, `entropy_normalization="token"`, `ppo_epochs=1`, `ppo_minibatch_rows=256`），1.5B 与 7B 采用完全统一的算法超参数。
 
-当前主推协议为 **`fgpo-r7-token-mean-v1`**。核心配置与运行入口见 `configs/fgpo-r7-1p5b-*.json` 及 `scripts/{colab_run_r7_1p5b_queue,run_fgpo_host_r7_1p5b_queue,colab_gcs_keepalive,compare_r7_vs_r6_r5_v4}.{sh,py}`。
+当前主推协议为 **`fgpo-r8-scale-invariant-v1`**。核心统一配置见 `configs/fgpo-r8-{1p5b,7b}-*.json`。
 
 ## 方案、实现与来源
 
@@ -12,16 +12,16 @@
 
 | 路径 | 职责 |
 |---|---|
-| `src/fgpo/filtration.py`、`public.py`、`records.py` | 规范充分 POMDP 滤子、整数 token 历史、三块公开观测偏移、唯一响应归属与真实成本记录 |
-| `src/fgpo/credit.py`、`reference.py`、`textcraft.py` | 对称动作前/后势能、$\kappa$ 平滑未决同伴权重、TextCraft 公开规则与 `H=60/70` 双时域评估、混合组筛选后参考评分 |
-| `src/fgpo/baseline_specs.py`、`published_baselines.py`、`published_batching.py` | 已发表 baseline 的固定来源、有效配方、信用规则与作者 batch/损失语义 |
-| `src/fgpo/cache.py`、`policy.py` | 几何 KV、停放完成槽解码、有效位置、完整提示批处理、采样与有界表示微批 |
-| `src/fgpo/optimization.py` | 均衡打乱 `mixed_token_mean`（及统一 `step_token`）微批、解析词表反向、一次主干反向与 CPU-master AdamW |
-| `src/fgpo/envs.py`、`rollout.py`、`baselines.py` | 持久官方环境、组内批量采样、ALFWorld `<think>/<action>` 提取及各方法原生观测/动作接口 |
+| `src/fgpo/filtration.py`、`public.py`、`records.py` | 保留 `<action>` 标签的规范 POMDP 滤子、WebShop 头部剥离与 320 字符摘要、三大离散基准非混叠公开状态表示（含 ALFWorld `public_object_effects`） |
+| `src/fgpo/credit.py`、`reference.py`、`textcraft.py` | 有界跨深度核（$\epsilon_{\mathrm{rep}}=0.08, \epsilon_{\mathrm{time}}=0.10$）、对称 EB 同伴势能（$\lambda_{\max}=1.0, \omega\equiv 1.0$）、TextCraft 公开规则与 `H=60/70` 双时域评估、混合组参考评分 |
+| `src/fgpo/baseline_specs.py`、`published_baselines.py`、`published_batching.py` | 已发表 baseline 的固定来源、有效配方、信用规则与作者 batch/损失语义（提示与算法配方零漂移） |
+| `src/fgpo/cache.py`、`policy.py` | 几何 KV、停放完成槽解码、比例表征层 $\lfloor 5L/7\rfloor$、无缓存右填充 `attention_mask=None` 原生因果 SDPA/GQA、采样与有界表示微批 |
+| `src/fgpo/optimization.py` | 均衡打乱 `mixed_token_mean`（零掩码右填充因果前向及统一 `step_token`）微批、解析词表反向、一次主干反向与 CPU-master AdamW |
+| `src/fgpo/envs.py`、`rollout.py`、`baselines.py` | 持久官方环境（含 ALFWorld 公开反馈驱动的 `public_object_effects`）、组内批量采样及各方法原生观测/动作接口 |
 | `src/fgpo/checkpoint_gcs.py` | 8 并发 GCS 分片上传与 `compose` 合并、大盘直存 `.gcs-staging` 落盘暂存及增量日志流同步 |
-| `src/fgpo/protocol.py`、`engine.py`、`runner.py` | `r7` 协议与配方身份、同质轮零步旁路、恢复和完整官方评测 |
+| `src/fgpo/protocol.py`、`engine.py`、`runner.py` | `r8` 协议与配方身份、宽度自适应学习率与正式矩阵、同质轮零步旁路、恢复和完整官方评测 |
 
-参考模型固定为 cell 初始 Qwen 权重。历史特征取实际 actor prompt 末位的倒数第八层；局部观测特征取当前公开反馈的独立表示。F-GPO 使用有界历史，超限时保留初始任务/bootstrap 与最近完整轮次；采样、参考评分和 PPO 使用同一真实前缀。
+参考模型固定为 cell 初始 Qwen 权重。历史特征取实际 actor prompt 末位的比例语义层 $\ell^*(L)=\lfloor 5L/7\rfloor$（28 层 `1.5B`/`7B` 为第 20 层，等价 `-8`）。F-GPO 使用有界历史，超限时保留初始任务/bootstrap 与最近完整轮次；采样、参考评分和 PPO 使用同一真实前缀。
 
 动作前基线的 score 恒等式适用于行为策略采样点；续值共享的偏差由匹配误差和共享权重决定。正式训练使用带 clipping、token-mean 条件熵与截断 k3 参考正则的 PPO。
 
@@ -59,11 +59,11 @@ ALFWorld 评测摘要同时在 `task_types` 中按官方任务前缀输出 `Pick
 
 ## 显存、计算与更新实现
 
-参考阶段仅在存在混合结果组时激活，按真实 actor 段一次计算混合组轨迹的主干；同段多个响应合并为有界 head chunks，段级复用 `aggregate_model_calls` 并携带真实轮次与组归属，每段统一下载概率。层 hook 只保留动作前 prompt 末位表示，`obs_only` 跳过历史特征；WebShop 局部观测先去重再按长度和 token budget 分微批，ALFWorld 直接使用纯观测整数元组匹配从而省略 `z_obs` 前向。信用计算完成后释放特征引用，行为段 `SegmentRecord` 一次冻结共享并在轮末日志落盘后释放已完成轮的轨迹引用，减少更新阶段的 CPU 常驻内存和 checkpoint 负担。
+参考阶段仅在存在混合结果组时激活，按真实 actor 段一次计算混合组轨迹的主干；同段多个响应合并为有界 head chunks，段级复用 `aggregate_model_calls` 并携带真实轮次与组归属，每段统一下载概率。层 hook 只保留动作前 prompt 末位表示，`obs_only` 跳过历史特征；三大离散动作基准（ALFWorld、WebShop、TextCraft）均直接在 `credit.py` 比较精确非混叠离散状态词元元组（`representation_ids`）从而省略 `z_obs` 模型前向，仅连续动作/输出空间（AppWorld）保留去重后按长度与预算微批提取的 `z_obs`。所有无缓存（`use_cache=False, past=0`）右填充微批在前向中直接传入 `attention_mask=None`，避免 4D 掩码构造与 GQA 头展开。信用计算完成后释放特征引用，行为段 `SegmentRecord` 一次冻结共享并在轮末日志落盘后释放已完成轮的轨迹引用，减少更新阶段的 CPU 常驻内存和 checkpoint 负担。
 
 采样使用逐层几何 KV 缓冲、`active-rows-v3` 停放完成槽解码、真实有效 mask 和逻辑 RoPE 位置；当主机已知 `right_padded` 且全部物理列有效时，cached 单 token 解码传入 `attention_mask=None` 避免冗余掩码与 GQA 展开，继续行保留扩容余量并裁去退出后尾部空列，`_sample_turn` 直接向轮转步移交停放分片避免无用合批拷贝，并限制增量重放中的物理 padding 与长窗口查询块峰值（异长/ragged GQA 后端改造保留为后续工作）。缓存行选择按设备上传一次 indices；已结束响应的 padding 槽位跳过词表投影。不同完整提示可以批量 prefill；所有正式方法都采用组内批量模型采样。环境进程复用解释器，每个 episode 重新建立独立 world；F-GPO 的完成响应可提前派发环境执行。
 
-PPO 在全同结果轮（`M_mix=0`）直接零步旁路；存在混合结果组时在 `r7` 将全部混合组响应步打乱并均衡切分为 `ppo_minibatch_rows=256`、`ppo_epochs=1` 的词元均值微批（`mixed_token_mean`，策略、k3 KL 与条件熵统一按 `1/N_tok_m` 归一化），只计算当前组内段所拥有响应所需的因果前缀。输出头按响应词元分块立即反向，使用 logprob/entropy 的一阶解析导数，显式 adjoint 缓冲随响应词元数分配，最后通过 gather 对主干执行一次反向，裁剪计数、有序 FP64 差值和与最大值在输出设备按段归集并于段边界读回，同时记录逐批裁剪前范数与首批次同权重概率一致性误差。AdamW 的 FP32 master/moments 在 CPU，梯度与权重通过有界 staging 桶传输；Colab GCS 断点支持 8 并发分段与服务端 `compose` 合并。
+PPO 在全同结果轮（`M_mix=0`）直接零步旁路；存在混合结果组时在 `r8` 将全部混合组响应步打乱并均衡切分为 `ppo_minibatch_rows=256`、`ppo_epochs=1` 的词元均值微批（`mixed_token_mean`，策略、k3 KL 与条件熵统一按 `1/N_tok_m` 归一化），并以零掩码右填充因果前向只计算当前组内段所拥有响应所需的因果前缀。输出头按响应词元分块立即反向，使用 logprob/entropy 的一阶解析导数，显式 adjoint 缓冲随响应词元数分配，最后通过 gather 对主干执行一次反向，裁剪计数、有序 FP64 差值和与最大值在输出设备按段归集并于段边界读回，同时记录逐批裁剪前范数与首批次同权重概率一致性误差。AdamW 的 FP32 master/moments 在 CPU（默认 `lr=1e-6 * min(1, 3584 / hidden_size)`），梯度与权重通过有界 staging 桶传输；Colab GCS 断点支持 8 并发分段与服务端 `compose` 合并。
 
 资源默认值包括 `head_chunk_tokens=64`、`optimizer_bucket_mib=64`、`cache_initial_capacity=1024`、`representation_token_budget=8192`、`representation_batch_size=8`、`environment_pool_size=8`、`working_memory_gib=6`、`activation_offload=false`。实际峰值由正式运行记录；几何容量、逻辑长度和 allocator reserved bytes 分别报告。
 

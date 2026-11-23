@@ -52,7 +52,7 @@ class TokenFiltration:
                  initial_observation: PublicObservation, max_new_tokens,
                  history_length=None, max_context_tokens=32768, kind="actor"):
         if history_length not in (None, 2):
-            raise ValueError("r6 uses complete bounded canonical history or its two-turn ablation.")
+            raise ValueError("F-GPO uses complete bounded canonical history or its two-turn ablation.")
         self.tokenizer = tokenizer
         self.root_prefix_ids = tuple(root_prefix_ids)
         self.pinned_ids = self.root_prefix_ids

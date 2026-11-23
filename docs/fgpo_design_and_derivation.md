@@ -1,13 +1,13 @@
-# F-GPO r7：规范充分 POMDP 滤子、对称势能与均衡词元均值微批更新
+# F-GPO r8：尺度不变规范充分 POMDP 滤子、有界跨深度核与对称经验贝叶斯信用
 
-版本日期：2026-11-23。执行协议：`fgpo-r7-token-mean-v1`。
+版本日期：2026-11-23。执行协议：`fgpo-r8-scale-invariant-v1`。
 
-本方案在 `r5`（`fgpo-r5-symmetric-v1`）与 `r6` 暴露出 1.5B 训练崩溃诊断的基础上，保留经实证稳定的前端表征并彻底修正 PPO 优化与 GCS 存储瓶颈：
-1. **规范充分 POMDP 滤子 $\Pi(\mathcal{H}_t)$**：固定置顶任务/完整非 JSON `Crafting commands` 根前缀 KV，历史区仅保留紧凑单行 `(Action -> Observation)` 轨迹记录并剥离过期菜单、`&lt;think&gt;` 推理草稿与格式错句，使 1.5B 不再发生坏格式上下文传染、`z_hist` 退化或长上下文重复循环；
-2. **TextCraft 公共规则显式化与对齐时域**：系统提示写明模拟器“不可 `get` 合成物”与“`craft` 必须严格逐字匹配单条配方”的两条公开公理，训练时域设为 `H=60`（对齐公开 1.5B 基线），官方评测在单次 `H=70` 轨迹上同时统计 30 步、60 步、70 步成功率及第 31–70 步新增解；
-3. **均衡打乱的词元均值微批 PPO（Token-Mean）**：采用 `loss_normalization="token"` 与 `entropy_normalization="token"` 的均衡打乱微批切分（`ppo_minibatch_rows=256`, `ppo_epochs=1`, `lr=1e-6`, `credit_prior_weight=1.0`, `shuffle=true`），对齐已发表 1.5B 方法的单轮更新预算，消除 `r6` `step_token` 对长输出的 KL/PPO 稀释与熵权重失衡。
+本方案在 `r5`、`r6` 与 `r7`（`fgpo-r7-token-mean-v1`）的基础上进一步收敛跨模型尺度统一设计与长时程冷启动效率，保持 `1.5B` 与 `7B` 主超参数完全一致：
+1. **保留标签的规范充分 POMDP 滤子与非混叠公开投影**：在紧凑历史条 `[Step \tau] <action>u_{\tau-1}</action> -> ...` 中保留 `<action>` 输出语法范式，剥离 WebShop 重复模板头部，并将全部三大离散基准（`EXACT_OBSERVATION_BENCHMARKS = {"alfworld", "webshop", "textcraft"}`）统一映射到非混叠离散整数 `representation_ids`（ALFWorld 附带纯公开 `public_object_effects`）；同时锁定 `TEXTCRAFT_SYSTEM_PROMPT` 原文以确保已发表基线零漂移；
+2. **有界跨深度核与对称经验贝叶斯（EB）同伴势能**：以每同伴最多 1 票的跨深度有界窗口（$\epsilon_{\mathrm{rep}}=0.08, \epsilon_{\mathrm{time}}=0.10$）取代刚性同深度限制，同时令 $\kappa=1.0, \lambda_{\max}=1.0, \omega\equiv 1.0$（移除 `has_positive_peer` 与未决同伴缩放 $\omega_{-k,t}$），消除单赢家组晚期 $-\frac{1}{8}$ 压缩扭曲并实现完整轨级势能伸缩零和；
+3. **尺度不变比例表征层、宽度自适应学习率与零掩码右填充 SDPA**：表征读取比例层 $\ell^*(L)=\lfloor 5L/7\rfloor$（28 层 `1.5B`/`7B` 为第 20 层），学习率 $\eta(d_{\mathrm{model}})=10^{-6}\min(1,3584/d_{\mathrm{model}})$，`mixed_token_mean`（`ppo_minibatch_rows=256`, `ppo_epochs=1`）无缓存右填充因果微批直接传入 `attention_mask=None` 触发原生 FlashAttention-2/SDPA+GQA 融合计算。
 
-本文与 [数学及实现契约](fgpo_math_contract.md) 共同定义现行 `r7` 方案，对应实现位于 `src/fgpo/`。旧 `r6`、`r5`、`r3/v4` 与旧 TF-BEFP/DAG 可分别通过 git 提交追溯。
+本文与 [数学及实现契约](fgpo_math_contract.md) 共同定义现行 `r8` 方案，对应实现位于 `src/fgpo/`。旧 `r7`、`r6`、`r5`、`r3/v4` 与旧 TF-BEFP/DAG 可分别通过 git 提交追溯。
 
 ## 1. 2026 年研究进展与 2027 年研究定位
 
@@ -63,73 +63,67 @@ $$
 
 其中 $y_{k,t}$ 是包含实际采样终止符的响应词元序列，$C$ 是实现中的序列化与有限窗口算子。理论分析可以条件化于完整 $h_t$，模型实际决策条件始终是 $p_t$。上下文上限默认 32,768 词元；完整公开记录超出此容量后，actor 输入保留初始锚定块与最近能够容纳的完整交互轮次。
 
-`public.py` 只接受标准公开输入。ALFWorld 采用三段式整数帧拼接 `user_prefix_ids + pure_ids + user_suffix_ids`（包含步数计数、滤除 `"help"` 的无引号可执行命令清单以及不含具体动作词的字面标签说明 `Enclose concise reasoning in literal <think> and </think> tags, then enclose one exact command in literal <action> and </action> tags.`），保持 `observation_body_offset = len(user_prefix_ids)` 使 `TurnBlock` 与 `SegmentRecord` 的 `observation_span` 精确覆盖纯观测词元切片；TextCraft 在 `pure_ids` 后以独立整数元组拼接同款字面标签尾缀（避免 BPE 跨 JSON 边界合并），并将 `representation_ids`（含 `initial_representation_ids`）限定为持久可见背包文本 `"inventory"` 以剥离瞬态报错 `"feedback"`，单步上限对齐 `512` tokens；响应采用剥离完整闭合 `<think>...</think>` 后提取唯一闭合 `<action>...</action>` 小写单行指令并严格拒斥未闭合 `<think>` 的确定性解析；WebShop 保持原生简洁无 `<think>` 尾缀接口。AppWorld 保留初始任务、系统说明及初始 API 引导信息，后续过长 stdout 在入史时进行固定的首尾截取。空 stdout 在表示和消息中使用明确占位文本。内部状态哈希、评估器中间成功标签和隐藏数据库状态不进入模型或匹配特征。
+`public.py` 只接受标准公开输入。ALFWorld 采用三段式整数帧拼接 `user_prefix_ids + pure_ids + user_suffix_ids`（包含步数计数、滤除 `"help"` 的无引号可执行命令清单以及显式字面标签尾缀 `Enclose concise reasoning in literal <think> and </think> tags, then enclose one exact command in literal <action> and </action> tags.`），保持 `observation_body_offset = len(user_prefix_ids)` 使 `TurnBlock` 与 `SegmentRecord` 的 `observation_span` 精确覆盖纯观测词元切片，同时环境在公开反馈中追踪 `public_object_effects`（`clean`/`temp`/`power`/`sliced`）并编码进 `(available_actions, public_object_effects)` 的离散 `representation_ids`；TextCraft 直接复用原样 `TEXTCRAFT_SYSTEM_PROMPT` 并以持久背包 `"inventory"` 构造离散 `representation_ids`；WebShop 使用 `strip_webshop_repeated_header` 剥离重复模板头后以去重页面拼接可点动作形成离散 `representation_ids`，历史区统一以 `<action>...</action>` 与 320 字符剥离头摘要入史。AppWorld 保留初始任务、系统说明及初始 API 引导信息。
 
-`filtration.py` 在整数词元空间构建不可变块。给定生成预算 $M_{\mathrm{gen}}$（默认 ALFWorld 512、AppWorld 1024），提示上限为 $C_{\mathrm{prompt}}=C_{\max}-M_{\mathrm{gen}}$；滚动时优先将最近完整轮次截到 $0.75C_{\mathrm{prompt}}$ 的水位。若初始锚定块与最新完整轮次超过这一预留水位，则保留这两个必要块，并允许使用至提示上限；超过提示上限时显式报错。整个过程按完整轮次处理。
+`filtration.py` 在整数词元空间构建不可变块。给定生成预算 $M_{\mathrm{gen}}$（默认 ALFWorld/WebShop/TextCraft 512、AppWorld 1024），提示上限为 $C_{\mathrm{prompt}}=C_{\max}-M_{\mathrm{gen}}$；滚动时优先将最近完整轮次截到 $0.75C_{\mathrm{prompt}}$ 的水位。若初始锚定块与最新完整轮次超过这一预留水位，则保留这两个必要块，并允许使用至提示上限；超过提示上限时显式报错。整个过程按完整轮次处理。
 
 每个真实响应只归属一个训练段。为构建新上下文而重播的历史响应没有新的损失所有权。反馈仅在下一次实际决策需要时进入 actor 段；终末反馈保存在步骤和轮次记录中，`observation_span=None`，没有额外 feedback-only 评分段。三个正式自身消融都保留完整 F-GPO 的 actor 历史、生成预算和 PPO 条件，使各自的唯一变化落在匹配距离或共享规则上。
 
-### 2.3 历史与局部观测表示
+### 2.3 比例语义层与离散/连续公开状态表示
 
-在冻结参考模型上，取实际动作前提示末位的倒数第 8 层表示并归一化，得到 $z^h_{k,t}$。在 AppWorld 连续输出空间，将当前公开局部观测单独编码并在相同层取末位归一化向量，得到 $z^o_{k,t}$；在 ALFWorld 离散观测空间，直接以整数词元序列相等 $m^{\mathrm{obs}}_{kj,t}=\mathbf 1[o^{\mathrm{id}}_{k,t}=o^{\mathrm{id}}_{j,t}]$ 判别局部观测同态，省略 `z_obs` 模型前向。前者保留本次决策真实可见的任务和历史；后者保留当前观测的局部匹配关系。相关特征均停止梯度。
+在冻结参考模型上，取比例深度层 $\ell^*(L)=\lfloor 5L/7\rfloor$（28 层 `1.5B`/`7B` 为第 20 层，等价 `-8`）的实际动作前提示末位表示并 L2 归一化，得到 $z^h_{k,t}$。在连续公开输出空间（**AppWorld**），将当前公开局部观测单独编码并在相同 $\ell^*(L)$ 层取末位归一化向量，得到 $z^o_{k,t}$；在三大离散动作基准（`EXACT_OBSERVATION_BENCHMARKS = {"alfworld", "webshop", "textcraft"}`），直接以离散整数词元元组相等 $m^{\mathrm{obs}}_{(k,t),(j,t')}=\mathbf 1[o^{\mathrm{repr}}_{k,t}=o^{\mathrm{repr}}_{j,t'}]$ 判别局部公开状态同态，省略 `z_obs` 模型前向。所有表示前向均为无缓存右填充 `attention_mask=None` 因果前向且停止梯度。
 
 在 AppWorld 上，相同的局部观测词元序列在一轮中仅提取一次表示；按长度和词元预算组成微批并在指定层提前结束无梯度前向。历史特征复用参考响应打包前向，中间层 hook 只保留动作前 prompt 末位向量。`fgpo_obs_only` 直接跳过历史向量的采集。同质结果组（$0/8$ 与 $8/8$）与无混合组轮次直接免除特征提取；优势与必要诊断计算完成后释放表示张量，PPO 与后续 checkpoint 保留参考概率和已固定优势。
 
 余弦距离是可计算的近似匹配依据。它与真实续值差之间的关系由实验研究，当前实现没有将其解释为已知的 bisimulation 距离或概率校准结果。
 
-## 3. 核心算法：同深度留一轨迹值共享
+## 3. 核心算法：有界跨深度留一轨迹对称 EB 值共享
 
-### 3.1 同伴集合与有限时域
+### 3.1 有界跨深度同伴集合与至多一票约束
 
-对目标轨迹 $k$ 的第 $t$ 个动作前状态，同伴候选必须属于相同任务组、相同 benchmark、相同初始环境 seed，并在同一深度 $t$ 存在真实动作前状态。定义
+对目标轨迹 $k$ 的第 $t$ 个动作前状态，同伴候选 $j\ne k$ 必须属于相同任务组、benchmark 与初始环境 seed，并在满足有界时间窗 $|t-t'|/H < \epsilon_{\mathrm{time}}$ 的深度 $t'$ 处处于动作前有效态（$t'<T_j$）。记标准化时间差比 $r^{\mathrm{time}}_{t,t'}=\frac{|t-t'|}{H\epsilon_{\mathrm{time}}}$（$\epsilon_{\mathrm{time}}=0$ 退化为严格同深度 $t'=t$）：
 
 $$
-\mathcal P_{-k,t}=\{j:j\ne k,\ t<T_j\}.
+\mathcal P_{-k,t}=\{(j,t'):j\ne k,\ t'<T_j,\ r^{\mathrm{time}}_{t,t'}<1\}.
 $$
 
-同组时域上限固定，因此相同深度对应相同剩余预算 $H-t$。整个目标轨迹从同伴数据中排除。已经结束的同伴在后续深度没有状态；实现不会将终态补成一个当前状态参与近邻比较。
-
-这一选择保留了有限时域价值的时间索引。即使某个观察值在第 3 步和第 40 步完全相同，两者也不会直接混入同一状态估计。几何计算仅在每个深度的 $K\times K$ 矩阵内进行，无跨时间图拓扑和递归 Bellman 求解。
+每个同伴轨迹 $j\ne k$ 在时间窗内至多通过其最高相似步贡献 **1 票**，故局部时间错位可提供有效同伴证据而不会引入重复计数或无约束跨时域混淆（默认 $\epsilon_{\mathrm{time}}=0.10$）。几何计算经 CPU float32 扁平矩阵与张量归约完成，无跨时间图递归 Bellman 传播。
 
 ### 3.2 局部匹配核与同伴 Monte Carlo 值
 
-在连续公开观测空间（**AppWorld** 与 **WebShop**）定义双视角距离与连续核权重：
+在连续公开观测空间（**AppWorld**）定义双视角距离与跨深度最大核权重：
 
 $$
-d_{kj,t}=\max\{1-(z^o_{k,t})^\top z^o_{j,t},\;
-                       1-(z^h_{k,t})^\top z^h_{j,t}\},
+d_{\mathrm{rep}}((k,t),(j,t'))=\max\left\{1-(z^o_{k,t})^\top z^o_{j,t'},\;1-(z^h_{k,t})^\top z^h_{j,t'}\right\},
 $$
 
 $$
-w_{kj,t}=\mathbf 1[j\in\mathcal P_{-k,t}]
-\left[1-\frac{d_{kj,t}}{\epsilon}\right]_+.
+w_{k,t,j}=\max_{t':(j,t')\in\mathcal P_{-k,t}}
+\left[1-\max\!\left(\frac{d_{\mathrm{rep}}((k,t),(j,t'))}{\epsilon_{\mathrm{rep}}},\;r^{\mathrm{time}}_{t,t'}\right)\right]_+,\qquad \epsilon_{\mathrm{rep}}=0.08,\;\epsilon_{\mathrm{time}}=0.10.
 $$
 
-其中 AppWorld 默认 $\epsilon=0.10$；WebShop 按研究配置取值 $\epsilon\in\{0.05, 0.10\}$（现行 `r7` 1.5B WebShop 采用 $\epsilon=0.05$）。
-
-在离散局部观测空间（**ALFWorld** 与 **TextCraft**）令历史余弦距离 $d^h_{kj,t}=1-(z^h_{k,t})^\top z^h_{j,t}$，结合离散局部词元元组精确相等指示 $m^{\mathrm{obs}}_{kj,t}=\mathbf 1[o^{\mathrm{repr}}_{k,t}=o^{\mathrm{repr}}_{j,t}]$（ALFWorld 为当前动作前纯观测词元元组 `observation_ids`，TextCraft 为持久可见背包词元元组 `inventory`）定义：
+在三大离散公开状态基准（**ALFWorld / WebShop / TextCraft**）结合非混叠离散词元元组精确相等指示 $m^{\mathrm{obs}}_{(k,t),(j,t')}=\mathbf 1[o^{\mathrm{repr}}_{k,t}=o^{\mathrm{repr}}_{j,t'}]$ 定义：
 
 $$
-w_{kj,t}=\mathbf 1[j\in\mathcal P_{-k,t}]\,m^{\mathrm{obs}}_{kj,t}
-\left[1-\frac{d^h_{kj,t}}{\epsilon}\right]_+,
-\qquad \epsilon=0.10.
+w_{k,t,j}=\max_{t':(j,t')\in\mathcal P_{-k,t}}
+m^{\mathrm{obs}}_{(k,t),(j,t')}\left[1-\max\!\left(\frac{d^h((k,t),(j,t'))}{\epsilon_{\mathrm{rep}}},\;r^{\mathrm{time}}_{t,t'}\right)\right]_+,
+\qquad \epsilon_{\mathrm{rep}}=0.08,\;\epsilon_{\mathrm{time}}=0.10.
 $$
 
-数值实现将余弦距离截到 $[0,2]$。越接近目标状态，同伴权重越大；达到半径边界时权重连续变为零。定义支持质量和同伴续值
+数值实现将余弦距离截到 $[0,2]$。越接近目标历史与步数，同伴权重越大；任一维达到边界时连续归零。定义支持质量 $S_{k,t}=\sum_{j\ne k} w_{k,t,j}\le K-1$ 与同伴续值
 
 $$
-S_{k,t}=\sum_j w_{kj,t},\qquad
 \mu_{k,t}=\begin{cases}
-\dfrac{\sum_j w_{kj,t}q_j}{S_{k,t}},&S_{k,t}>0,\\
+\dfrac{\sum_{j\ne k} w_{k,t,j}q_j}{S_{k,t}},&S_{k,t}>0,\\
 0,&S_{k,t}=0.
 \end{cases}
 $$
 
-每个 $q_j$ 都是同伴轨迹真实终局成功的缩放值。一次计算出的 $\mu$ 永远不会成为另一次 $\mu$ 的输入。支持质量同时反映邻居数量与距离；相同的邻居数可以有不同的 $S$。其数值作为连续收缩量使用，日志中可直接解释，含义限于当前组的可观测证据。
+每个 $q_j$ 都是同伴轨迹真实终局成功的缩放值。一次计算出的 $\mu$ 永远不会成为另一次 $\mu$ 的输入。其数值作为经验贝叶斯先验收缩的证据支持度。
 
-### 3.3 对称动作前基线、续值共享与未决同伴加权
+### 3.3 对称经验贝叶斯基线、续值共享与均匀权重
 
-先计算同任务留一轨迹先验与动作前/后对称共享强度（$\kappa=1, \lambda_{\max}=0.5$，移除正同伴续值门控）：
+先计算留一轨迹先验与动作前/后对称收缩强度（默认 $\kappa=1.0,\ \lambda_{\max}=1.0,\ \omega_{k,t}\equiv 1.0$，移除正同伴门控与未决权重折扣）：
 
 $$
 \bar q_{-k}=\frac{1}{K-1}\sum_{j\ne k}q_j,\qquad
@@ -139,28 +133,20 @@ $$
 
 $$
 \tilde b_{k,t}=(1-\lambda^{\mathrm{pre}}_{k,t})\bar q_{-k}+\lambda^{\mathrm{pre}}_{k,t}\mu_{k,t},\qquad
-Z_{k,t}=(1-\lambda^{\mathrm{post}}_{k,t})G^{\mathrm{MC}}_{k,t}+\lambda^{\mathrm{post}}_{k,t}\bigl(r_{k,t}+\mu_{k,t+1}\bigr).
+Z_{k,t}=(1-\lambda^{\mathrm{post}}_{k,t})G^{\mathrm{MC}}_{k,t}+\lambda^{\mathrm{post}}_{k,t}\bigl(r_{k,t}+\mu_{k,t+1}\bigr),\qquad
+\tilde A_{k,t}=\frac{1}{R}\bigl(Z_{k,t}-\tilde b_{k,t}\bigr).
 $$
 
-记深度 $t$ 前已提前获胜完赛的留一同伴数为 $C^+_{-k,t}=\sum_{j\neq k}(1-\mathbf 1[t<T_j])Y_j$，定义同先验平滑的未决同伴权重与最终步优势：
-
-$$
-\omega_{-k,t}=\frac{(K-1-C^+_{-k,t})+\kappa}{(K-1)+\kappa},\qquad
-\tilde A_{k,t}=\frac{\omega_{-k,t}}{R}\bigl(Z_{k,t}-\tilde b_{k,t}\bigr).
-$$
-
-基线 $\tilde b_{k,t}$ 与缩放 $\omega_{-k,t}$ 只读取目标动作前公开信息与同伴数据，在采样 $y_{k,t}$ 前完全确定。因 $\lambda^{\mathrm{pre}}$ 与 $\lambda^{\mathrm{post}}$ 对称使用同一 $\lambda_{\max}$，定义有界同伴势能 $\Phi_{-k,t}=\lambda^{\mathrm{pre}}_{k,t}(\mu_{k,t}-\bar q_{-k})$，则有无权标量步骤级的精确伸缩恒等式：
+因 $\lambda^{\mathrm{pre}}$ 与 $\lambda^{\mathrm{post}}$ 对称使用同一 $\lambda_{\max}$ 且 $\omega_{k,t}\equiv 1$，定义有界同伴势能 $\Phi_{-k,t}=\lambda^{\mathrm{pre}}_{k,t}(\mu_{k,t}-\bar q_{-k})$，得到无权标量步骤与均匀权重的精确势能分解及整轨精确伸缩零和恒等式：
 
 $$
 Z_{k,t}-\tilde b_{k,t}=(1-\lambda^{\mathrm{post}}_{k,t})(q_k-\bar q_{-k})+\bigl(\Phi_{-k,t+1}-\Phi_{-k,t}\bigr),\qquad
 \sum_{t=0}^{T_k-1}(\Phi_{-k,t+1}-\Phi_{-k,t})\equiv 0
 $$
 
-（末步令 $\lambda^{\mathrm{pre}}_{k,T_k}=0$ 且当同组均匀根匹配给出 $\mu_{k,0}=\bar q_{-k}$ 时 $\Phi_{-k,0}=0$；需注意实际参数更新将步级优势乘以随深度变化的 $\omega_{-k,t}$，$\sum_{t=0}^{T_k-1}\omega_{-k,t}(\Phi_{-k,t+1}-\Phi_{-k,t})=\sum_{t=1}^{T_k-1}(\omega_{-k,t-1}-\omega_{-k,t})\Phi_{-k,t}$，再乘以微批响应词元计数 $1/N_{\mathrm{tok},m}$、PPO 裁剪指示与各步 score 向量 $\psi_{k,t}$，因此实际参数梯度不会自动伸缩抵消为零）。
+（末步 $\lambda^{\mathrm{pre}}_{k,T_k}=0$；当同组根状态均匀匹配使 $\mu_{k,0}=\bar q_{-k}$ 时 $\Phi_{-k,0}=0$）。在单赢家（$M=1$）组中，唯一胜轨每步优势为 $\tilde A_{w,t}=1-\lambda^{\mathrm{post}}_{w,t}\in[0,1]$，未命中同伴支持的孤立胜步全幅保留 `+1.0`，而陷入失败同伴集聚死胡同的误区转移则随支持度收缩；晚期孤立败轨步保留对称先验基线 $\tilde A_{\ell,t}=-\frac{1}{7}$，不再引入 $\omega_{-k,t}$ 的深度权重畸变。同质组直接零步返回；混合组信用量在更新前计算并冻结。
 
-在单赢家（$M=1$）组中，唯一胜轨的同伴均为败轨（$\bar q_{-w}=\mu_{w,t}=0$ 且 $\omega_{-w,t}=1$），故其每步优势满足 $\tilde A_{w,t}=1-\lambda^{\mathrm{post}}_{w,t}\in[0.5,1]>0$；而在 $M\ge 2$ 的组中，若更快完赛的获胜同伴提前离场或后续状态分叉使动作前高支持基线 $\tilde b_{w,t}$ 高于后态目标 $Z_{w,t}$，绕路进入低支持区域的胜轨步可以合法地得到负优势 $\tilde A_{w,t}<0$（`r7` 在线 WebShop $M=6$ 组 `R25` 中已实测观察到该现象）。在高胜率组中全部 $M$ 条胜轨完赛后（$C^+_{-\ell,t}=M,\mu_{\ell,t}=0$），仍在漫游的孤立败轨步优势为 $\tilde A_{\ell,t}=-\omega_{-\ell,t}(1-\lambda^{\mathrm{pre}}_{\ell,t})\frac{M}{K-1}$：当 $S_{\ell,t}=0,\kappa=1$ 时精确等于 $-\frac{K}{K-1}\hat{p}(1-\hat{p})=-\frac{M(8-M)}{56}\in[-0.286,-0.125]$（在 `7/8` 组把晚期步扣罚从 `-1.0` 削减 `8x`，在 `M=1` 且 $S_{\ell,t}=0$ 时仅从 `-1/7` 削减 `12.5%` 至 `-1/8`），若存活败轨间发生局部匹配（$S_{\ell,t}>0$）则再乘以收缩因子 $(1-\lambda^{\mathrm{pre}}_{\ell,t})$。同质组直接零步返回；混合组信用量在参数更新前计算并冻结。
-
-实现按 `[depth, trajectory, feature]` 组织表示，用批量 Gram 矩阵一次形成所有同深度距离，再按 `[depth, target, peer]` 归约。时间复杂度为 $O(HK^2D)$，权重存储为 $O(HK^2)$。表示使用 CPU float32，信用加权与回报归约使用 CPU float64，避免大量 Python 子图循环与小规模 GPU 同步。
+实现按 `[depth, trajectory, feature]` 组织并在归约前保留跨深度四维切片，按每组一步到位矩阵乘完成归约；信用归约使用 CPU float64，避免大量 Python 循环与小规模 GPU 同步。
 
 ## 4. 数学含义、偏差与明确成立的性质
 
@@ -172,18 +158,14 @@ $$
 \psi_{k,t}=\left.\nabla_\theta\log\pi_\theta(y_{k,t}\mid p_{k,t})\right|_{\theta=\theta_{\mathrm{old}}}.
 $$
 
-在固定任务初态、冻结的行为策略 $\pi_{\mathrm{old}}$ 和参考参数下，由于 $\omega_{-k,t}$ 与 $\tilde b_{-k,t}$ 均在当前动作前确定，有精确零期望恒等式 $\mathbb E[\omega_{-k,t}\tilde b_{k,t}\psi_{k,t}\mid h_{k,t},D_{-k}]=0$。进一步，令 $V^{\pi_{\mathrm{old}}}(h_{t+1})$ 为相同有限时域、相同行为策略下的真实后续回报均值，在独立与转移条件满足时，相对 $\omega_t$ 加权的 Monte Carlo 策略梯度存在如下共享偏差分解：
+由于 $\tilde b_{k,t}$ 在当前动作前确定且 $\omega_{k,t}\equiv 1$，有精确零期望恒等式 $\mathbb E[\tilde b_{k,t}\psi_{k,t}\mid h_{k,t},D_{-k}]=0$。进一步，令 $V^{\pi_{\mathrm{old}}}(h_{t+1})$ 为相同有限时域、相同行为策略下的真实后续回报均值，在独立与转移条件满足时，相对无权 Monte Carlo 策略梯度存在简洁的共享偏差分解：
 
 $$
-\begin{aligned}
-\Delta_t
-&=\mathbb E[\omega_t(Z_t-\tilde b_t)\psi_t]-\mathbb E[\omega_t G^{\mathrm{MC}}_t\psi_t]\\
-&=\mathbb E\!\left[\omega_t\lambda^{\mathrm{post}}_t
-\bigl(\mu_{-k,t+1}-V^{\pi_{\mathrm{old}}}(h_{t+1})\bigr)\psi_t\right].
-\end{aligned}
+\Delta_t=\mathbb E[(Z_t-\tilde b_t)\psi_t]-\mathbb E[G^{\mathrm{MC}}_t\psi_t]
+=\mathbb E\!\left[\lambda^{\mathrm{post}}_t\bigl(\mu_{-k,t+1}-V^{\pi_{\mathrm{old}}}(h_{t+1})\bigr)\psi_t\right].
 $$
 
-推导从 $Z-G^{\mathrm{MC}}=\lambda^{\mathrm{post}}(r+\mu_{t+1}-G^{\mathrm{MC}})$ 出发。对当前转移及同伴数据条件化后，$G^{\mathrm{MC}}-r$ 的条件均值为真实续值，基线项由上式消去，从而把共享估计误差显式归于 $\mu_{t+1}-V^{\pi_{\mathrm{old}}}(h_{t+1})$。需明确指出，上述等式比较的对象是 $\omega_t$ 加权后的 Monte Carlo 梯度；相对于无权原始官方成功目标梯度 $\mathbb E[G^{\mathrm{MC}}_t \psi_t]$，只要存在提前获胜完赛同伴（$C^+_{-k,t}>0$），还包含未决重加权项 $\mathbb E[(\omega_t-1)G^{\mathrm{MC}}_t \psi_t]$，且多微批、裁剪并经词元均值与 AdamW 预条件化的完整更新仍属于正则化替代目标而非精确无偏梯度。
+推导从 $Z-G^{\mathrm{MC}}=\lambda^{\mathrm{post}}(r+\mu_{t+1}-G^{\mathrm{MC}})$ 出发，对当前转移及同伴数据条件化后 $G^{\mathrm{MC}}-r$ 条件均值为真实续值，基线项由零期望恒等式直接消去，且不存在由 $\omega_t\ne 1$ 产生的附加权重偏差项。多微批、裁剪与词元均值 AdamW 优化器仍属于正则化替代目标。
 
 若在所讨论分布上有 $|\mu-V|\leq\delta$、$\lambda\leq\lambda_{\max}$，并且 $\mathbb E\|\psi_t\|\leq L_t$，则归一化后
 
@@ -205,9 +187,9 @@ $$
 
 若某组所有 $Y_j$ 相等（全失败 $0/8$ 或全成功 $8/8$），该组作为同质组满足先验、基线和目标全部相等，任务优势严格为零，直接免除特征提取返回零优势。熵正则提供有限的分布扩散，参考正则约束偏离；二者在混合组批次中发挥作用，整体算法在无混合组轮次直接执行零步旁路而不靠纯正则更新参数。`all_zero_groups`、`all_one_groups` 与 `homogeneous_round_bypass` 会直接记录这一状态。
 
-一个失败轨迹中的动作可以因下一状态的成功同伴获得正优势，具体条件是 $\lambda^{\mathrm{post}}_{k,t}\mu_{k,t+1} + (1 - \lambda^{\mathrm{post}}_{k,t})q_k > \tilde b_{k,t}$。在 `fgpo` 移除正同伴门控后，在单赢家（$M=1$）组中，任何获胜轨迹步骤只要其下一状态在失败同伴处获得正支持（$S_{w,t+1}>0,\mu_{w,t+1}=0$），其正优势均会依支持量收缩为 $1-\lambda^{\mathrm{post}}_{w,t}\in[0.5,1)$；该收缩仅由同伴支持量 $S_{w,t+1}$ 驱动而缺少动作质量标签，因此对无效死胡同步与在失败同伴中高频出现的必要成功前缀会施加相同的幅值收缩。`positive_failed_steps` 与 `mean_pending_weight` 用于解释失败轨迹正信用位置与完赛未决权重变化。
+一个失败轨迹中的动作可以因下一状态的成功同伴获得正优势，具体条件是 $\lambda^{\mathrm{post}}_{k,t}\mu_{k,t+1} + (1 - \lambda^{\mathrm{post}}_{k,t})q_k > \tilde b_{k,t}$。`positive_failed_steps` 与 `mean_pending_weight`（在 `r8` 中恒等于 `1.0`）用于解释失败轨迹正信用位置。
 
-## 5. PPO 更新与原子混合组权重
+## 5. PPO 更新与宽度感知学习率
 
 每个步骤的 $A_{k,t}$ 应用于该响应的全部实际采样词元。人工补入的 ChatML 闭合词元、环境观测、滚动重播的旧响应都没有新的损失所有权。令第 $i$ 个响应词元的概率比为 $\rho_i=\exp(\ell_i^\theta-\ell_i^{\mathrm{old}})$。
 
@@ -218,16 +200,16 @@ d_i=\ell_i^{\mathrm{ref}}-\ell_i^\theta,\qquad
 k_i=\min\{10,\exp(d_i)-d_i-1\}.
 $$
 
-这些是保存的行为样本上的正则化 surrogate。裁剪、抽样参考项和近似续值共同决定实际更新；训练并不宣称每次参数变化都等于官方成功目标的精确梯度。默认全参数 bf16/SDPA、无 dropout，AdamW 学习率 $10^{-6}$、weight decay $0.01$，全局梯度范数裁剪 $1$。
+默认全参数 bf16/SDPA、无 dropout，AdamW 宽度感知基础学习率 $\eta(d_{\mathrm{model}})=10^{-6}\min(1, 3584/d_{\mathrm{model}})$（`1.5B` 与 `7B` 均为 $10^{-6}$）、weight decay $0.01$，全局梯度范数裁剪 $1$。
 
-F-GPO 及其自身消融在 `r7` 采用 `loss_normalization="token"` 与 `entropy_normalization="token"` 的均衡打乱微批更新（`ppo_epochs=1`, `ppo_minibatch_rows=256`, `shuffle=true`, `mixed_token_mean`）。一轮首先筛选满足 $1\le\sum_{k\in g}Y_k\le K-1$ 的混合结果组 $\mathcal G_{\mathrm{mix}}$；若 $M=|\mathcal G_{\mathrm{mix}}|=0$，整轮跳过参考前向、PPO 与 AdamW（执行 `0` 次优化器步）；若 $M\ge 1$，将混合组全体响应步按 `shuffle=true` 打乱并均衡划分为 $B=\lceil N_{\mathrm{rows}}/256\rceil$ 个微批 $\mathcal B_m$，记微批响应词元数为 $N_{\mathrm{tok},m}=|\mathcal B_m|$，对策略、KL 与熵统一按词元均值化：
+F-GPO 及其自身消融在 `r8` 采用 `loss_normalization="token"` 与 `entropy_normalization="token"` 的均衡打乱微批更新（`ppo_epochs=1`, `ppo_minibatch_rows=256`, `shuffle=true`, `mixed_token_mean`）。一轮首先筛选满足 $1\le\sum_{k\in g}Y_k\le K-1$ 的混合结果组 $\mathcal G_{\mathrm{mix}}$；若 $M=|\mathcal G_{\mathrm{mix}}|=0$，整轮跳过参考前向、PPO 与 AdamW（执行 `0` 次优化器步）；若 $M\ge 1$，将混合组全体响应步打乱并均衡划分为 $B=\lceil N_{\mathrm{rows}}/256\rceil$ 个微批 $\mathcal B_m$，记微批响应词元数为 $N_{\mathrm{tok},m}$，以无缓存右填充 `attention_mask=None` 执行一次因果主干前向与反向，对策略、KL 与熵统一按词元均值化：
 
 $$
-\mathcal L_m^{\mathrm{r7}}=\frac{1}{N_{\mathrm{tok},m}}
+\mathcal L_m^{\mathrm{r8}}=\frac{1}{N_{\mathrm{tok},m}}
 \sum_{i\in\mathcal B_m}\bigl(\ell^{\mathrm{PPO}}_i+\beta k_i-\alpha H_i\bigr).
 $$
 
-统一词元均值权重彻底消除了 `r6` 逐阶归一化对长思考输出的 `ppo_kl` 稀释以及与 `1/N_tok` 熵正则的量纲失衡，同时使每轮最大更新步数收敛至与已发表 1.5B 基线（`256` 行、`1` epoch、`1e-6` 学习率）一致的稳定区间。参数在每个微批更新后变化。三个已发表 baseline 保留作者 virtual-rank / microbatch 内的 token mean 及其聚合权重、优势归一化和 minibatch 设置。
+因为无缓存右填充序列在零起点位置编码下严格因果，有效位置 $q < L_r$ 不依赖填充键值，传入 `attention_mask=None`（并在成本事件记录 `attention_mask_omitted=True`）可在完全等价的数学前向下使用原生 FlashAttention-2/SDPA+GQA 融合计算。三个已发表 baseline 保留作者 virtual-rank / microbatch 内的 token mean 及其聚合权重、优势归一化和 minibatch 设置。
 
 对 baseline 的一次 optimizer update，令 $W$ 为来源配方的 virtual world size，$A$ 为固定 gradient accumulation，$T_{r,b}$ 为 rank $r$ 上 microbatch $b$ 的真实响应词元数，则对应目标为
 
@@ -242,13 +224,13 @@ $$
 
 ## 6. 系统实现与性能优化的成立条件
 
-### 6.1 因果打包与参考计算
+### 6.1 零掩码因果打包与参考计算
 
 完整段包含按时间串接的动作和观测。在相同词元、位置编码、因果 mask 及参数下，响应前缀位置的隐藏态可以从整段前向获得；后面的词元被因果注意力屏蔽。这允许一个段内的多个响应共享主干计算，同时保持各自真实前缀。滚动窗口重新开始一个段，旧前缀依赖的 KV 不能直接作为新窗口的条件继续使用。
 
-冻结参考权重仅在当轮存在混合结果组时集中安装，完成混合组轨迹的响应概率与所需特征计算后恢复 actor；全同结果轮直接旁路该阶段。同段所有拥有损失的响应合并成有界 head chunks，按每条响应的 `span.start-1 : span.stop-1` 因果位置评分；参考前向与 `response_head` 在段粒度复用 `aggregate_model_calls` 并携带真实 `round`/`group_id` 归属；目标 token 一次上传，每段的分数一次下载。每块词表 logits 在下一块计算前释放。历史 hook 只截取所需 prompt 向量；ALFWorld 省略局部观测模型前向而直接使用纯观测词元元组匹配，AppWorld 局部观测采用去重、长度排序和词元预算微批。此处的复用范围以相同参数版本和实际段为单位。
+冻结参考权重仅在当轮存在混合结果组时集中安装，完成混合组轨迹的响应概率与所需特征计算后恢复 actor；全同结果轮直接旁路该阶段。同段所有拥有损失的响应合并成有界 head chunks，按每条响应的 `span.start-1 : span.stop-1` 因果位置评分；参考前向与 `response_head` 在段粒度复用 `aggregate_model_calls` 并携带真实 `round`/`group_id` 归属；目标 token 一次上传，每段的分数一次下载。每块词表 logits 在下一块计算前释放。历史 hook 只截取比例层 $\ell^*(L)$ 所需 prompt 向量；ALFWorld、WebShop 与 TextCraft 均省略 `z_obs` 模型前向而直接使用精确 `representation_ids` 整数词元匹配，AppWorld 局部观测采用去重、长度排序和无缓存 `attention_mask=None` 微批。此处的复用范围以相同参数版本和实际段为单位。
 
-信用阶段形成同深度匹配权重后及时释放临时特征。完成优势及聚合诊断后调用 `ReferenceRound.release_features()`，去除后续更新和 checkpoint 中无用途的表示引用，保留冻结参考的响应条件概率；行为段 `SegmentRecord` 一次冻结共享，并在轮末日志落盘后立即释放已完成轮的 `groups`/轨迹与局部引用，避免两轮样本在主机内存重叠常驻。
+信用阶段形成跨深度匹配权重后及时释放临时特征。完成优势及聚合诊断后调用 `ReferenceRound.release_features()`，去除后续更新和 checkpoint 中无用途的表示引用，保留冻结参考的响应条件概率；行为段 `SegmentRecord` 一次冻结共享，并在轮末日志落盘后立即释放已完成轮的 `groups`/轨迹与局部引用，避免两轮样本在主机内存重叠常驻。
 
 ### 6.2 持久环境进程与提前派发
 
@@ -337,10 +319,10 @@ ALFWorld 接入作者发布的公开观测、原生动作与提示配方。HGPO/
 | 信用折扣 γ | 1 | .95 | .95 | .10 |
 | ALFWorld 每步生成上限 | 512 | 512 | 512 | 512 |
 | ALFWorld 提示 / 历史规则 | 32768 总上下文内的初始锚定与完整轮次滚动（三块整数帧） | 2048 prompt，最近两轮记忆，超限 error | 4096 prompt，最近两轮记忆，作者 left truncation | 2048 prompt，最近两轮记忆及公开状态摘要，超限 error |
-| PPO 批次划分 | `r7` 1.5B 主线：均衡打乱 256 行混合组微批；历史 7B `V4`：混合结果组 $K=8$ 原子整组 | 256 row | 256 row | 64 row（7B 配方） |
-| Loss reduction | `r7`：`mixed_token_mean`（策略/KL/熵统一批内词元均值）；历史 `V4`：固定分母 $Z_m=8$ | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean |
+| PPO 批次划分 | `r8` 统一尺度不变配方（1.5B/7B 一致）：均衡打乱 256 行混合组微批 | 256 row | 256 row | 64 row（7B 配方） |
+| Loss reduction | `r8`：`mixed_token_mean`（策略/KL/熵统一零掩码批内词元均值） | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean |
 
-上表主基座对照按公开 7B 协议组织（全参数 bf16/SDPA，种子 0、1、2，AdamW `lr=1e-6`、weight decay `0.01`、`betas=(0.9,0.999)`、`epsilon=1e-8`、全局梯度范数上限 `1`、`ppo_epochs=1`、`clip=0.2`、`dual_clip=3`、`entropy=0.001`、`kl=0.01`、训练温度 `1`/评估 `0.4`/`top_p=1`）。F-GPO 信用参数默认 $R=10,\epsilon=0.10,\kappa=1,\lambda_{\max}=0.5$：现行 `r7`（`fgpo-r7-token-mean-v1`）采用对称势能与未决同伴权重 $\omega_{-k,t}$（无正同伴延续门控，仅 `fgpo_exact_first_hit` 保留门控）；历史 7B `V4` 启用了正同伴门控与原子组轨迹分母 $Z_m=8$。baseline 的奖励尺度和语法处理以来源配方为准。
+上表主基座对照按统一尺度不变配方组织（全参数 bf16/SDPA，AdamW 宽度感知学习率 $\eta(d_{\mathrm{model}})=10^{-6}\min(1,3584/d_{\mathrm{model}})$ 对 `1.5B` 和 `7B` 均为 `1e-6`、weight decay `0.01`、`betas=(0.9,0.999)`、`epsilon=1e-8`、全局梯度范数上限 `1`、`ppo_epochs=1`、`clip=0.2`、`dual_clip=3`、`entropy=0.001`、`kl=0.01`、训练温度 `1`/评估 `0.4`/`top_p=1`）。F-GPO `r8`（`fgpo-r8-scale-invariant-v1`）信用参数为 $R=10,\epsilon_{\mathrm{rep}}=0.08,\epsilon_{\mathrm{time}}=0.10,\kappa=1.0,\lambda_{\max}=1.0,\omega\equiv 1.0$（无正同伴延续门控，仅历史 `fgpo_exact_first_hit` 保留门控）。baseline 的奖励尺度和语法处理以来源配方为准。
 
 上表描述已发布的家务基准配方。TextCraft 与 WebShop 的实际预算、官方划分和追加对照见[当前排程](fgpo_experiment_schedule_current.md)。正式终评按各自既定任务计算，部分结果保留原分母与完成状态。
 
@@ -360,7 +342,7 @@ ALFWorld 接入作者发布的公开观测、原生动作与提示配方。HGPO/
 $$
 \operatorname{Brier}_{\mathrm{LOO}}
 =\frac{1}{\sum_k T_k}\sum_{k,t<T_k}
-\left(b_{k,t}/R-Y_k\right)^2.
+\left(\tilde b_{k,t}/R-Y_k\right)^2.
 $$
 
 另记录任务先验 Brier 和有匹配状态上的未收缩 $\mu/R$ Brier。目标轨迹结果在预测时被留出，随后用于计算预测损失。若真实条件成功概率为 $p$，条件平方误差可分为 $(\widehat p-p)^2+p(1-p)$，因此该指标包含 Bernoulli outcome 噪声，其用途是解释留出结果预测；真实 Q 误差和理论中的 $\delta$ 是不同对象。Brier 不回流为训练权重。
@@ -369,7 +351,7 @@ $$
 
 ## 8. 运行身份与交付状态
 
-协议 `fgpo-r7-token-mean-v1` 的运行按 comparison 与 ablation 分目录保存。同一 study 可保存各自的单元和汇总，并引用已有的完整 F-GPO 结果。当前启动入口由 `configs/fgpo-r7-1p5b-*.json` 与 `scripts/{colab_run_r7_1p5b_queue,run_fgpo_host_r7_1p5b_queue}.sh` 指向各主机与 Colab 配置。
+协议 `fgpo-r8-scale-invariant-v1` 的运行按 comparison 与 ablation 分目录保存。同一 study 可保存各自的单元和汇总，并引用已有的完整 F-GPO 结果。统一跨尺度启动入口配置见 `configs/fgpo-r8-{1p5b,7b}-*.json`。
 
 恢复由 `effective_training_identity/require_training_identity` 约束：方法及发布配方来源、模型、任务、种子、历史、采样、信用、PPO 和 Adam 的有效语义保持一致。GPU 放置、KV 容量、offload、head/表示微批、staging、保存周期/分片、原始文件保留与主机预留等资源项可以调整；保存的 CUDA RNG 流数量保持一致。完成采集组、参考概率、优势与更新 cursor 在明确操作边界恢复。
 

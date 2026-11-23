@@ -16,10 +16,79 @@ TERMINATORS = frozenset((IM_END, END_OF_TEXT))
 HORIZONS = {"alfworld": 50, "appworld": 100, "webshop": 15, "textcraft": TEXTCRAFT_HORIZON}
 EVAL_HORIZONS = {**HORIZONS, "textcraft": TEXTCRAFT_EVAL_HORIZON}
 OUTPUT_LIMITS = {"alfworld": 512, "appworld": 1024, "webshop": 512, "textcraft": TEXTCRAFT_OUTPUT_TOKENS}
-EXACT_OBSERVATION_BENCHMARKS = frozenset(("alfworld", "textcraft"))
+EXACT_OBSERVATION_BENCHMARKS = frozenset(("alfworld", "webshop", "textcraft"))
 EMPTY_STDOUT = "[Empty stdout]"
 _TEXT_THINK_RE = re.compile(r"<think>(?:(?!</?think\b).)*?</think>", re.DOTALL | re.IGNORECASE)
 _TEXT_ACTION_RE = re.compile(r"<action>((?:(?!</?action\b).)*?)</action>", re.DOTALL | re.IGNORECASE)
+_ALF_CLEAN_RE = re.compile(r"(?:^|\n)You clean the (.+?) using ", re.IGNORECASE)
+_ALF_HEAT_RE = re.compile(r"(?:^|\n)You heat the (.+?) using ", re.IGNORECASE)
+_ALF_COOL_RE = re.compile(r"(?:^|\n)You cool the (.+?) using ", re.IGNORECASE)
+_ALF_POWER_RE = re.compile(r"(?:^|\n)You turn (on|off) the (.+?)\.(?:\s|$)", re.IGNORECASE)
+_ALF_SLICE_RE = re.compile(r"(?:^|\n)You slice the (.+?) (?:with|using) ", re.IGNORECASE)
+_WEBSHOP_PREFIX_RE = re.compile(r"^WebShop\s*\[SEP\]\s*", re.IGNORECASE)
+_WEBSHOP_INST_BACK_RE = re.compile(
+    r"^Instruction:\s*(?:\[SEP\]\s*)?.*?(?=(?:\[button\]\s*Back to Search|Back to Search\s*\[SEP\]))",
+    re.IGNORECASE,
+)
+_WEBSHOP_INST_SEP_RE = re.compile(r"^Instruction:\s*\[SEP\]\s*.*?\s*\[SEP\]\s*", re.IGNORECASE)
+_WEBSHOP_NAV_RE = re.compile(
+    r"^(?:\[button\]\s*Back to Search\s*\[button_\]|Back to Search\s*\[SEP\])\s*"
+    r"(?:\[button\]\s*<\s*Prev\s*\[button_\]|<\s*Prev\s*\[SEP\])?\s*",
+    re.IGNORECASE,
+)
+
+
+def update_alfworld_public_effects(effects: Mapping[str, str] | None, feedback_text: str) -> dict[str, str]:
+    """Track non-observable ALFWorld object state changes solely from public simulator feedback."""
+    updated = dict(effects or {})
+    text = str(feedback_text or "")
+    for match in _ALF_CLEAN_RE.finditer(text):
+        obj = " ".join(match.group(1).strip().lower().split())
+        if obj:
+            updated[f"clean:{obj}"] = "clean"
+    for match in _ALF_HEAT_RE.finditer(text):
+        obj = " ".join(match.group(1).strip().lower().split())
+        if obj:
+            updated[f"temp:{obj}"] = "hot"
+    for match in _ALF_COOL_RE.finditer(text):
+        obj = " ".join(match.group(1).strip().lower().split())
+        if obj:
+            updated[f"temp:{obj}"] = "cool"
+    for match in _ALF_POWER_RE.finditer(text):
+        state, obj = match.group(1).lower(), " ".join(match.group(2).strip().lower().split())
+        if obj:
+            if state == "on":
+                updated[f"power:{obj}"] = "on"
+            else:
+                updated.pop(f"power:{obj}", None)
+    for match in _ALF_SLICE_RE.finditer(text):
+        obj = " ".join(match.group(1).strip().lower().split())
+        if obj:
+            updated[f"sliced:{obj}"] = "sliced"
+    return dict(sorted(updated.items()))
+
+
+def strip_webshop_repeated_header(obs_text: str, goal: str = "") -> str:
+    """Strip WebShop repeated banner/instruction/navigation boilerplate without discarding page state."""
+    clean = " ".join(str(obs_text).split())
+    stripped = _WEBSHOP_PREFIX_RE.sub("", clean, count=1).strip()
+    goal_clean = " ".join(str(goal).split())
+    if goal_clean:
+        for prefix in (
+            f"Instruction: [SEP] {goal_clean} [SEP]",
+            f"Instruction: {goal_clean} [SEP]",
+            f"Instruction: {goal_clean}",
+        ):
+            if stripped.startswith(prefix):
+                stripped = stripped[len(prefix):].lstrip()
+                break
+    if stripped.startswith("Instruction:"):
+        if re.search(r"(?:\[button\]\s*Back to Search|Back to Search\s*\[SEP\])", stripped, re.IGNORECASE):
+            stripped = _WEBSHOP_INST_BACK_RE.sub("", stripped, count=1).lstrip()
+        else:
+            stripped = _WEBSHOP_INST_SEP_RE.sub("", stripped, count=1).lstrip()
+    stripped = _WEBSHOP_NAV_RE.sub("", stripped, count=1).strip()
+    return stripped if stripped else clean
 
 
 def encode_text(tokenizer, text: str) -> tuple[int, ...]:
@@ -29,7 +98,8 @@ def encode_text(tokenizer, text: str) -> tuple[int, ...]:
 
 def project_public_observation(tokenizer, benchmark: str, raw_observation: str, *,
                                action_schema: Mapping, goal: str, initial=False,
-                               published_baseline=False) -> PublicObservation:
+                               published_baseline=False,
+                               alfworld_effects: Mapping[str, str] | None = None) -> PublicObservation:
     if benchmark == "textcraft":
         if published_baseline:
             text = textcraft_observation(raw_observation)
@@ -40,8 +110,10 @@ def project_public_observation(tokenizer, benchmark: str, raw_observation: str, 
         pure = encode_text(tokenizer, text)
         inv_ids = encode_text(tokenizer, inventory)
         representation = inv_ids if inv_ids else encode_text(tokenizer, EMPTY_STDOUT)
-        suffix = ("\nEnclose concise reasoning in literal <think> and </think> tags, "
-                  "then enclose one exact command in literal <action> and </action> tags.")
+        suffix = (
+            "\nEnclose concise reasoning in literal <think> and </think> tags, "
+            "then enclose one exact lowercase command in literal <action> and </action> tags."
+        )
         suffix_ids = encode_text(tokenizer, suffix)
         return PublicObservation(raw_observation, text, pure, representation, (),
                                  pure + suffix_ids, 0, (), suffix_ids)
@@ -63,6 +135,9 @@ def project_public_observation(tokenizer, benchmark: str, raw_observation: str, 
         step_num = min(int(action_schema["step"]) + 1, HORIZONS[benchmark])
         commands = tuple(action_schema["available_actions"])
         suffix = "\nAdmissible actions:\n" + ("\n".join(commands) if commands else "(none)")
+        ws_clean = strip_webshop_repeated_header(text, goal=goal)
+        ws_repr = (ws_clean + "\n||" + "\n".join(commands)).strip()
+        representation = encode_text(tokenizer, ws_repr if ws_repr else EMPTY_STDOUT)
     elif benchmark == "alfworld":
         envelope = json.loads(raw_observation)
         text = str(envelope["native_observation"])
@@ -71,15 +146,20 @@ def project_public_observation(tokenizer, benchmark: str, raw_observation: str, 
         step_num = min(int(envelope.get("step", 0)) + 1, HORIZONS[benchmark])
         commands = tuple(str(c) for c in action_schema["available_actions"] if str(c) != "help")
         command_lines = "\n".join(commands) if commands else "(none)"
-        suffix = ("\n\nAdmissible commands (choose one exact command without quotes):\n"
+        suffix = (f"\n\nAdmissible commands (choose one exact command without quotes):\n"
                   f"{command_lines}\n"
                   "Enclose concise reasoning in literal <think> and </think> tags, "
                   "then enclose one exact command in literal <action> and </action> tags.")
+        effects = dict(alfworld_effects) if alfworld_effects is not None else dict(envelope.get("public_object_effects") or {})
+        repr_lines = list(commands)
+        if effects:
+            repr_lines.append("||" + "|".join(f"{k}={v}" for k, v in sorted(effects.items())))
+        alf_repr = "\n".join(repr_lines).strip()
+        representation = encode_text(tokenizer, alf_repr if alf_repr else EMPTY_STDOUT)
     else:
         raise ValueError(f"Unsupported official F-GPO benchmark: {benchmark}")
     prefix = f"Task: {goal}\nStep: {step_num}/{HORIZONS[benchmark]}\nCurrent observation:\n"
     prefix_ids, pure, suffix_ids = encode_text(tokenizer, prefix), encode_text(tokenizer, text), encode_text(tokenizer, suffix)
-    representation = pure if pure else encode_text(tokenizer, EMPTY_STDOUT)
     # Wrapper and observation are separate integer blocks; BPE cannot merge their boundary.
     return PublicObservation(raw_observation, text, pure, representation, prefix_ids,
                              prefix_ids + pure + suffix_ids, len(prefix_ids), commands, suffix_ids)
@@ -115,7 +195,7 @@ def _validate_chat_template(tokenizer) -> tuple[tuple[int, ...], tuple[int, ...]
 
 def canonical_root_prefix(tokenizer, benchmark: str, system_prompt: str, goal: str,
                           initial: PublicObservation) -> tuple[int, ...]:
-    """Episode-invariant ChatML prefix (system instructions + pinned task/recipes) for r6 shared KV."""
+    """Episode-invariant ChatML prefix (system instructions + pinned task/recipes) for r8 shared KV."""
     system_header, user_header, _ = _validate_chat_template(tokenizer)
     if benchmark == "alfworld":
         task_header_text = f"Task: {goal}\nInitial observation: {' '.join(initial.pure_text.split())}\n"
@@ -133,20 +213,33 @@ def canonical_root_prefix(tokenizer, benchmark: str, system_prompt: str, goal: s
 
 def canonical_history_entry_ids(tokenizer, benchmark: str, step_num: int, action: Mapping,
                                 syntax_valid: bool, observation: PublicObservation) -> tuple[int, ...]:
-    """Compact canonical executed (Action -> Observation) record, stripped of expired menus and <think>."""
-    cmd = str(action.get("text") or action.get("code") or "").strip() if syntax_valid else ""
-    action_label = " ".join(cmd.split()) if cmd else "(invalid format)"
-    if benchmark == "alfworld":
-        obs_clean = " ".join(observation.pure_text.split())
-        line = f"[Step {step_num}] Action: {action_label} -> Observation: {obs_clean}\n"
-    elif benchmark == "textcraft":
-        fb, inv = unpack_textcraft_observation(observation.raw_observation)
-        line = f"[Step {step_num}] Action: {action_label} -> {' '.join(fb.split())} ({' '.join(inv.split())})\n"
-    elif benchmark in ("webshop", "appworld"):
+    """Compact tag-preserving canonical executed (<action> -> Observation) record, stripped of boilerplate and <think>."""
+    if benchmark in ("alfworld", "webshop", "textcraft"):
+        cmd = str(action.get("text") or "").strip() if syntax_valid else ""
+        clean_cmd = " ".join(cmd.split())
+        action_repr = (
+            f"<action>{clean_cmd}</action>"
+            if clean_cmd
+            else "(invalid format: missing <think>...</think><action>...</action>)"
+        )
+        if benchmark == "alfworld":
+            obs_clean = " ".join(observation.pure_text.split())
+            line = f"[Step {step_num}] {action_repr} -> Observation: {obs_clean}\n"
+        elif benchmark == "textcraft":
+            fb, inv = unpack_textcraft_observation(observation.raw_observation)
+            line = f"[Step {step_num}] {action_repr} -> {' '.join(fb.split())} ({' '.join(inv.split())})\n"
+        else:
+            obs_clean = strip_webshop_repeated_header(observation.pure_text)
+            if len(obs_clean) > 320:
+                obs_clean = obs_clean[:320] + " ..."
+            line = f"[Step {step_num}] {action_repr} -> Observation: {obs_clean}\n"
+    elif benchmark == "appworld":
+        cmd = str(action.get("code") or "").strip() if syntax_valid else ""
+        action_repr = " ".join(cmd.split()) if cmd else "(invalid python syntax)"
         obs_clean = " ".join(observation.pure_text.split())
         if len(obs_clean) > 320:
             obs_clean = obs_clean[:320] + " ..."
-        line = f"[Step {step_num}] Action: {action_label} -> Observation: {obs_clean}\n"
+        line = f"[Step {step_num}] Code: {action_repr} -> Observation: {obs_clean}\n"
     else:
         raise ValueError(f"Unsupported official F-GPO benchmark: {benchmark}")
     return encode_text(tokenizer, line)
