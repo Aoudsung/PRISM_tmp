@@ -6,11 +6,13 @@ The operator refreshes FGPO_GCS_ACCESS_TOKEN_FILE outside this process.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import fcntl
 import http.client
 import io
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import shutil
@@ -59,9 +61,10 @@ def _relative(value):
 
 class GCSClient:
     """Standard-library JSON API client, with no retry or credential discovery."""
-    def __init__(self, bucket, *, chunk_bytes=CHUNK_BYTES):
+    def __init__(self, bucket, *, chunk_bytes=CHUNK_BYTES, upload_workers=8):
         self.bucket = bucket
         self.chunk_bytes = int(chunk_bytes)
+        self.upload_workers = max(1, int(upload_workers))
         self._connection = None
         self._operation_depth = 0
         if not bucket or "/" in bucket or self.chunk_bytes < 256 * 1024 or self.chunk_bytes % (256 * 1024):
@@ -179,9 +182,81 @@ class GCSClient:
     def writer(self, name):
         return GCSWriter(self, name)
 
+    def compose(self, name, sources):
+        if not sources or len(sources) > 32:
+            raise ValueError("GCS compose requires 1 to 32 source objects")
+        url = (
+            "https://storage.googleapis.com/storage/v1/b/"
+            + quote(self.bucket, safe="")
+            + "/o/"
+            + quote(name, safe="")
+            + "/compose?"
+            + urlencode({"ifGenerationMatch": 0})
+        )
+        body = {
+            "sourceObjects": [
+                {"name": item["name"], "generation": str(item["generation"])}
+                for item in sources
+            ],
+            "destination": {"contentType": "application/octet-stream"},
+        }
+        with self.response(
+            "POST",
+            url,
+            operation="compose_object",
+            body=_json_bytes(body),
+            headers={"Content-Type": "application/json"},
+            statuses=(200,),
+        ) as response:
+            return self.descriptor(self._json(response))
+
     def upload_file(self, name, path):
-        size = Path(path).stat().st_size
-        return self.upload_range(name, path, offset=0, size=size)
+        path = Path(path)
+        size = path.stat().st_size
+        parallel_floor = max(256 * 1024 * 1024, 2 * self.chunk_bytes)
+        if self.upload_workers <= 1 or size < parallel_floor:
+            return self.upload_range(name, path, offset=0, size=size)
+        part_count = min(24, max(self.upload_workers, math.ceil(size / self.chunk_bytes)))
+        base_part, rem = divmod(size, part_count)
+        ranges = []
+        offset = 0
+        for index in range(part_count):
+            part_size = base_part + (1 if index < rem else 0)
+            ranges.append((index, offset, part_size))
+            offset += part_size
+        temp_prefix = f"{name}.fgpo-parts/{uuid.uuid4().hex}"
+        uploaded = [None] * part_count
+
+        def _upload_part(item):
+            index, part_offset, part_size = item
+            worker = GCSClient(self.bucket, chunk_bytes=self.chunk_bytes, upload_workers=1)
+            try:
+                desc = worker.upload_range(f"{temp_prefix}/{index:02d}", path, offset=part_offset, size=part_size)
+                uploaded[index] = desc
+                return desc
+            finally:
+                worker.close()
+
+        def _delete_part(desc):
+            if desc is None:
+                return
+            worker = GCSClient(self.bucket, chunk_bytes=self.chunk_bytes, upload_workers=1)
+            try:
+                worker.delete(desc)
+            except StorageError:
+                pass
+            finally:
+                worker.close()
+
+        try:
+            with ThreadPoolExecutor(max_workers=min(self.upload_workers, part_count)) as pool:
+                descriptors = list(pool.map(_upload_part, ranges))
+            return self.compose(name, descriptors)
+        finally:
+            cleanup = [desc for desc in uploaded if desc is not None]
+            if cleanup:
+                with ThreadPoolExecutor(max_workers=min(self.upload_workers, len(cleanup))) as pool:
+                    list(pool.map(_delete_part, cleanup))
 
     def upload_range(self, name, path, *, offset=0, size):
         remaining = int(size)
@@ -559,7 +634,11 @@ class GCSCheckpoint:
             raise ValueError("checkpoint_gcs_uri must name a gs://bucket/study prefix")
         self.root = Path(root)
         self.cell = self.root.parent
-        self.client = GCSClient(uri.netloc, chunk_bytes=int(config.get("checkpoint_gcs_chunk_mib", 8)) * 1024 * 1024)
+        self.client = GCSClient(
+            uri.netloc,
+            chunk_bytes=int(config.get("checkpoint_gcs_chunk_mib", 8)) * 1024 * 1024,
+            upload_workers=int(config.get("checkpoint_gcs_upload_workers", 8)),
+        )
         suffix = f"{config['suite']}/{config['benchmark']}/{config['method']}/seed-{int(config['seed'])}"
         self.prefix = uri.path.strip("/") + "/" + suffix
         self.identity = {key: config[key] for key in ("protocol", "suite", "benchmark", "method", "seed", "model_path")}
@@ -862,6 +941,16 @@ class GCSCheckpoint:
 
     def _torch_save(self, name, value):
         import torch
+        self.cell.mkdir(parents=True, exist_ok=True)
+        if shutil.disk_usage(self.cell).free >= 32 * 1024 * 1024 * 1024:
+            staging_dir = self.cell / ".gcs-staging"
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            temp_path = staging_dir / f"{uuid.uuid4().hex}.pt"
+            try:
+                torch.save(value, temp_path)
+                return self.client.upload_file(name, temp_path)
+            finally:
+                temp_path.unlink(missing_ok=True)
         writer = self.client.writer(name)
         torch.save(value, writer)
         return writer.finish()

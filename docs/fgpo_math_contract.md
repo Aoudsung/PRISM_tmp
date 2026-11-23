@@ -1,6 +1,6 @@
-# F-GPO r6 数学与实现契约
+# F-GPO r7 数学与实现契约
 
-本文件与 [研究方案及推导](fgpo_design_and_derivation.md) 定义 `fgpo-r6-canonical-v1` 的实际实现，版本日期为 2026-11-22。第 1—6 节规定 F-GPO 及其自身消融的数学对象；第 9 节单列已发表基线的来源、配方和比较范围。核心实现位于 `src/fgpo/{public,filtration,reference,credit,optimization,textcraft}.py`。旧 `r5`、`r3/v4` 与旧 TF-BEFP/DAG 可通过 git 提交追溯；本协议使用新 study 目录，不接续旧协议奖励或未完成更新。
+本文件与 [研究方案及推导](fgpo_design_and_derivation.md) 定义 `fgpo-r7-token-mean-v1` 的实际实现，版本日期为 2026-11-23。第 1—6 节规定 F-GPO 及其自身消融的数学对象；第 9 节单列已发表基线的来源、配方和比较范围。核心实现位于 `src/fgpo/{public,filtration,reference,credit,optimization,textcraft,checkpoint_gcs}.py`。旧 `r6`、`r5`、`r3/v4` 与旧 TF-BEFP/DAG 可通过 git 提交追溯；本协议使用新 study 目录，不接续旧协议奖励或未完成更新。
 
 本文规定数据、公式、默认值、更新和测量口径。当前仅完成静态编写与源代码审阅，所有项目执行及正式评测均在指定服务器与 Colab 实例进行。
 
@@ -126,15 +126,15 @@ $$
 
 八轨迹组中目标失败、七个同伴成功，且当前和下一状态均未完赛且完全匹配时，默认参数（$\lambda_{\max}=0.5,\kappa=1$）给出 $\tilde b=R,\mu_{t+1}=R,\lambda^{\mathrm{post}}=0.5\times 7/8=7/16,\omega=1,\tilde A=-9/16$。同质组任务优势严格为零。
 
-## 6. F-GPO 混合组逐阶归一化微批 PPO
+## 6. F-GPO 混合组均衡词元均值微批 PPO
 
-固定行为 log-prob、参考 log-prob 和步骤优势；每个实际响应 token $i$ 的优势为所属步骤 $A_{k,t}$。F-GPO 及三个自身消融仅筛选混合结果组 $\mathcal G_{\mathrm{mix}}=\{g:1\le\sum_{k\in g}Y_k\le K-1\}$（$M=|\mathcal G_{\mathrm{mix}}|$）构成动作步样本池：当 $M=0$ 时整轮旁路参考前向、PPO 与 AdamW（`0` 次优化器更新）；当 $M\ge 1$ 时按 `ppo_epochs=2` 将全部混合组决策步打乱切分为 `ppo_minibatch_rows=64` 的步级微批 $\mathcal B_m$（`loss_normalization="step_token"`, `mixed_step_token_mean`, `shuffle=true`）。设 $\bar B$ 为每 epoch 平均微批行数，$\rho_i=\exp(\ell_i^\theta-\ell_i^{\mathrm{old}})$，clip $\eta=.2$，dual clip $c=3$：
+固定行为 log-prob、参考 log-prob 和步骤优势；每个实际响应 token $i$ 的优势为所属步骤 $A_{k,t}$。F-GPO 及三个自身消融仅筛选混合结果组 $\mathcal G_{\mathrm{mix}}=\{g:1\le\sum_{k\in g}Y_k\le K-1\}$（$M=|\mathcal G_{\mathrm{mix}}|$）构成动作步样本池：当 $M=0$ 时整轮旁路参考前向、PPO 与 AdamW（`0` 次优化器更新）；当 $M\ge 1$ 时按 `ppo_epochs=1` 将全部混合组决策步打乱并均衡切分为 $\lceil N_{\mathrm{rows}}/256\rceil$ 个步级微批 $\mathcal B_m$（`ppo_minibatch_rows=256`, `loss_normalization="token"`, `entropy_normalization="token"`, `mixed_token_mean`, `shuffle=true`）。记 $N_{\mathrm{tok},m}=\sum_{(k,t)\in\mathcal B_m}|y_{k,t}|$，$\rho_i=\exp(\ell_i^\theta-\ell_i^{\mathrm{old}})$，clip $\eta=.2$，dual clip $c=3$：
 
 $$
-\mathcal L_m^{\mathrm{r6}}=\frac{1}{\bar B}\sum_{(k,t)\in\mathcal B_m}\frac{1}{|y_{k,t}|}\sum_{i\in y_{k,t}}\bigl(\ell_i^{\mathrm{PPO}}+.01k_i\bigr) - \frac{.001}{N_{\mathrm{tok},m}}\sum_{i\in\mathcal B_m}H_i.
+\mathcal L_m^{\mathrm{r7}}=\frac{1}{N_{\mathrm{tok},m}}\sum_{i\in\mathcal B_m}\bigl(\ell_i^{\mathrm{PPO}}+.01k_i-.001H_i\bigr).
 $$
 
-对每个决策步 $(k,t)$ 按其响应长度 $|y_{k,t}|$ 归一化可消除冗长失败 `<think>` 链对简洁成功轨迹的梯度淹没，将梯度范数从 $O(10^3)$ 压回 $O(1)$；同时通过 64 行信赖域微批使稀疏混合组在 `[0.8, 1.2]` 信赖域内获得充分的参数更新。每个微批完成后执行一次 AdamW，默认学习率 `2e-6`、`.01` weight decay、`1.0` 全局梯度范数裁剪、`credit_prior_weight=0.5`。同一微批内的多个单步段按长度排序后打入 2D padding 微批（`ppo_microbatch_segments=8`, `ppo_segment_token_budget=8192`）完成一次主干前向与一次主干反向；词表头分块与 `_LogProbabilityEntropy` 一阶伴随公式保持不变。
+对混合组全体有效响应词元采用统一的 `1/N_tok_m` 权重，消除 `r6` 逐阶归一化在 512-token 长输出上引发的 `ppo_kl` 稀释及 KL/熵量纲失衡；同时将 1.5B 学习率调回 `1e-6`、`credit_prior_weight=1.0`、`.01` weight decay、`1.0` 全局梯度范数裁剪，使单轮 AdamW 步数和有效步幅对齐已发表 1.5B 基线。同一微批内的多个单步段按长度排序后打入 2D padding 微批（`ppo_microbatch_segments=8`, `ppo_segment_token_budget=8192`）完成一次主干前向与一次主干反向；词表头分块与 `_LogProbabilityEntropy` 一阶伴随公式保持不变。
 
 对已发表方法，令来源 virtual rank 数为 $W$、每 rank 的 actor microbatch 行数为 $b$、全局 PPO minibatch 行数为 $B$，固定梯度累积数为 $A=B/(Wb)$。第 $m$ 个 virtual microbatch 的真实响应 token 数为 $N_m$，则该批每个 token 的损失系数为
 
@@ -206,7 +206,7 @@ CPU AdamW 保存 FP32 master/m/v，先完成全局范数的设备归约与有限
 
 ## 9. 研究身份、基线与源码映射
 
-运行身份由协议 fgpo-r5-symmetric-v1 与其实际配置共同决定。主比较与自身消融分开保存，当前执行范围见[实验排程](fgpo_experiment_schedule_current.md)。
+运行身份由协议 `fgpo-r7-token-mean-v1` 与其实际配置共同决定。主比较与自身消融分开保存，当前执行范围见 `configs/fgpo-r7-1p5b-*.json` 与对应排程。
 
 | 正式方法 ID | 来源与本研究采用的配方 | 原 ALFWorld 配方的主要设置 |
 |---|---|---|

@@ -1,13 +1,13 @@
-# F-GPO r6：规范充分 POMDP 滤子、对称势能与逐阶归一化微批更新
+# F-GPO r7：规范充分 POMDP 滤子、对称势能与均衡词元均值微批更新
 
-版本日期：2026-11-22。执行协议：`fgpo-r6-canonical-v1`。
+版本日期：2026-11-23。执行协议：`fgpo-r7-token-mean-v1`。
 
-本方案在 `r5`（`fgpo-r5-symmetric-v1`）通过 WebShop 短视距验证（`44.53% @ R14`）的基础上，进一步根除 1.5B 在长时程稀疏任务（`ALFWorld H=50`, `TextCraft H=60`）中的三大结构性退化：
+本方案在 `r5`（`fgpo-r5-symmetric-v1`）与 `r6` 暴露出 1.5B 训练崩溃诊断的基础上，保留经实证稳定的前端表征并彻底修正 PPO 优化与 GCS 存储瓶颈：
 1. **规范充分 POMDP 滤子 $\Pi(\mathcal{H}_t)$**：固定置顶任务/完整非 JSON `Crafting commands` 根前缀 KV，历史区仅保留紧凑单行 `(Action -> Observation)` 轨迹记录并剥离过期菜单、`&lt;think&gt;` 推理草稿与格式错句，使 1.5B 不再发生坏格式上下文传染、`z_hist` 退化或长上下文重复循环；
 2. **TextCraft 公共规则显式化与对齐时域**：系统提示写明模拟器“不可 `get` 合成物”与“`craft` 必须严格逐字匹配单条配方”的两条公开公理，训练时域设为 `H=60`（对齐公开 1.5B 基线），官方评测在单次 `H=70` 轨迹上同时统计 30 步、60 步、70 步成功率及第 31–70 步新增解；
-3. **逐阶长度归一化与信赖域微批 PPO**：采用 `loss_normalization="step_token"`（每步按自身响应词元数 $|y_{k,t}|$ 均值化）、`ppo_minibatch_rows=64`、`ppo_epochs=2`、`lr=2e-6`、`credit_prior_weight=0.5` 与 2D 微批参考/PPO 前向，解除 1.5B 稀疏混合组下的参数更新饥饿与长败轨梯度压制。
+3. **均衡打乱的词元均值微批 PPO（Token-Mean）**：采用 `loss_normalization="token"` 与 `entropy_normalization="token"` 的均衡打乱微批切分（`ppo_minibatch_rows=256`, `ppo_epochs=1`, `lr=1e-6`, `credit_prior_weight=1.0`, `shuffle=true`），对齐已发表 1.5B 方法的单轮更新预算，消除 `r6` `step_token` 对长输出的 KL/PPO 稀释与熵权重失衡。
 
-本文与 [数学及实现契约](fgpo_math_contract.md) 共同定义现行 `r6` 方案，对应实现位于 `src/fgpo/`。旧 `r5`、`r3/v4` 与旧 TF-BEFP/DAG 可分别通过 git 提交追溯。
+本文与 [数学及实现契约](fgpo_math_contract.md) 共同定义现行 `r7` 方案，对应实现位于 `src/fgpo/`。旧 `r6`、`r5`、`r3/v4` 与旧 TF-BEFP/DAG 可分别通过 git 提交追溯。
 
 ## 1. 2026 年研究进展与 2027 年研究定位
 
@@ -217,16 +217,14 @@ $$
 
 这些是保存的行为样本上的正则化 surrogate。裁剪、抽样参考项和近似续值共同决定实际更新；训练并不宣称每次参数变化都等于官方成功目标的精确梯度。默认全参数 bf16/SDPA、无 dropout，AdamW 学习率 $10^{-6}$、weight decay $0.01$，全局梯度范数裁剪 $1$。
 
-F-GPO 及其自身消融采用 `loss_normalization="trajectory"` 与 `entropy_normalization="token"` 的原子混合组批处理。一轮首先筛选满足 $1\le\sum_{k\in g}Y_k\le K-1$ 的混合结果组 $\mathcal G_{\mathrm{mix}}$；若 $M=|\mathcal G_{\mathrm{mix}}|=0$，整轮跳过参考前向、PPO 与 AdamW（执行 `0` 次优化器步）；若 $M\ge 1$，每个完整的 $K=8$ 轨迹混合组 $m\in\mathcal G_{\mathrm{mix}}$ 作为一个独立原子批次，记该批次总响应词元数为 $N_{\mathrm{tok},m}=|\mathcal B_m|$，保持策略与 KL 项固定轨迹分母 $Z_m=K=8$，而将不含基线的条件熵正则按响应词元数均值化：
+F-GPO 及其自身消融在 `r7` 采用 `loss_normalization="token"` 与 `entropy_normalization="token"` 的均衡打乱微批更新（`ppo_epochs=1`, `ppo_minibatch_rows=256`, `shuffle=true`, `mixed_token_mean`）。一轮首先筛选满足 $1\le\sum_{k\in g}Y_k\le K-1$ 的混合结果组 $\mathcal G_{\mathrm{mix}}$；若 $M=|\mathcal G_{\mathrm{mix}}|=0$，整轮跳过参考前向、PPO 与 AdamW（执行 `0` 次优化器步）；若 $M\ge 1$，将混合组全体响应步按 `shuffle=true` 打乱并均衡划分为 $B=\lceil N_{\mathrm{rows}}/256\rceil$ 个微批 $\mathcal B_m$，记微批响应词元数为 $N_{\mathrm{tok},m}=|\mathcal B_m|$，对策略、KL 与熵统一按词元均值化：
 
 $$
-Z_m=K=8,\qquad
-\mathcal L_m=\frac{1}{Z_m}
-\sum_{i\in\mathcal B_m}\bigl(\ell^{\mathrm{PPO}}_i+\beta k_i\bigr)
--\frac{\alpha}{N_{\mathrm{tok},m}}\sum_{i\in\mathcal B_m}H_i.
+\mathcal L_m^{\mathrm{r7}}=\frac{1}{N_{\mathrm{tok},m}}
+\sum_{i\in\mathcal B_m}\bigl(\ell^{\mathrm{PPO}}_i+\beta k_i-\alpha H_i\bigr).
 $$
 
-策略与 KL 项继续使用词元求和，保留第 4.1 节基线零期望恒等式及对未闭合乱码失败步的完整惩罚；仅将条件熵改为组内词元均值，切断大词表（$V=151,936$）下因输出拉长引起的熵梯度线性正反馈。参数在每个混合组更新后变化，后续混合组与重入段按当前参数重新计算。三个已发表 baseline 保留作者 virtual-rank / microbatch 内的 token mean 及其聚合权重、优势归一化和 minibatch 设置。
+统一词元均值权重彻底消除了 `r6` 逐阶归一化对长思考输出的 `ppo_kl` 稀释以及与 `1/N_tok` 熵正则的量纲失衡，同时使每轮最大更新步数收敛至与已发表 1.5B 基线（`256` 行、`1` epoch、`1e-6` 学习率）一致的稳定区间。参数在每个微批更新后变化。三个已发表 baseline 保留作者 virtual-rank / microbatch 内的 token mean 及其聚合权重、优势归一化和 minibatch 设置。
 
 对 baseline 的一次 optimizer update，令 $W$ 为来源配方的 virtual world size，$A$ 为固定 gradient accumulation，$T_{r,b}$ 为 rank $r$ 上 microbatch $b$ 的真实响应词元数，则对应目标为
 
@@ -368,7 +366,7 @@ $$
 
 ## 8. 运行身份与交付状态
 
-协议 `fgpo-r5-symmetric-v1` 的运行按 comparison 与 ablation 分目录保存。同一 study 可保存各自的单元和汇总，并引用已有的完整 F-GPO 结果。当前启动入口由[实验排程](fgpo_experiment_schedule_current.md)及 `configs/fgpo-r5-1p5b-*-colab.json` 指向各主机与 Colab 配置。
+协议 `fgpo-r7-token-mean-v1` 的运行按 comparison 与 ablation 分目录保存。同一 study 可保存各自的单元和汇总，并引用已有的完整 F-GPO 结果。当前启动入口由 `configs/fgpo-r7-1p5b-*.json` 与 `scripts/{colab_run_r7_1p5b_queue,run_fgpo_host_r7_1p5b_queue}.sh` 指向各主机与 Colab 配置。
 
 恢复由 `effective_training_identity/require_training_identity` 约束：方法及发布配方来源、模型、任务、种子、历史、采样、信用、PPO 和 Adam 的有效语义保持一致。GPU 放置、KV 容量、offload、head/表示微批、staging、保存周期/分片、原始文件保留与主机预留等资源项可以调整；保存的 CUDA RNG 流数量保持一致。完成采集组、参考概率、优势与更新 cursor 在明确操作边界恢复。
 

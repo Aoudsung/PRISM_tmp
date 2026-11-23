@@ -453,6 +453,24 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                 minibatches.append(batch)
                 coefficients.append({row.step_id: 1.0 / (mean_batch_rows * len(row.response_ids)) for row in batch})
         expected_denominator, weighting = float(mean_batch_rows), "mixed_step_token_mean"
+    elif loss_normalization == "token" and not constant_denominator:
+        base_rows = [step for trajectory in trajectories for step in trajectory.steps]
+        if not base_rows:
+            raise ValueError("PPO requires real sampled response rows")
+        batches_per_epoch = math.ceil(len(base_rows) / int(minibatch_rows))
+        minibatches, coefficients = [], None
+        base_count, rem = divmod(len(base_rows), batches_per_epoch)
+        for epoch in range(int(ppo_epochs)):
+            epoch_rows = list(base_rows)
+            if shuffle_seed is not None:
+                random.Random(int(shuffle_seed) * 1000003 + epoch * 97).shuffle(epoch_rows)
+            start = 0
+            for batch_index in range(batches_per_epoch):
+                size = base_count + (1 if batch_index < rem else 0)
+                minibatches.append(epoch_rows[start:start + size])
+                start += size
+        expected_denominator = sum(len(row.response_ids) for row in base_rows) / batches_per_epoch
+        weighting = "mixed_token_mean"
     else:
         rows = [step for trajectory in trajectories for step in trajectory.steps]
         if not rows:
@@ -518,7 +536,7 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                            else sum(len(row.response_ids) for row in batch))
             batch_response_tokens = sum(len(row.response_ids) for row in batch)
             entropy_denominator = (float(batch_response_tokens)
-                                   if (coefficients is None or published_plan is None) and entropy_normalization == "token"
+                                   if coefficients is None and entropy_normalization == "token"
                                    else denominator)
             with (ledger.context(group_id=batch_group_id, round_index=round_index)
                   if ledger is not None else nullcontext()):
@@ -628,13 +646,6 @@ def ppo_update(policy, trajectories, reference_data, advantages, optimizer, *,
                                         loss = loss-(entropy_coef/entropy_denominator)*entropy.sum()
                                     entropy_metric = entropy.detach().sum()/entropy_denominator
                                     kl_metric = kl.detach().sum()/denominator
-                                elif published_plan is None:
-                                    weight = loss_weights[start:end]
-                                    loss = (ppo_kl*weight).sum()
-                                    if entropy_coef:
-                                        loss = loss-(entropy_coef/entropy_denominator)*entropy.sum()
-                                    entropy_metric = entropy.detach().sum()/entropy_denominator
-                                    kl_metric = (kl.detach()*weight).sum()
                                 else:
                                     weight = loss_weights[start:end]
                                     loss = ((ppo_kl-entropy_coef*entropy if entropy_coef else ppo_kl)*weight).sum()

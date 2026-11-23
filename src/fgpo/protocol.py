@@ -8,7 +8,7 @@ from .textcraft import (TEXTCRAFT_1P5B_FORMAT_STUDY, TEXTCRAFT_CONTEXT_TOKENS, T
 from .webshop import PAIRED_TRAIN_ROUNDS, TRAIN_GROUPS, TRAIN_ROUNDS, VALIDATION_SESSIONS, VALIDATION_WORKERS
 
 
-PROTOCOL = "fgpo-r6-canonical-v1"
+PROTOCOL = "fgpo-r7-token-mean-v1"
 TEXTCRAFT_RESPONSE192_STUDY = "textcraft-v4-response192-v1"
 TEXTCRAFT_RESPONSE192_TOKENS = 192
 WEBSHOP_PAIRED_STUDY = "webshop-150-paired-v1"
@@ -17,8 +17,9 @@ WEBSHOP_JOINT_FROM_BASE_STUDY = "webshop-150-joint-from-base-v1"
 WEBSHOP_1P5B_ADAPTED_STUDY = "webshop-150-1p5b-joint-adapted-from-base-v1"
 WEBSHOP_R5_150_STUDY = "webshop-150-r5-from-base-v1"
 WEBSHOP_R6_150_STUDY = "webshop-150-r6-from-base-v1"
+WEBSHOP_R7_150_STUDY = "webshop-150-r7-from-base-v1"
 WEBSHOP_JOINT_FROM_BASE_STUDIES = (WEBSHOP_JOINT_FROM_BASE_STUDY, WEBSHOP_1P5B_ADAPTED_STUDY)
-WEBSHOP_FROM_BASE_STUDIES = (*WEBSHOP_JOINT_FROM_BASE_STUDIES, WEBSHOP_R5_150_STUDY, WEBSHOP_R6_150_STUDY)
+WEBSHOP_FROM_BASE_STUDIES = (*WEBSHOP_JOINT_FROM_BASE_STUDIES, WEBSHOP_R5_150_STUDY, WEBSHOP_R6_150_STUDY, WEBSHOP_R7_150_STUDY)
 WEBSHOP_JOINT_SEED = 1
 WEBSHOP_JOINT_OVERRIDES = {"entropy_coef": .002, "credit_transfer_max": .25}
 WEBSHOP_RADIUS_STUDY = "webshop-150-v4-radius-v1"
@@ -52,15 +53,15 @@ SUITE_BENCHMARKS = {"comparison": tuple(OFFICIAL_HORIZONS), "ablation": ("alfwor
 
 _OWN_DEFAULTS = {
     "rounds": 60, "groups": 16, "trajectories": 8,
-    "learning_rate": 2e-6, "weight_decay": .01, "optimizer_betas": (.9, .999),
+    "learning_rate": 1e-6, "weight_decay": .01, "optimizer_betas": (.9, .999),
     "optimizer_eps": 1e-8, "gamma": 1., "reward_scale": 10.,
-    "syntax_reward_penalty": 0., "ppo_minibatch_rows": 64, "ppo_epochs": 2,
-    "loss_normalization": "step_token", "entropy_normalization": "token",
+    "syntax_reward_penalty": 0., "ppo_minibatch_rows": 256, "ppo_epochs": 1,
+    "loss_normalization": "token", "entropy_normalization": "token",
     "ppo_clip_ratio": .2, "ppo_dual_clip": 3.,
     "entropy_coef": .001, "kl_coef": .01, "max_grad_norm": 1.,
     "temperature": 1., "eval_temperature": .4, "top_p": 1., "eval_top_p": 1.,
     "history_length": None, "shuffle": True,
-    "credit_radius": .10, "credit_prior_weight": .5, "credit_transfer_max": .5,
+    "credit_radius": .10, "credit_prior_weight": 1., "credit_transfer_max": .5,
 }
 _RECIPE_ALIASES = {
     "learning_rate": "lr", "optimizer_betas": "betas", "optimizer_eps": "adam_eps",
@@ -152,6 +153,7 @@ def require_protocol(config):
     adapted_1p5b = study == WEBSHOP_1P5B_ADAPTED_STUDY
     r5_webshop = study == WEBSHOP_R5_150_STUDY
     r6_webshop = study == WEBSHOP_R6_150_STUDY
+    r7_webshop = study == WEBSHOP_R7_150_STUDY
     radius_study = study == WEBSHOP_RADIUS_STUDY
     if study is not None and not webshop_150 and not textcraft_response192 and not textcraft_format:
         raise ValueError(f"Unknown study protocol {study!r}")
@@ -211,14 +213,14 @@ def require_protocol(config):
                 raise ValueError(f"{study} training recipe differs at " + ", ".join(changed))
         if method in OWN_METHODS:
             if (options["gamma"] != 1. or options["syntax_reward_penalty"] != 0.
-                    or options["loss_normalization"] != "step_token"
+                    or options["loss_normalization"] != "token"
                     or options.get("entropy_normalization") != "token"
                     or options["history_length"] is not None
                     or int(options["trajectories"]) != 8
                     or int(options.get("ppo_minibatch_rows") or 0) < 1
-                    or int(options.get("ppo_epochs", 0)) < 1
+                    or int(options.get("ppo_epochs", 0)) != 1
                     or int(options["output_tokens"]) != output_limit):
-                raise ValueError("Own r6 methods require undiscounted success, K=8, step_token PPO minibatches, official output limits, and token-mean entropy")
+                raise ValueError("Own r7 methods require undiscounted success, K=8, 1-epoch token-mean PPO minibatches, official output limits, and token-mean entropy")
             rounds = PAIRED_TRAIN_ROUNDS if webshop_150 else TRAIN_ROUNDS
             if benchmark == "webshop" and (
                     options["rounds"] != rounds or options["groups"] != TRAIN_GROUPS
@@ -227,13 +229,13 @@ def require_protocol(config):
                 raise ValueError(f"WebShop F-GPO uses {rounds} rounds, 16 groups, seeds 0–2, a 32768-token context and a full-success reward of 10")
             if webshop_150:
                 required = {**_OWN_DEFAULTS, "rounds": PAIRED_TRAIN_ROUNDS, "credit_radius": .10,
-                            "credit_prior_weight": _OWN_DEFAULTS["credit_prior_weight"] if r6_webshop else 1.,
+                            "credit_prior_weight": _OWN_DEFAULTS["credit_prior_weight"] if (r6_webshop or r7_webshop) else 1.,
                             "credit_transfer_max": 1. if method == EXACT_FIRST_HIT_METHOD else .5}
                 if joint:
                     required.update(WEBSHOP_JOINT_OVERRIDES)
                 if adapted_1p5b:
                     required.update(credit_radius=.05, credit_prior_weight=.5)
-                if r5_webshop or r6_webshop:
+                if r5_webshop or r6_webshop or r7_webshop:
                     radius = options.get("credit_radius")
                     if radius not in WEBSHOP_RADII:
                         raise ValueError(f"{study} requires the selected WebShop radius (.05 or .10)")
@@ -244,7 +246,7 @@ def require_protocol(config):
                         raise ValueError(f"{study} requires the selected WebShop radius (.05 or .10)")
                     required.update(WEBSHOP_RADIUS_OVERRIDES, credit_radius=radius)
                 changed = [key for key, value in required.items()
-                           if not _same_value(options.get(key) if (adapted_1p5b or r5_webshop or r6_webshop) else options.get(key, value), value)]
+                           if not _same_value(options.get(key) if (adapted_1p5b or r5_webshop or r6_webshop or r7_webshop) else options.get(key, value), value)]
                 if changed:
                     raise ValueError(f"{study} training recipe differs at " + ", ".join(changed))
             continue
@@ -284,11 +286,11 @@ def effective_training_identity(config):
     identity["optimizer_betas"] = tuple(options["optimizer_betas"])
     if method in OWN_METHODS:
         identity.update(credit_radius=float(options.get("credit_radius", .10)),
-                        credit_prior_weight=float(options.get("credit_prior_weight", .5)),
+                        credit_prior_weight=float(options.get("credit_prior_weight", 1.)),
                         credit_transfer_max=float(options.get("credit_transfer_max", .5)),
                         credit_estimator=("exact_first_hit_v4" if method == EXACT_FIRST_HIT_METHOD
                                           else "r5_symmetric_potential_pending_winner"),
-                        own_batching="mixed_step_minibatch_r6",
+                        own_batching="balanced_mixed_token_mean_r7",
                         group_denominator=None,
                         homogeneous_group_bypass=True,
                         positive_peer_continuation_gate=(method == EXACT_FIRST_HIT_METHOD),

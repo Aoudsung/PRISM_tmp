@@ -419,7 +419,8 @@ class Engine:
                                              "first_batch_max_abs_logprob_diff":None,
                                              "loss_normalization":self.config["loss_normalization"],
                                              "entropy_normalization":self.config.get("entropy_normalization","token"),
-                                             "loss_weighting":"mixed_step_token_mean","minibatch_count":0,
+                                             "loss_weighting":("mixed_token_mean" if self.config["loss_normalization"]=="token" else "mixed_step_token_mean"),
+                                             "minibatch_count":0,
                                              "mixed_groups":0,"homogeneous_round_bypass":True})
                                 self.ledger.record("controller","ppo.homogeneous_round_bypass",seconds=0.,
                                                    details={"groups":len(self.state.groups),"mixed_groups":0,"optimizer_steps_executed":0})
@@ -429,7 +430,7 @@ class Engine:
                                     self.state.update_cursor = ppo_update(self.policy,mixed_trajectories,self.state.reference_data,
                                         self.state.advantages,self.optimizer,
                                         minibatch_rows=int(self.config["ppo_minibatch_rows"]),
-                                        ppo_epochs=int(self.config.get("ppo_epochs",2)),
+                                        ppo_epochs=int(self.config.get("ppo_epochs",1)),
                                         shuffle_seed=(self.seed*1000003+current_round if self.config.get("shuffle",True) else None),
                                         cursor=self.state.update_cursor,checkpoint_callback=self._boundary,
                                         constant_denominator=False,
