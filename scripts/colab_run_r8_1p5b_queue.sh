@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="${FGPO_R8_ROOT:-/content/fgpo-r8}"
 OUT="${FGPO_R8_OUTPUT:-/content/outputs/fgpo-r8-1p5b-colab-20261123}"
 R7_OUT="${FGPO_R7_OUTPUT:-/content/outputs/fgpo-r7-1p5b-colab-20261123}"
-WAIT_LOCK="${FGPO_WAIT_LOCK:-$R7_OUT/launch/main.lock}"
+WAIT_LOCK="${FGPO_WAIT_LOCK-$R7_OUT/launch/main.lock}"
 PY="${FGPO_R8_PYTHON:-/content/venvs/fgpo-main/bin/python}"
 
 export JAVA_HOME="${JAVA_HOME:-/content/tools/jre21}"
