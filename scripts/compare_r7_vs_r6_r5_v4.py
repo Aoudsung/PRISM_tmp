@@ -27,7 +27,7 @@ def _ent_per_tok(row: dict) -> float | None:
     if mixed <= 0 or ent is None:
         return None
     if metrics.get("entropy_normalization") == "token":
-        denom = int(metrics.get("minibatch_count") or mixed)
+        denom = int(metrics.get("minibatch_count") or metrics.get("steps") or mixed)
         return float(ent) / denom if denom > 0 else None
     eval_tokens = int(metrics.get("evaluated_response_tokens") or 0)
     if eval_tokens <= 0:
@@ -42,7 +42,7 @@ def _kl_per_batch(row: dict) -> float | None:
     kl = metrics.get("reference_kl")
     if mixed <= 0 or kl is None:
         return None
-    denom = int(metrics.get("minibatch_count") or mixed)
+    denom = int(metrics.get("minibatch_count") or metrics.get("steps") or mixed)
     return float(kl) / denom if denom > 0 else None
 
 

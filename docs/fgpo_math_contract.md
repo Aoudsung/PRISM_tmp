@@ -37,9 +37,9 @@ $$
 
 ## 3. 表示、同伴权重与支持质量
 
-冻结参考模型在实际动作前 prompt 末位的倒数第 8 层表示给出 $z^h_{k,t}$。在 AppWorld 上，当前局部公开观测的独立编码末位表示给出 $z^o_{k,t}$，二者 L2 归一化并停止梯度；在 ALFWorld 离散观测空间，直接比较动作前纯观测整数词元元组是否完全相等 $m^{\mathrm{obs}}_{kj,t}=\mathbf 1[o^{\mathrm{id}}_{k,t}=o^{\mathrm{id}}_{j,t}]$，不执行额外的 `z_obs` 模型前向。第零步使用初始观测，后续步骤使用上一动作返回的公开观测；空文本用 `[Empty stdout]` 的表示 token。
+冻结参考模型在实际动作前 prompt 末位的倒数第 8 层表示给出 $z^h_{k,t}$。在连续公开观测空间（AppWorld 与 WebShop），当前局部公开观测的独立编码末位表示给出 $z^o_{k,t}$，二者 L2 归一化并停止梯度；在离散局部观测空间（ALFWorld 与 TextCraft），直接比较动作前持久局部表示词元元组是否完全相等 $m^{\mathrm{obs}}_{kj,t}=\mathbf 1[o^{\mathrm{repr}}_{k,t}=o^{\mathrm{repr}}_{j,t}]$（ALFWorld 为纯观测词元元组 `observation_ids`，TextCraft 为持久背包 `inventory` 词元元组），不执行额外的 `z_obs` 模型前向。第零步使用初始观测，后续步骤使用上一动作返回的公开观测；空文本用 `[Empty stdout]` 的表示 token。
 
-定义有效位置 $v_{k,t}=\mathbf1[t<T_k]$。同伴必须来自目标轨迹之外，并位于相同深度；因此拥有同样的剩余时域 $H-t$。在 AppWorld 上，双视角距离与三角核权重为
+定义有效位置 $v_{k,t}=\mathbf1[t<T_k]$。同伴必须来自目标轨迹之外，并位于相同深度；因此拥有同样的剩余时域 $H-t$。在 AppWorld 与 WebShop 上，双视角距离与三角核权重为
 
 $$
 d_{kj,t}=\max\left\{
@@ -47,10 +47,12 @@ d_{kj,t}=\max\left\{
 \operatorname{clip}(1-(z^h_{k,t})^\top z^h_{j,t},0,2)
 \right\},\qquad
 w_{kj,t}=v_{k,t}v_{j,t}\mathbf1[j\ne k]
-\left[1-\frac{d_{kj,t}}{\epsilon}\right]_+.
+\left[1-\frac{d_{kj,t}}{\epsilon}\right]_+
 $$
 
-在 ALFWorld 上，令历史余弦距离 $d^h_{kj,t}=\operatorname{clip}(1-(z^h_{k,t})^\top z^h_{j,t},0,2)$，权重定义为
+（AppWorld 默认 $\epsilon=0.10$，WebShop 按实验配置取值 $\epsilon\in\{0.05,0.10\}$，`r7` 1.5B WebShop 采用 $\epsilon=0.05$）。
+
+在 ALFWorld 与 TextCraft 上，令历史余弦距离 $d^h_{kj,t}=\operatorname{clip}(1-(z^h_{k,t})^\top z^h_{j,t},0,2)$，权重定义为
 
 $$
 w_{kj,t}=v_{k,t}v_{j,t}\mathbf1[j\ne k]\,m^{\mathrm{obs}}_{kj,t}
@@ -90,7 +92,7 @@ $$
 \tilde A_{k,t}=\frac{\omega_{-k,t}}{R}(Z_{k,t}-\tilde b_{k,t}).
 $$
 
-`r5` 同深度路径移除旧 `has_positive_peer` 门控（WebShop `fgpo_exact_first_hit` 仅保留作为历史配对对照）。基线 $\tilde b_{k,t}$ 与 $\omega_{-k,t}$ 仅依赖目标动作前公开信息与同伴数据，满足 $\mathbb E[\omega_{-k,t}\tilde b_{k,t}\psi_{k,t}\mid h_{k,t},D_{-k}]=0$ 且对任意 $\lambda_{\max}\in[0,1]$ 保持整轨同伴势能伸缩守恒；全失败组及全成功同质组满足 $Z_{k,t}-\tilde b_{k,t}=0$，组内 $M$ 条胜轨全部完赛后（$C^+_{-\ell,t}=M,S_{\ell,t}=0,\kappa=1$）仍在漫游的败轨步严格保持样本方差负惩罚 $\tilde A_{\ell,t}=-\frac{K}{K-1}\hat{p}(1-\hat{p})\in[-0.286,-0.125]$。
+`r5/r6/r7` 同深度路径均不启用 `has_positive_peer` 门控（仅 WebShop 历史配对分支 `fgpo_exact_first_hit` 保留该门控）。基线 $\tilde b_{k,t}$ 与 $\omega_{-k,t}$ 仅依赖目标动作前公开信息与同伴数据，满足 $\mathbb E[\omega_{-k,t}\tilde b_{k,t}\psi_{k,t}\mid h_{k,t},D_{-k}]=0$ 且在无权标量步和上保持对任意 $\lambda_{\max}\in[0,1]$ 的势能伸缩恒等 $\sum_t(\Phi_{t+1}-\Phi_t)=0$（实际 PPO 梯度再乘随时间变化的 $\omega_{-k,t}$、响应词元数、裁剪指示与 $\psi_{k,t}$，故加权后不自动相消；在 $M\ge 2$ 组中当高匹配胜轨进入低支持绕路步时，胜轨可获得合法的 $\tilde A_{w,t}<0$）。全失败与全成功同质组满足 $Z_{k,t}-\tilde b_{k,t}=0$；组内 $M$ 条胜轨全部完赛后（$C^+_{-\ell,t}=M,\mu_{\ell,t}=0$）仍在漫游的败轨步优势精确为 $\tilde A_{\ell,t}=-\omega_{-\ell,t}(1-\lambda^{\mathrm{pre}}_{\ell,t})\frac{M}{K-1}$，当 $S_{\ell,t}=0,\kappa=1$ 时等于样本方差 $-\frac{K}{K-1}\hat{p}(1-\hat{p})\in[-0.286,-0.125]$（其中 $M=1,S_{\ell,t}=0$ 为 `-1/8`，即仅比 `-1/7` 减少 `12.5%`）。
 
 在合法输入上，$0\leq \tilde b,\mu,Z\leq R$、$\omega\in[\frac{\kappa}{K-1+\kappa},1]$ 且 $\tilde A\in[-1,1]$。全失败组满足 $\tilde b=\mu=Z=\tilde A=0$。
 
@@ -122,7 +124,7 @@ $$
   \bigl(\mu_{t+1}-V^{\pi_{\mathrm{old}}}(h_{t+1})\bigr)\psi_t\right].
 $$
 
-在 $|\mu-V|\leq\delta$、$\lambda^{\mathrm{post}}\leq\lambda_{\max}$、$\omega_t\le 1$、$\mathbb E\|\psi_t\|\leq L_t$ 条件下，归一化偏差上界仍保持 $\lambda_{\max}\delta L_t/R$，全时域上界为 $\lambda_{\max}\delta\sum_tL_t/R$。`no_support_weight` 的对应权重上界为 1。
+在 $|\mu-V|\leq\delta$、$\lambda^{\mathrm{post}}\leq\lambda_{\max}$、$\omega_t\le 1$、$\mathbb E\|\psi_t\|\leq L_t$ 条件下，相对于 $\omega_t$ 加权 Monte Carlo 梯度的归一化偏差上界保持 $\lambda_{\max}\delta L_t/R$，全时域上界为 $\lambda_{\max}\delta\sum_tL_t/R$；`no_support_weight` 对应权重上界为 1。相对于无权官方成功目标梯度 $\mathbb E[G^{\mathrm{MC}}_t\psi_t]$，当 $C^+_{-k,t}>0$ 时另存在未决权重差项 $\mathbb E[(\omega_t-1)G^{\mathrm{MC}}_t\psi_t]$，且实际多微批、裁剪与词元均值 AdamW 优化器属于正则化 surrogate。
 
 八轨迹组中目标失败、七个同伴成功，且当前和下一状态均未完赛且完全匹配时，默认参数（$\lambda_{\max}=0.5,\kappa=1$）给出 $\tilde b=R,\mu_{t+1}=R,\lambda^{\mathrm{post}}=0.5\times 7/8=7/16,\omega=1,\tilde A=-9/16$。同质组任务优势严格为零。
 
@@ -185,7 +187,7 @@ CPU AdamW 保存 FP32 master/m/v，先完成全局范数的设备归约与有限
 | `trajectory_count / step_count / successes` | 组内轨迹数、真实动作数、官方成功轨迹数 |
 | `all_zero_group / all_one_group` | 所有轨迹官方成功均为零 / 均为一 |
 | `homogeneous_group / homogeneous_bypass` | 组结果同质指示及同质直出零优势旁路标志 |
-| `local_observation_matching` | 局部观测匹配模式（ALFWorld 为 `exact_token_id`，AppWorld 为 `dual_view_cosine`） |
+| `local_observation_matching` | 局部观测匹配模式（ALFWorld / TextCraft 为 `exact_token_id`，WebShop / AppWorld 为 `dual_view_cosine`） |
 | `matched_steps / matched_step_fraction` | 当前状态 $S_t>0$ 的真实步骤数及其占比 |
 | `transferred_steps / transfer_step_fraction` | 当前转移 $\lambda_t>0$ 的真实步骤数及其占比 |
 | `positive_peer_gated_steps` | 下一深度存在局部支持（$S_{t+1}>0$）但因存活成功同伴为零（$N^+_{-k,t+1}=0$）而拦截共享的非终末步骤数 |
@@ -210,7 +212,7 @@ CPU AdamW 保存 FP32 master/m/v，先完成全局范数的设备归约与有限
 
 | 正式方法 ID | 来源与本研究采用的配方 | 原 ALFWorld 配方的主要设置 |
 |---|---|---|
-| `fgpo` | 本文件第 1—6 节 | 60 轮，16 任务组/轮，8 轨迹/组，响应 512，混合结果组 $K=8$ 原子整组轨迹归一化，$\lambda_{\max}=0.5$，$\gamma=1$ |
+| `fgpo` | 本文件第 1—6 节 | `r7` 1.5B 主线：60 轮（TextCraft 50 轮 / WebShop 150 轮），16 任务组/轮，8 轨迹/组，响应 512，混合结果组均衡打乱 256 行微批与批内统一词元均值归一（历史 7B `V4` 为 $K=8$ 原子整组轨迹归一），$\lambda_{\max}=0.5$，$\gamma=1$ |
 | `gigpo` | [GiGPO NeurIPS 2025](https://proceedings.neurips.cc/paper_files/paper/2025/hash/420c9f777c0b4f78d515e53cf74d58b2-Abstract-Conference.html)；官方 1.5B full-finetuning 配方迁移到本研究 7B | 150 轮，最近两轮记忆，prompt 2048，响应 512，row minibatch 256，$\gamma=.95$ |
 | `hgpo` | [HGPO ICLR 2026](https://openreview.net/forum?id=T8Dev99qnz)及作者发布代码 | 160 轮，最近两轮记忆，prompt 4096，响应 512，row minibatch 256，$\gamma=.95$ |
 | `graphgpo` | [GraphGPO ICML 2026](https://proceedings.mlr.press/v306/cheng26e.html)及作者发布代码 | 150 轮，最近两轮记忆与公开状态摘要，prompt 2048，响应 512，7B row minibatch 64，$\gamma=.10$ |
@@ -237,9 +239,9 @@ ALFWorld 保留发布算法与来源配方并披露上述 backbone 迁移。四�
 | `rollout.py / envs.py` | 独立采样（含 `active-rows-v3` 停放完成槽解码）、提前环境派发、轮间同步和持久隔离 lease |
 | `policy.py / cache.py` | 因果前向、表征批处理、采样、缓存和阶段实测 |
 | `reference.py` | 混合组段级分块参考评分、AppWorld 去重局部观测表示、信用后释放表示 |
-| `credit.py` | 同结果组旁路、同深度排除、ALFWorld 离散/AppWorld 余弦匹配、正同伴门控续值共享和诊断 |
-| `optimization.py` | 原子混合组批次与分母、解析一阶 head adjoint、响应梯度、逐批范数与首批一致性统计和双槽 AdamW |
+| `credit.py` | 同结果组旁路、同深度排除、ALFWorld/TextCraft 离散/背包匹配与 WebShop/AppWorld 余弦匹配、对称势能续值共享与未决同伴权重（仅 `exact_first_hit` 保留正同伴门控）及诊断 |
+| `optimization.py` | 均衡打乱混合组微批与统一词元均值分母（保留历史分支兼容路径）、解析一阶 head adjoint、响应梯度、逐批范数与首批一致性统计和双槽 AdamW |
 | `baseline_specs.py / published_baselines.py / published_batching.py / baselines.py` | 已发表来源配方、信用算法、batch 复制与更新权重、原生 prompt/动作与 benchmark 迁移 |
-| `protocol.py / engine.py / runner.py` | published-v4 方法身份、正式矩阵、同质轮零步旁路、GCS/本地恢复与生命周期 |
+| `protocol.py / engine.py / runner.py` | `fgpo-r7-token-mean-v1` 方法身份、正式矩阵、同质轮零步旁路、GCS/本地恢复与生命周期 |
 
 任务结果、阶段成本和运行资源以服务器正式记录为准。

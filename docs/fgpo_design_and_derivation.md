@@ -93,7 +93,7 @@ $$
 
 ### 3.2 局部匹配核与同伴 Monte Carlo 值
 
-在 AppWorld 上定义双视角距离与连续核权重：
+在连续公开观测空间（**AppWorld** 与 **WebShop**）定义双视角距离与连续核权重：
 
 $$
 d_{kj,t}=\max\{1-(z^o_{k,t})^\top z^o_{j,t},\;
@@ -102,11 +102,12 @@ $$
 
 $$
 w_{kj,t}=\mathbf 1[j\in\mathcal P_{-k,t}]
-\left[1-\frac{d_{kj,t}}{\epsilon}\right]_+,
-\qquad \epsilon=0.10.
+\left[1-\frac{d_{kj,t}}{\epsilon}\right]_+.
 $$
 
-在 ALFWorld 上令历史余弦距离 $d^h_{kj,t}=1-(z^h_{k,t})^\top z^h_{j,t}$，结合离散局部同态指示 $m^{\mathrm{obs}}_{kj,t}=\mathbf 1[o^{\mathrm{id}}_{k,t}=o^{\mathrm{id}}_{j,t}]$ 定义
+其中 AppWorld 默认 $\epsilon=0.10$；WebShop 按研究配置取值 $\epsilon\in\{0.05, 0.10\}$（现行 `r7` 1.5B WebShop 采用 $\epsilon=0.05$）。
+
+在离散局部观测空间（**ALFWorld** 与 **TextCraft**）令历史余弦距离 $d^h_{kj,t}=1-(z^h_{k,t})^\top z^h_{j,t}$，结合离散局部词元元组精确相等指示 $m^{\mathrm{obs}}_{kj,t}=\mathbf 1[o^{\mathrm{repr}}_{k,t}=o^{\mathrm{repr}}_{j,t}]$（ALFWorld 为当前动作前纯观测词元元组 `observation_ids`，TextCraft 为持久可见背包词元元组 `inventory`）定义：
 
 $$
 w_{kj,t}=\mathbf 1[j\in\mathcal P_{-k,t}]\,m^{\mathrm{obs}}_{kj,t}
@@ -148,14 +149,16 @@ $$
 \tilde A_{k,t}=\frac{\omega_{-k,t}}{R}\bigl(Z_{k,t}-\tilde b_{k,t}\bigr).
 $$
 
-基线 $\tilde b_{k,t}$ 与缩放 $\omega_{-k,t}$ 只读取目标动作前公开信息与同伴数据，在采样 $y_{k,t}$ 前完全确定。因 $\lambda^{\mathrm{pre}}$ 与 $\lambda^{\mathrm{post}}$ 对称使用同一 $\lambda_{\max}$，定义有界同伴势能 $\Phi_{-k,t}=\lambda^{\mathrm{pre}}_{k,t}(\mu_{k,t}-\bar q_{-k})$，则有精确伸缩恒等式：
+基线 $\tilde b_{k,t}$ 与缩放 $\omega_{-k,t}$ 只读取目标动作前公开信息与同伴数据，在采样 $y_{k,t}$ 前完全确定。因 $\lambda^{\mathrm{pre}}$ 与 $\lambda^{\mathrm{post}}$ 对称使用同一 $\lambda_{\max}$，定义有界同伴势能 $\Phi_{-k,t}=\lambda^{\mathrm{pre}}_{k,t}(\mu_{k,t}-\bar q_{-k})$，则有无权标量步骤级的精确伸缩恒等式：
 
 $$
 Z_{k,t}-\tilde b_{k,t}=(1-\lambda^{\mathrm{post}}_{k,t})(q_k-\bar q_{-k})+\bigl(\Phi_{-k,t+1}-\Phi_{-k,t}\bigr),\qquad
-\sum_{t=0}^{T_k-1}(\Phi_{-k,t+1}-\Phi_{-k,t})\equiv 0.
+\sum_{t=0}^{T_k-1}(\Phi_{-k,t+1}-\Phi_{-k,t})\equiv 0
 $$
 
-无需令 $\lambda_{\max}=1$ 即可严格消去势能累加偏移；且由于 $1-\lambda^{\mathrm{post}}_{k,t}\in[0.5,1]$，胜轨不会因过度收缩变成负优势，高胜率组中全部 $M$ 条胜轨完赛后孤立漫游败轨步精确收敛为样本方差 $-\frac{K}{K-1}\hat{p}(1-\hat{p})\in[-0.286,-0.125]$（既削减 `7/8` 组 `-1.0` 重复扣罚洪峰 8 倍，又对晚期乱码维持严格负惩罚）。同质组直接零步返回；混合组信用量在参数更新前计算并冻结。
+（末步令 $\lambda^{\mathrm{pre}}_{k,T_k}=0$ 且当同组均匀根匹配给出 $\mu_{k,0}=\bar q_{-k}$ 时 $\Phi_{-k,0}=0$；需注意实际参数更新将步级优势乘以随深度变化的 $\omega_{-k,t}$，$\sum_{t=0}^{T_k-1}\omega_{-k,t}(\Phi_{-k,t+1}-\Phi_{-k,t})=\sum_{t=1}^{T_k-1}(\omega_{-k,t-1}-\omega_{-k,t})\Phi_{-k,t}$，再乘以微批响应词元计数 $1/N_{\mathrm{tok},m}$、PPO 裁剪指示与各步 score 向量 $\psi_{k,t}$，因此实际参数梯度不会自动伸缩抵消为零）。
+
+在单赢家（$M=1$）组中，唯一胜轨的同伴均为败轨（$\bar q_{-w}=\mu_{w,t}=0$ 且 $\omega_{-w,t}=1$），故其每步优势满足 $\tilde A_{w,t}=1-\lambda^{\mathrm{post}}_{w,t}\in[0.5,1]>0$；而在 $M\ge 2$ 的组中，若更快完赛的获胜同伴提前离场或后续状态分叉使动作前高支持基线 $\tilde b_{w,t}$ 高于后态目标 $Z_{w,t}$，绕路进入低支持区域的胜轨步可以合法地得到负优势 $\tilde A_{w,t}<0$（`r7` 在线 WebShop $M=6$ 组 `R25` 中已实测观察到该现象）。在高胜率组中全部 $M$ 条胜轨完赛后（$C^+_{-\ell,t}=M,\mu_{\ell,t}=0$），仍在漫游的孤立败轨步优势为 $\tilde A_{\ell,t}=-\omega_{-\ell,t}(1-\lambda^{\mathrm{pre}}_{\ell,t})\frac{M}{K-1}$：当 $S_{\ell,t}=0,\kappa=1$ 时精确等于 $-\frac{K}{K-1}\hat{p}(1-\hat{p})=-\frac{M(8-M)}{56}\in[-0.286,-0.125]$（在 `7/8` 组把晚期步扣罚从 `-1.0` 削减 `8x`，在 `M=1` 且 $S_{\ell,t}=0$ 时仅从 `-1/7` 削减 `12.5%` 至 `-1/8`），若存活败轨间发生局部匹配（$S_{\ell,t}>0$）则再乘以收缩因子 $(1-\lambda^{\mathrm{pre}}_{\ell,t})$。同质组直接零步返回；混合组信用量在参数更新前计算并冻结。
 
 实现按 `[depth, trajectory, feature]` 组织表示，用批量 Gram 矩阵一次形成所有同深度距离，再按 `[depth, target, peer]` 归约。时间复杂度为 $O(HK^2D)$，权重存储为 $O(HK^2)$。表示使用 CPU float32，信用加权与回报归约使用 CPU float64，避免大量 Python 子图循环与小规模 GPU 同步。
 
@@ -169,7 +172,7 @@ $$
 \psi_{k,t}=\left.\nabla_\theta\log\pi_\theta(y_{k,t}\mid p_{k,t})\right|_{\theta=\theta_{\mathrm{old}}}.
 $$
 
-在固定任务初态、冻结的行为策略 $\pi_{\mathrm{old}}$ 和参考参数下，由于 $\omega_{-k,t}$ 与 $\tilde b_{k,t}$ 均在当前动作前确定，有精确零期望恒等式 $\mathbb E[\omega_{-k,t}\tilde b_{k,t}\psi_{k,t}\mid h_{k,t},D_{-k}]=0$。进一步，令 $V^{\pi_{\mathrm{old}}}(h_{t+1})$ 为相同有限时域、相同行为策略下的真实后续回报均值，在独立与转移条件满足时，有
+在固定任务初态、冻结的行为策略 $\pi_{\mathrm{old}}$ 和参考参数下，由于 $\omega_{-k,t}$ 与 $\tilde b_{-k,t}$ 均在当前动作前确定，有精确零期望恒等式 $\mathbb E[\omega_{-k,t}\tilde b_{k,t}\psi_{k,t}\mid h_{k,t},D_{-k}]=0$。进一步，令 $V^{\pi_{\mathrm{old}}}(h_{t+1})$ 为相同有限时域、相同行为策略下的真实后续回报均值，在独立与转移条件满足时，相对 $\omega_t$ 加权的 Monte Carlo 策略梯度存在如下共享偏差分解：
 
 $$
 \begin{aligned}
@@ -180,7 +183,7 @@ $$
 \end{aligned}
 $$
 
-推导从 $Z-G^{\mathrm{MC}}=\lambda(r+\mu-G^{\mathrm{MC}})$ 出发。对当前转移及同伴数据条件化后，$G^{\mathrm{MC}}-r$ 的条件均值为真实续值，基线项由上一节消去。由此可将偏差直接归于共享估计与真实后续值之差。
+推导从 $Z-G^{\mathrm{MC}}=\lambda^{\mathrm{post}}(r+\mu_{t+1}-G^{\mathrm{MC}})$ 出发。对当前转移及同伴数据条件化后，$G^{\mathrm{MC}}-r$ 的条件均值为真实续值，基线项由上式消去，从而把共享估计误差显式归于 $\mu_{t+1}-V^{\pi_{\mathrm{old}}}(h_{t+1})$。需明确指出，上述等式比较的对象是 $\omega_t$ 加权后的 Monte Carlo 梯度；相对于无权原始官方成功目标梯度 $\mathbb E[G^{\mathrm{MC}}_t \psi_t]$，只要存在提前获胜完赛同伴（$C^+_{-k,t}>0$），还包含未决重加权项 $\mathbb E[(\omega_t-1)G^{\mathrm{MC}}_t \psi_t]$，且多微批、裁剪并经词元均值与 AdamW 预条件化的完整更新仍属于正则化替代目标而非精确无偏梯度。
 
 若在所讨论分布上有 $|\mu-V|\leq\delta$、$\lambda\leq\lambda_{\max}$，并且 $\mathbb E\|\psi_t\|\leq L_t$，则归一化后
 
@@ -202,7 +205,7 @@ $$
 
 若某组所有 $Y_j$ 相等（全失败 $0/8$ 或全成功 $8/8$），该组作为同质组满足先验、基线和目标全部相等，任务优势严格为零，直接免除特征提取返回零优势。熵正则提供有限的分布扩散，参考正则约束偏离；二者在混合组批次中发挥作用，整体算法在无混合组轮次直接执行零步旁路而不靠纯正则更新参数。`all_zero_groups`、`all_one_groups` 与 `homogeneous_round_bypass` 会直接记录这一状态。
 
-一个失败轨迹中的动作可以因下一状态的成功同伴获得正优势，具体条件是 $\lambda^{\mathrm{post}}_{k,t}\mu_{k,t+1} + (1 - \lambda^{\mathrm{post}}_{k,t})q_k > \tilde b_{k,t}$。在 `fgpo` 移除正同伴门控后，即使仅有一条胜轨（$M=1$）进入同伴共享的死胡同（$S_{w,t+1}>0,\mu_{w,t+1}=0$），其无效步优势也自动从 `+1.0` 收缩至 $1-\lambda^{\mathrm{post}}_{w,t}\in[0.5,1)$，不再盲目全额强化稀疏长胜轨中的空转废步。`positive_failed_steps` 与 `mean_pending_weight` 用于解释失败轨迹正信用位置与完赛未决权重变化。
+一个失败轨迹中的动作可以因下一状态的成功同伴获得正优势，具体条件是 $\lambda^{\mathrm{post}}_{k,t}\mu_{k,t+1} + (1 - \lambda^{\mathrm{post}}_{k,t})q_k > \tilde b_{k,t}$。在 `fgpo` 移除正同伴门控后，在单赢家（$M=1$）组中，任何获胜轨迹步骤只要其下一状态在失败同伴处获得正支持（$S_{w,t+1}>0,\mu_{w,t+1}=0$），其正优势均会依支持量收缩为 $1-\lambda^{\mathrm{post}}_{w,t}\in[0.5,1)$；该收缩仅由同伴支持量 $S_{w,t+1}$ 驱动而缺少动作质量标签，因此对无效死胡同步与在失败同伴中高频出现的必要成功前缀会施加相同的幅值收缩。`positive_failed_steps` 与 `mean_pending_weight` 用于解释失败轨迹正信用位置与完赛未决权重变化。
 
 ## 5. PPO 更新与原子混合组权重
 
@@ -334,10 +337,10 @@ ALFWorld 接入作者发布的公开观测、原生动作与提示配方。HGPO/
 | 信用折扣 γ | 1 | .95 | .95 | .10 |
 | ALFWorld 每步生成上限 | 512 | 512 | 512 | 512 |
 | ALFWorld 提示 / 历史规则 | 32768 总上下文内的初始锚定与完整轮次滚动（三块整数帧） | 2048 prompt，最近两轮记忆，超限 error | 4096 prompt，最近两轮记忆，作者 left truncation | 2048 prompt，最近两轮记忆及公开状态摘要，超限 error |
-| PPO 批次划分 | 混合结果组 K=8 原子整组（无混合组则跳过更新） | 256 row | 256 row | 64 row（7B 配方） |
-| Loss reduction | 固定混合组轨迹分母 $Z_m=8$ | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean |
+| PPO 批次划分 | `r7` 1.5B 主线：均衡打乱 256 行混合组微批；历史 7B `V4`：混合结果组 $K=8$ 原子整组 | 256 row | 256 row | 64 row（7B 配方） |
+| Loss reduction | `r7`：`mixed_token_mean`（策略/KL/熵统一批内词元均值）；历史 `V4`：固定分母 $Z_m=8$ | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean | 作者 rank / microbatch token mean |
 
-共同基座为 Qwen2.5-7B-Instruct，全参数 bf16/SDPA；种子为 0、1、2；AdamW lr=`1e-6`、weight decay=`.01`、betas=`(.9,.999)`、epsilon=`1e-8`、全局梯度范数上限 1。每轮一次 PPO epoch，clip=.2、dual clip=3、entropy=.001、参考正则=.01。训练采样温度为 1，评估为 .4，`top_p=1`。F-GPO 的信用参数为 $R=10,\epsilon=.10,\kappa=1,\lambda_{\max}=0.5$ 并启用正同伴门控；baseline 的奖励尺度和语法处理以来源配方为准。
+上表主基座对照按公开 7B 协议组织（全参数 bf16/SDPA，种子 0、1、2，AdamW `lr=1e-6`、weight decay `0.01`、`betas=(0.9,0.999)`、`epsilon=1e-8`、全局梯度范数上限 `1`、`ppo_epochs=1`、`clip=0.2`、`dual_clip=3`、`entropy=0.001`、`kl=0.01`、训练温度 `1`/评估 `0.4`/`top_p=1`）。F-GPO 信用参数默认 $R=10,\epsilon=0.10,\kappa=1,\lambda_{\max}=0.5$：现行 `r7`（`fgpo-r7-token-mean-v1`）采用对称势能与未决同伴权重 $\omega_{-k,t}$（无正同伴延续门控，仅 `fgpo_exact_first_hit` 保留门控）；历史 7B `V4` 启用了正同伴门控与原子组轨迹分母 $Z_m=8$。baseline 的奖励尺度和语法处理以来源配方为准。
 
 上表描述已发布的家务基准配方。TextCraft 与 WebShop 的实际预算、官方划分和追加对照见[当前排程](fgpo_experiment_schedule_current.md)。正式终评按各自既定任务计算，部分结果保留原分母与完成状态。
 

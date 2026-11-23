@@ -17,6 +17,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import threading
 import time
 from urllib.parse import quote, urlencode, urlsplit
 import uuid
@@ -35,6 +36,7 @@ CHUNK_BYTES = 8 * 1024 * 1024
 JSON_LIMIT = 16 * 1024 * 1024
 _JOURNAL_COALESCE_FLOOR = 64 * 1024
 _TRANSFER_CATEGORIES = ("actor", "optimizer", "gradients", "reference", "teacher", "state", "artifacts", "journals")
+_TRANSIENT_UPLOAD_STATUSES = frozenset({408, 429, 500, 502, 503, 504, "transport_or_response_error"})
 
 
 class _PointerSuperseded(Exception):
@@ -226,16 +228,41 @@ class GCSClient:
             offset += part_size
         temp_prefix = f"{name}.fgpo-parts/{uuid.uuid4().hex}"
         uploaded = [None] * part_count
+        created_parts = []
+        parts_lock = threading.Lock()
 
         def _upload_part(item):
             index, part_offset, part_size = item
-            worker = GCSClient(self.bucket, chunk_bytes=self.chunk_bytes, upload_workers=1)
-            try:
-                desc = worker.upload_range(f"{temp_prefix}/{index:02d}", path, offset=part_offset, size=part_size)
-                uploaded[index] = desc
-                return desc
-            finally:
-                worker.close()
+            for attempt in range(1, 4):
+                part_name = f"{temp_prefix}/{index:02d}" if attempt == 1 else f"{temp_prefix}/{index:02d}-a{attempt}"
+                worker = GCSClient(self.bucket, chunk_bytes=self.chunk_bytes, upload_workers=1)
+                try:
+                    desc = worker.upload_range(part_name, path, offset=part_offset, size=part_size)
+                    uploaded[index] = desc
+                    with parts_lock:
+                        created_parts.append(desc)
+                    return desc
+                except StorageError as error:
+                    if attempt < 3 and error.status in _TRANSIENT_UPLOAD_STATUSES:
+                        time.sleep(1.0 if attempt == 1 else 3.0)
+                        continue
+                    raise
+                finally:
+                    worker.close()
+
+        def _compose_with_retry(descriptors):
+            for attempt in range(1, 4):
+                try:
+                    return self.compose(name, descriptors)
+                except StorageError as error:
+                    if error.status == 412 and attempt > 1:
+                        existing = self.metadata(name, optional=True)
+                        if existing is not None and int(existing["size"]) == size:
+                            return self.descriptor(existing)
+                    if attempt < 3 and error.status in _TRANSIENT_UPLOAD_STATUSES:
+                        time.sleep(1.0 if attempt == 1 else 3.0)
+                        continue
+                    raise
 
         def _delete_part(desc):
             if desc is None:
@@ -251,9 +278,10 @@ class GCSClient:
         try:
             with ThreadPoolExecutor(max_workers=min(self.upload_workers, part_count)) as pool:
                 descriptors = list(pool.map(_upload_part, ranges))
-            return self.compose(name, descriptors)
+            return _compose_with_retry(descriptors)
         finally:
-            cleanup = [desc for desc in uploaded if desc is not None]
+            with parts_lock:
+                cleanup = list(created_parts)
             if cleanup:
                 with ThreadPoolExecutor(max_workers=min(self.upload_workers, len(cleanup))) as pool:
                     list(pool.map(_delete_part, cleanup))
